@@ -111,6 +111,10 @@ helm-template: helm-deps ## Render Helm chart templates locally (dry-run).
 
 ##@ Testing
 
+# .PHONY: test-unit
+test-unit: ## Run unit tests.
+	go test -race ./... -coverprofile cover.out
+
 .PHONY: test-integration
 test-integration: ## Run integration tests (kuttl) against a running cluster.
 	. ./test/vars.sh && kubectl kuttl test --config ./test/integration/kuttl.yaml
