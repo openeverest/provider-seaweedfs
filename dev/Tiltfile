@@ -143,6 +143,18 @@ local_resource(
 )
 
 # ===========================
+# Provider: Helm chart dependencies
+# ===========================
+# The chart depends on the seaweedfs-operator subchart, which must be fetched
+# into charts/ before `helm upgrade --install` can render it.
+local_resource(
+    'provider-helm-deps',
+    'make -C {0} helm-deps'.format(provider_dir),
+    deps=['{0}/Chart.yaml'.format(chart_dir)],
+    labels=['provider'],
+)
+
+# ===========================
 # Provider: image (live update)
 # ===========================
 provider_image = 'ghcr.io/openeverest/provider-seaweedfs:tilt-dev'
@@ -167,6 +179,7 @@ docker_build_with_restart(
 # helm_resource also guarantees the Provider CR is applied only after the core
 # CRDs exist.
 provider_resource_deps = ['provider-build']
+provider_resource_deps = provider_resource_deps + ['provider-helm-deps']
 if install_openeverest:
     provider_resource_deps = provider_resource_deps + ['openeverest']
 

@@ -119,6 +119,10 @@ leaderElection:
 
 seaweedfs-operator:
   enabled: true
+  # Keep the subchart's resource names short: the default fullname
+  # "<release>-seaweedfs-operator" makes the pre-install webhook Job's label
+  # exceed the 63-byte limit for spec.template.labels.
+  fullnameOverride: seaweedfs-operator
   crds:
     create: true
   rbac:
