@@ -1,10 +1,13 @@
 package provider
 
 import (
+	"fmt"
+
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/AlekSi/pointer"
+	corev1alpha1 "github.com/openeverest/openeverest/v2/api/core/v1alpha1"
 	"github.com/openeverest/openeverest/v2/provider-runtime/controller"
 
 	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
@@ -67,17 +70,22 @@ func (p *Provider) Sync(c *controller.Context) error {
 	filer := c.Instance().Spec.Components[common.ComponentFiler]
 	s3 := c.Instance().Spec.Components[common.ComponentS3]
 
+	image, err := resolveImage(c, common.ComponentMaster, master)
+	if err != nil {
+		return err
+	}
+
 	sw := &seaweedv1.Seaweed{
-	  ObjectMeta: c.ObjectMeta(c.Name()),
-	  Spec: seaweedv1.SeaweedSpec{
-	    Image: master.Image,
-		//TODO: can be added via CustomSpec
-		VolumeServerDiskCount: pointer.ToInt32(1),
-	    Master: &seaweedv1.MasterSpec{Replicas: *master.Replicas, VolumeSizeLimitMB: pointer.ToInt32(1024) },
-	    Volume: &seaweedv1.VolumeSpec{Replicas: *volume.Replicas },
-	    Filer:  &seaweedv1.FilerSpec{Replicas: *filer.Replicas },
-	    S3:     &seaweedv1.S3GatewaySpec{Replicas: *s3.Replicas },
-	  },
+		ObjectMeta: c.ObjectMeta(c.Name()),
+		Spec: seaweedv1.SeaweedSpec{
+			Image: image,
+			//TODO: can be added via CustomSpec
+			VolumeServerDiskCount: pointer.ToInt32(1),
+			Master:                &seaweedv1.MasterSpec{Replicas: *master.Replicas, VolumeSizeLimitMB: pointer.ToInt32(1024)},
+			Volume:                &seaweedv1.VolumeSpec{Replicas: *volume.Replicas},
+			Filer:                 &seaweedv1.FilerSpec{Replicas: *filer.Replicas},
+			S3:                    &seaweedv1.S3GatewaySpec{Replicas: *s3.Replicas},
+		},
 	}
 
 	if volume.Storage != nil {
@@ -87,6 +95,29 @@ func (p *Provider) Sync(c *controller.Context) error {
 	}
 
 	return c.Apply(sw)
+}
+
+func resolveImage(c *controller.Context, componentName string, comp corev1alpha1.ComponentSpec) (string, error) {
+	if comp.Image != "" {
+		return comp.Image, nil
+	}
+
+	spec, err := c.ProviderSpec()
+	if err != nil {
+		return "", fmt.Errorf("resolving image for %q: %w", componentName, err)
+	}
+
+	if comp.Version != "" {
+		if image := controller.GetImageForVersion(spec, componentName, comp.Version); image != "" {
+			return image, nil
+		}
+	}
+
+	if image := controller.GetDefaultImageForComponent(spec, componentName); image != "" {
+		return image, nil
+	}
+
+	return "", fmt.Errorf("no image found for component %q", componentName)
 }
 
 // Status computes the current status of the database instance.
