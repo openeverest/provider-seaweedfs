@@ -63,14 +63,14 @@ spec:
               components:
                 cpu:
                   fieldParams:
-                    badge: Gi
-                    defaultValue: 0.5
+                    defaultValue: 1
                     label: CPU
-                    step: 0.1
+                    step: 1
                   path: spec.components.filer.resources.limits.cpu
                   uiType: number
                   validation:
-                    min: 0.1
+                    int: true
+                    min: 1
                     required: true
                 disk:
                   fieldParams:
@@ -125,14 +125,14 @@ spec:
               components:
                 cpu:
                   fieldParams:
-                    badge: Gi
-                    defaultValue: 0.5
+                    defaultValue: 1
                     label: CPU
-                    step: 0.1
+                    step: 1
                   path: spec.components.master.resources.limits.cpu
                   uiType: number
                   validation:
-                    min: 0.1
+                    int: true
+                    min: 1
                     required: true
                 memory:
                   fieldParams:
@@ -173,14 +173,14 @@ spec:
               components:
                 cpu:
                   fieldParams:
-                    badge: Gi
-                    defaultValue: 0.5
+                    defaultValue: 1
                     label: CPU
-                    step: 0.1
+                    step: 1
                   path: spec.components.s3.resources.limits.cpu
                   uiType: number
                   validation:
-                    min: 0.1
+                    int: true
+                    min: 1
                     required: true
                 memory:
                   fieldParams:
@@ -221,14 +221,14 @@ spec:
               components:
                 cpu:
                   fieldParams:
-                    badge: Gi
                     defaultValue: 1
                     label: CPU
-                    step: 0.1
+                    step: 1
                   path: spec.components.volume.resources.limits.cpu
                   uiType: number
                   validation:
-                    min: 0.1
+                    int: true
+                    min: 1
                     required: true
                 disk:
                   fieldParams:

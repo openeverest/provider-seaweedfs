@@ -119,6 +119,7 @@ leaderElection:
 
 seaweedfs-operator:
   enabled: true
+  fullnameOverride: seaweedfs-operator
   crds:
     create: true
   rbac:
