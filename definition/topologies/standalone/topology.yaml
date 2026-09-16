@@ -59,9 +59,18 @@ ui:
                         min: 1
                         required: true
                         celExpressions:
-                          - celExpr: "spec.components.engine.replicas % 2 == 1"
-                            message: "The number of nodes must be odd"
-
+                          - celExpr: "spec.components.master.replicas % 2 == 1"
+                            message: "The number of master replicas must be odd"
+                volumeSizeLimitMB:
+                    fieldParams:
+                        defaultValue: 1024
+                        label: Volume size limit (MB)
+                    path: spec.components.master.parameters.masterVolumeSizeLimitMB
+                    uiType: number
+                    validation:
+                        int: true
+                        min: 1
+                        required: false
                 resources:
                     components:
                         cpu:
@@ -94,6 +103,7 @@ ui:
                     uiType: group
             componentsOrder:
                 - replicas
+                - volumeSizeLimitMB
                 - resources
             description: Configure the SeaweedFS master servers that coordinate the cluster.
             label: Master
@@ -110,10 +120,16 @@ ui:
                         max: 10
                         min: 1
                         required: true
-                        celExpressions:
-                          - celExpr: "spec.components.engine.replicas % 2 == 1"
-                            message: "The number of nodes must be odd"
-
+                diskCount:
+                    fieldParams:
+                        defaultValue: 1
+                        label: Disks per volume server
+                    path: spec.topology.parameters.volumeServerDiskCount
+                    uiType: number
+                    validation:
+                        int: true
+                        min: 1
+                        required: false
                 resources:
                     components:
                         cpu:
@@ -160,6 +176,7 @@ ui:
                     uiType: group
             componentsOrder:
                 - replicas
+                - diskCount
                 - resources
             description: Configure the volume servers that store object data.
             label: Volume
@@ -176,9 +193,6 @@ ui:
                         max: 5
                         min: 1
                         required: true
-                        celExpressions:
-                          - celExpr: "spec.components.engine.replicas % 2 == 1"
-                            message: "The number of nodes must be odd"
 
                 resources:
                     components:

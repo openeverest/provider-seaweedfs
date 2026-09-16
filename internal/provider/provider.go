@@ -33,7 +33,7 @@ func New() *Provider {
 	return &Provider{
 		BaseProvider: controller.BaseProvider{
 			ProviderName: common.ProviderName,
-			SchemeFuncs:  []func(*runtime.Scheme) error{
+			SchemeFuncs: []func(*runtime.Scheme) error{
 				seaweedv1.AddToScheme,
 			},
 			WatchConfigs: []controller.WatchConfig{
@@ -47,7 +47,6 @@ func New() *Provider {
 //
 // Add your provider-specific validation logic here.
 // Return an error if the spec is invalid.
-//
 func (p *Provider) Validate(c *controller.Context) error {
 	l := log.FromContext(c.Context())
 	l.Info("Validating instance", "name", c.Name())
@@ -57,6 +56,48 @@ func (p *Provider) Validate(c *controller.Context) error {
 		return err
 	}
 
+	volume, isVolumePresent := c.Instance().Spec.Components[common.ComponentVolume]
+	if err := validateRequiredComponent(common.ComponentVolume, volume, isVolumePresent); err != nil {
+		return err
+	}
+
+	filer, isFilerPresent := c.Instance().Spec.Components[common.ComponentFiler]
+	if err := validateRequiredComponent(common.ComponentFiler, filer, isFilerPresent); err != nil {
+		return err
+	}
+
+	s3, isS3Present := c.Instance().Spec.Components[common.ComponentS3]
+	if err := validateRequiredComponent(common.ComponentS3, s3, isS3Present); err != nil {
+		return err
+	}
+
+	var topo standalone.StandaloneTopologyConfig
+	if c.TryDecodeTopologyParameters(&topo) {
+		if err := c.DecodeTopologyParameters(&topo); err != nil {
+			return fmt.Errorf("failed to decode topology parameters: %w", err)
+		}
+		if err := validateTopologyParameters(topo); err != nil {
+			return err
+		}
+	}
+
+	var masterCustomSpec components.MasterCustomSpec
+	if c.TryDecodeComponentParameters(master, &masterCustomSpec) {
+		if err := c.DecodeComponentParameters(master, &masterCustomSpec); err != nil {
+			return fmt.Errorf("failed to decode master component parameters: %w", err)
+		}
+		if err := validateMasterParameters(masterCustomSpec); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func validateTopologyParameters(topo standalone.StandaloneTopologyConfig) error {
+	if topo.VolumeServerDiskCount != nil && *topo.VolumeServerDiskCount < 1 {
+		return fmt.Errorf("volumeServerDiskCount must be at least 1")
+	}
 	return nil
 }
 
@@ -83,7 +124,7 @@ func (p *Provider) Sync(c *controller.Context) error {
 	var masterCustomSpec components.MasterCustomSpec
 	if c.TryDecodeComponentParameters(master, &masterCustomSpec) {
 		if err := c.DecodeComponentParameters(master, &masterCustomSpec); err != nil {
-			return fmt.Errorf("failed to decode component master component custom spec: %w", err)
+			return fmt.Errorf("failed to decode master component parameters: %w", err)
 		}
 	}
 
@@ -95,13 +136,12 @@ func (p *Provider) Sync(c *controller.Context) error {
 	sw := &seaweedv1.Seaweed{
 		ObjectMeta: c.ObjectMeta(c.Name()),
 		Spec: seaweedv1.SeaweedSpec{
-			Image: image,
-			//TODO: can be added via CustomSpec
+			Image:                 image,
 			VolumeServerDiskCount: pointer.ToInt32(DefaultVolumeServerDiskCount),
 			Master: buildMasterSpec(master, masterCustomSpec),
 			Volume: &seaweedv1.VolumeSpec{Replicas: *volume.Replicas},
-			Filer:  &seaweedv1.FilerSpec{Replicas: *filer.Replicas},
-			S3:     &seaweedv1.S3GatewaySpec{Replicas: *s3.Replicas},
+			Filer:	&seaweedv1.FilerSpec{Replicas: *filer.Replicas},
+			S3: 	&seaweedv1.S3GatewaySpec{Replicas: *s3.Replicas},
 		},
 	}
 
