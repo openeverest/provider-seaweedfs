@@ -11,6 +11,13 @@ spec:
     filer:
       type: seaweedfs
     master:
+      parametersSchema:
+        openAPIV3Schema:
+          properties:
+            masterVolumeSizeLimitMB:
+              format: int32
+              type: integer
+          type: object
       type: seaweedfs
     s3:
       type: seaweedfs
@@ -23,6 +30,13 @@ spec:
         master: {}
         s3: {}
         volume: {}
+      parametersSchema:
+        openAPIV3Schema:
+          properties:
+            volumeServerDiskCount:
+              format: int32
+              type: integer
+          type: object
   uiSchema:
     standalone:
       sections:
@@ -55,6 +69,9 @@ spec:
               path: spec.components.filer.replicas
               uiType: number
               validation:
+                celExpressions:
+                  - celExpr: spec.components.engine.replicas % 2 == 1
+                    message: The number of nodes must be odd
                 int: true
                 max: 5
                 min: 1
@@ -117,6 +134,9 @@ spec:
               path: spec.components.master.replicas
               uiType: number
               validation:
+                celExpressions:
+                  - celExpr: spec.components.engine.replicas % 2 == 1
+                    message: The number of nodes must be odd
                 int: true
                 max: 5
                 min: 1
@@ -213,6 +233,9 @@ spec:
               path: spec.components.volume.replicas
               uiType: number
               validation:
+                celExpressions:
+                  - celExpr: spec.components.engine.replicas % 2 == 1
+                    message: The number of nodes must be odd
                 int: true
                 max: 10
                 min: 1

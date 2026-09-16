@@ -3,6 +3,9 @@ package provider
 import (
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -12,8 +15,8 @@ import (
 
 	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
 
-	corev1 "k8s.io/api/core/v1"
-
+	"github.com/openeverest/provider-seaweedfs/definition/components"
+	"github.com/openeverest/provider-seaweedfs/definition/topologies/standalone"
 	"github.com/openeverest/provider-seaweedfs/internal/common"
 )
 
@@ -49,11 +52,11 @@ func (p *Provider) Validate(c *controller.Context) error {
 	l := log.FromContext(c.Context())
 	l.Info("Validating instance", "name", c.Name())
 
-	// TODO: Implement validation logic.
-	// Examples:
-	//   - Check that required components are present
-	//   - Validate storage sizes, replica counts
-	//   - Ensure version compatibility
+	master, isMasterPresent := c.Instance().Spec.Components[common.ComponentMaster]
+	if err := validateMaster(master, isMasterPresent); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -70,6 +73,20 @@ func (p *Provider) Sync(c *controller.Context) error {
 	filer := c.Instance().Spec.Components[common.ComponentFiler]
 	s3 := c.Instance().Spec.Components[common.ComponentS3]
 
+	var topo standalone.StandaloneTopologyConfig
+	if c.TryDecodeTopologyParameters(&topo) {
+		if err := c.DecodeTopologyParameters(&topo); err != nil {
+			return fmt.Errorf("failed to decode topology parameters: %w", err)
+		}
+	}
+
+	var masterCustomSpec components.MasterCustomSpec
+	if c.TryDecodeComponentParameters(master, &masterCustomSpec) {
+		if err := c.DecodeComponentParameters(master, &masterCustomSpec); err != nil {
+			return fmt.Errorf("failed to decode component master component custom spec: %w", err)
+		}
+	}
+
 	image, err := resolveImage(c, common.ComponentMaster, master)
 	if err != nil {
 		return err
@@ -80,11 +97,11 @@ func (p *Provider) Sync(c *controller.Context) error {
 		Spec: seaweedv1.SeaweedSpec{
 			Image: image,
 			//TODO: can be added via CustomSpec
-			VolumeServerDiskCount: pointer.ToInt32(1),
-			Master:                &seaweedv1.MasterSpec{Replicas: *master.Replicas, VolumeSizeLimitMB: pointer.ToInt32(1024)},
-			Volume:                &seaweedv1.VolumeSpec{Replicas: *volume.Replicas},
-			Filer:                 &seaweedv1.FilerSpec{Replicas: *filer.Replicas},
-			S3:                    &seaweedv1.S3GatewaySpec{Replicas: *s3.Replicas},
+			VolumeServerDiskCount: pointer.ToInt32(DefaultVolumeServerDiskCount),
+			Master: buildMasterSpec(master, masterCustomSpec),
+			Volume: &seaweedv1.VolumeSpec{Replicas: *volume.Replicas},
+			Filer:  &seaweedv1.FilerSpec{Replicas: *filer.Replicas},
+			S3:     &seaweedv1.S3GatewaySpec{Replicas: *s3.Replicas},
 		},
 	}
 
@@ -92,6 +109,10 @@ func (p *Provider) Sync(c *controller.Context) error {
 		sw.Spec.Volume.Requests = corev1.ResourceList{
 			corev1.ResourceStorage: volume.Storage.Size,
 		}
+	}
+
+	if topo.VolumeServerDiskCount != nil {
+		sw.Spec.VolumeServerDiskCount = topo.VolumeServerDiskCount
 	}
 
 	return c.Apply(sw)
@@ -128,26 +149,32 @@ func (p *Provider) Status(c *controller.Context) (controller.Status, error) {
 	l := log.FromContext(c.Context())
 	l.Info("Computing status", "name", c.Name())
 
-	// TODO: Implement status logic.
-	// Typical pattern:
-	//   1. Get the operator CR using c.Get()
-	//   2. Translate its status to a controller.Status
-	//
-	// Example:
-	//   cr := &operatorv1.MyDatabase{}
-	//   if err := c.Get(cr, c.Name()); err != nil {
-	//       return controller.Status{}, err
-	//   }
-	//   if cr.Status.Ready {
-	//       return controller.ReadyWithConnectionDetails(
-	//           controller.ConnectionDetails{
-	//           // Populate connection details.
-	//           },
-	//       ), nil
-	//   }
-	//   return controller.Provisioning("waiting for database to be ready"), nil
+	sw := &seaweedv1.Seaweed{}
+	if err := c.Get(sw, c.Name()); err != nil {
+		if controller.IsNotFound(err) {
+			return controller.Pending("Waiting to get SeaweedFS cluster resource"), nil
+		}
+		return controller.Status{}, err
+	}
 
-	return controller.Provisioning("initializing"), nil
+	if cond := meta.FindStatusCondition(sw.Status.Conditions, "Ready"); cond != nil {
+		if cond.Status == metav1.ConditionTrue {
+			return controller.Ready(), nil
+		}
+		return controller.Provisioning(cond.Message), nil
+	}
+
+	if sw.Status.Master.Replicas > 0 {
+		return controller.Provisioning(fmt.Sprintf(
+			"Master: (%d/%d ready), Volume: (%d/%d ready), Filer: (%d/%d ready), S3: (%d/%d ready)",
+			sw.Status.Master.ReadyReplicas, sw.Status.Master.Replicas,
+			sw.Status.Volume.ReadyReplicas, sw.Status.Volume.Replicas,
+			sw.Status.Filer.ReadyReplicas, sw.Status.Filer.Replicas,
+			sw.Status.S3.ReadyReplicas, sw.Status.S3.Replicas,
+		)), nil
+	}
+
+	return controller.Initializing("waiting for SeaweedFS cluster to initialize"), nil
 }
 
 // Cleanup handles deletion of provider-managed resources.

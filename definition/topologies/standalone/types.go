@@ -17,5 +17,7 @@ package standalone
 //
 // Then reference it in topology.yaml:
 //   config:
-//     configSchema: StandaloneTopologyConfig
-type StandaloneTopologyConfig struct{}
+//     parametersSchema: StandaloneTopologyConfig
+type StandaloneTopologyConfig struct {
+	VolumeServerDiskCount *int32 `json:"volumeServerDiskCount,omitempty"`
+}
