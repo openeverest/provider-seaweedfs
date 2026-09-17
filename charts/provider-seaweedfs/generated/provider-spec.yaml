@@ -22,6 +22,13 @@ spec:
     s3:
       type: seaweedfs
     volume:
+      parametersSchema:
+        openAPIV3Schema:
+          properties:
+            maxVolumeCounts:
+              format: int32
+              type: integer
+          type: object
       type: seaweedfs
   topologies:
     standalone:
@@ -244,6 +251,16 @@ spec:
                 int: true
                 min: 1
                 required: false
+            maxVolumeCounts:
+              fieldParams:
+                defaultValue: 8
+                label: Max volumes per disk
+              path: spec.components.volume.parameters.maxVolumeCounts
+              uiType: number
+              validation:
+                int: true
+                min: 1
+                required: false
             replicas:
               fieldParams:
                 defaultValue: 2
@@ -302,6 +319,7 @@ spec:
           componentsOrder:
             - replicas
             - diskCount
+            - maxVolumeCounts
             - resources
           description: Configure the volume servers that store object data.
           label: Volume
