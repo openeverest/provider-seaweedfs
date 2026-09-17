@@ -5,8 +5,8 @@ spec:
     seaweedfs:
       versions:
         - default: true
-          image: chrislusf/seaweedfs:3.85
-          version: "3.85"
+          image: chrislusf/seaweedfs:4.47
+          version: "4.47"
   components:
     filer:
       type: seaweedfs
@@ -313,9 +313,9 @@ spec:
         - s3
   versions:
     - components:
-        filer: "3.85"
-        master: "3.85"
-        s3: "3.85"
-        volume: "3.85"
+        filer: "4.47"
+        master: "4.47"
+        s3: "4.47"
+        volume: "4.47"
       default: true
-      name: "3.85"
+      name: "4.47"

@@ -15,18 +15,18 @@
 componentTypes:
   seaweedfs:
     versions:
-      - version: "3.85"
-        image: chrislusf/seaweedfs:3.85
+      - version: "4.47"
+        image: chrislusf/seaweedfs:4.47
         default: true
 
 # Version bundles — curated sets of component versions known to work together.
 # Users set spec.version on an Instance to select a bundle.
 # The bundle with default: true is used when spec.version is omitted.
 versions:
-  - name: "3.85"
+  - name: "4.47"
     default: true
     components:
-      master: "3.85"
-      volume: "3.85"
-      filer: "3.85"
-      s3: "3.85"
+      master: "4.47"
+      volume: "4.47"
+      filer: "4.47"
+      s3: "4.47"

@@ -141,12 +141,7 @@ func (p *Provider) Sync(c *controller.Context) error {
 			Master: buildMasterSpec(master, masterCustomSpec),
 			Volume: &seaweedv1.VolumeSpec{Replicas: *volume.Replicas},
 			Filer:	&seaweedv1.FilerSpec{Replicas: *filer.Replicas},
-			S3: 	&seaweedv1.S3GatewaySpec{
-				Replicas: *s3.Replicas,
-				ComponentSpec: seaweedv1.ComponentSpec{
-					ExtraArgs: []string{"-ip.bind=0.0.0.0"},
-				},
-			},
+			S3: 	&seaweedv1.S3GatewaySpec{Replicas: *s3.Replicas},
 		},
 	}
 
