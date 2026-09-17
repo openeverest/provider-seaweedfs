@@ -11,13 +11,13 @@ package standalone
 // beyond what the base Instance spec provides.
 //
 // Example:
-//   type StandaloneTopologyConfig struct {
-//       NumShards int32 `json:"numShards,omitempty"`
-//   }
+//
+//	type StandaloneTopologyConfig struct {
+//	    NumShards int32 `json:"numShards,omitempty"`
+//	}
 //
 // Then reference it in topology.yaml:
-//   config:
-//     parametersSchema: StandaloneTopologyConfig
-type StandaloneTopologyConfig struct {
-	VolumeServerDiskCount *int32 `json:"volumeServerDiskCount,omitempty"`
-}
+//
+//	config:
+//	  parametersSchema: StandaloneTopologyConfig
+type StandaloneTopologyConfig struct{}

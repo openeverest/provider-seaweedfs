@@ -9,7 +9,6 @@
 # for detailed guidance.
 
 config:
-    parametersSchema: StandaloneTopologyConfig
     components:
         master:
             defaults:
@@ -124,7 +123,7 @@ ui:
                     fieldParams:
                         defaultValue: 1
                         label: Disks per volume server
-                    path: spec.topology.parameters.volumeServerDiskCount
+                    path: spec.components.volume.parameters.volumeServerDiskCount
                     uiType: number
                     validation:
                         int: true

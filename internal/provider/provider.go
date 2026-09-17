@@ -16,7 +16,6 @@ import (
 	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
 
 	"github.com/openeverest/provider-seaweedfs/definition/components"
-	"github.com/openeverest/provider-seaweedfs/definition/topologies/standalone"
 	"github.com/openeverest/provider-seaweedfs/internal/common"
 )
 
@@ -71,33 +70,20 @@ func (p *Provider) Validate(c *controller.Context) error {
 		return err
 	}
 
-	var topo standalone.StandaloneTopologyConfig
-	if c.TryDecodeTopologyParameters(&topo) {
-		if err := c.DecodeTopologyParameters(&topo); err != nil {
-			return fmt.Errorf("failed to decode topology parameters: %w", err)
-		}
-		if err := validateTopologyParameters(topo); err != nil {
-			return err
-		}
-	}
-
 	var masterCustomSpec components.MasterCustomSpec
 	if c.TryDecodeComponentParameters(master, &masterCustomSpec) {
-		if err := c.DecodeComponentParameters(master, &masterCustomSpec); err != nil {
-			return fmt.Errorf("failed to decode master component parameters: %w", err)
-		}
 		if err := validateMasterParameters(masterCustomSpec); err != nil {
 			return err
 		}
 	}
 
-	return nil
-}
-
-func validateTopologyParameters(topo standalone.StandaloneTopologyConfig) error {
-	if topo.VolumeServerDiskCount != nil && *topo.VolumeServerDiskCount < 1 {
-		return fmt.Errorf("volumeServerDiskCount must be at least 1")
+	var volumeCustomSpec components.VolumeCustomSpec
+	if c.TryDecodeComponentParameters(volume, &volumeCustomSpec) {
+		if err := validateVolumeParameters(volumeCustomSpec); err != nil {
+			return err
+		}
 	}
+
 	return nil
 }
 
@@ -114,19 +100,11 @@ func (p *Provider) Sync(c *controller.Context) error {
 	filer := c.Instance().Spec.Components[common.ComponentFiler]
 	s3 := c.Instance().Spec.Components[common.ComponentS3]
 
-	var topo standalone.StandaloneTopologyConfig
-	if c.TryDecodeTopologyParameters(&topo) {
-		if err := c.DecodeTopologyParameters(&topo); err != nil {
-			return fmt.Errorf("failed to decode topology parameters: %w", err)
-		}
-	}
-
 	var masterCustomSpec components.MasterCustomSpec
-	if c.TryDecodeComponentParameters(master, &masterCustomSpec) {
-		if err := c.DecodeComponentParameters(master, &masterCustomSpec); err != nil {
-			return fmt.Errorf("failed to decode master component parameters: %w", err)
-		}
-	}
+	c.TryDecodeComponentParameters(master, &masterCustomSpec)
+
+	var volumeCustomSpec components.VolumeCustomSpec
+	c.TryDecodeComponentParameters(volume, &volumeCustomSpec)
 
 	image, err := resolveImage(c, common.ComponentMaster, master)
 	if err != nil {
@@ -138,10 +116,10 @@ func (p *Provider) Sync(c *controller.Context) error {
 		Spec: seaweedv1.SeaweedSpec{
 			Image:                 image,
 			VolumeServerDiskCount: pointer.ToInt32(DefaultVolumeServerDiskCount),
-			Master: buildMasterSpec(master, masterCustomSpec),
-			Volume: &seaweedv1.VolumeSpec{Replicas: *volume.Replicas},
-			Filer:	&seaweedv1.FilerSpec{Replicas: *filer.Replicas},
-			S3: 	&seaweedv1.S3GatewaySpec{Replicas: *s3.Replicas},
+			Master:                buildMasterSpec(master, masterCustomSpec),
+			Volume:                &seaweedv1.VolumeSpec{Replicas: *volume.Replicas},
+			Filer:                 &seaweedv1.FilerSpec{Replicas: *filer.Replicas},
+			S3:                    &seaweedv1.S3GatewaySpec{Replicas: *s3.Replicas},
 		},
 	}
 
@@ -151,8 +129,8 @@ func (p *Provider) Sync(c *controller.Context) error {
 		}
 	}
 
-	if topo.VolumeServerDiskCount != nil {
-		sw.Spec.VolumeServerDiskCount = topo.VolumeServerDiskCount
+	if volumeCustomSpec.VolumeServerDiskCount != nil {
+		sw.Spec.VolumeServerDiskCount = volumeCustomSpec.VolumeServerDiskCount
 	}
 
 	return c.Apply(sw)
