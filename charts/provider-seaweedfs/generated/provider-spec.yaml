@@ -22,13 +22,6 @@ spec:
     s3:
       type: seaweedfs
     volume:
-      parametersSchema:
-        openAPIV3Schema:
-          properties:
-            volumeServerDiskCount:
-              format: int32
-              type: integer
-          type: object
       type: seaweedfs
   topologies:
     standalone:
@@ -37,6 +30,13 @@ spec:
         master: {}
         s3: {}
         volume: {}
+      parametersSchema:
+        openAPIV3Schema:
+          properties:
+            volumeServerDiskCount:
+              format: int32
+              type: integer
+          type: object
   uiSchema:
     standalone:
       sections:
@@ -238,7 +238,7 @@ spec:
               fieldParams:
                 defaultValue: 1
                 label: Disks per volume server
-              path: spec.components.volume.parameters.volumeServerDiskCount
+              path: spec.topology.parameters.volumeServerDiskCount
               uiType: number
               validation:
                 int: true

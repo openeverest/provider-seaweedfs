@@ -19,6 +19,7 @@ import (
 	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
 
 	"github.com/openeverest/provider-seaweedfs/definition/components"
+	"github.com/openeverest/provider-seaweedfs/definition/topologies/standalone"
 	"github.com/openeverest/provider-seaweedfs/internal/common"
 )
 
@@ -117,13 +118,13 @@ func TestValidateMasterParameters(t *testing.T) {
 	assert.Contains(t, err.Error(), "masterVolumeSizeLimitMB must be at least 1")
 }
 
-func TestValidateVolumeParameters(t *testing.T) {
-	require.NoError(t, validateVolumeParameters(components.VolumeCustomSpec{}))
-	require.NoError(t, validateVolumeParameters(components.VolumeCustomSpec{
+func TestValidateTopologyParameters(t *testing.T) {
+	require.NoError(t, validateTopologyParameters(standalone.StandaloneTopologyConfig{}))
+	require.NoError(t, validateTopologyParameters(standalone.StandaloneTopologyConfig{
 		VolumeServerDiskCount: pointer.ToInt32(2),
 	}))
 
-	err := validateVolumeParameters(components.VolumeCustomSpec{
+	err := validateTopologyParameters(standalone.StandaloneTopologyConfig{
 		VolumeServerDiskCount: pointer.ToInt32(0),
 	})
 	require.Error(t, err)
@@ -178,6 +179,7 @@ func TestValidate(t *testing.T) {
 	tests := []struct {
 		name       string
 		components map[string]corev1alpha1.ComponentSpec
+		topology   *corev1alpha1.TopologySpec
 		expectErr  string
 	}{
 		{
@@ -223,14 +225,12 @@ func TestValidate(t *testing.T) {
 			expectErr: "masterVolumeSizeLimitMB must be at least 1",
 		},
 		{
-			name: "invalid volume parameters",
-			components: func() map[string]corev1alpha1.ComponentSpec {
-				c := validComponents()
-				volume := c[common.ComponentVolume]
-				volume.Parameters = &runtime.RawExtension{Raw: []byte(`{"volumeServerDiskCount":0}`)}
-				c[common.ComponentVolume] = volume
-				return c
-			}(),
+			name:       "invalid volume parameters",
+			components: validComponents(),
+			topology: &corev1alpha1.TopologySpec{
+				Type:       "standalone",
+				Parameters: &runtime.RawExtension{Raw: []byte(`{"volumeServerDiskCount":0}`)},
+			},
 			expectErr: "volumeServerDiskCount must be at least 1",
 		},
 	}
@@ -239,7 +239,7 @@ func TestValidate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			instance := &corev1alpha1.Instance{
 				ObjectMeta: metav1.ObjectMeta{Name: "test-instance", Namespace: "default"},
-				Spec:       corev1alpha1.InstanceSpec{Components: tt.components},
+				Spec:       corev1alpha1.InstanceSpec{Components: tt.components, Topology: tt.topology},
 			}
 			scheme := runtime.NewScheme()
 			require.NoError(t, corev1alpha1.AddToScheme(scheme))

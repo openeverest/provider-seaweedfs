@@ -16,6 +16,7 @@ import (
 	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
 
 	"github.com/openeverest/provider-seaweedfs/definition/components"
+	"github.com/openeverest/provider-seaweedfs/definition/topologies/standalone"
 	"github.com/openeverest/provider-seaweedfs/internal/common"
 )
 
@@ -77,13 +78,20 @@ func (p *Provider) Validate(c *controller.Context) error {
 		}
 	}
 
-	var volumeCustomSpec components.VolumeCustomSpec
-	if c.TryDecodeComponentParameters(volume, &volumeCustomSpec) {
-		if err := validateVolumeParameters(volumeCustomSpec); err != nil {
+	var topo standalone.StandaloneTopologyConfig
+	if c.TryDecodeTopologyParameters(&topo) {
+		if err := validateTopologyParameters(topo); err != nil {
 			return err
 		}
 	}
 
+	return nil
+}
+
+func validateTopologyParameters(topo standalone.StandaloneTopologyConfig) error {
+	if topo.VolumeServerDiskCount != nil && *topo.VolumeServerDiskCount < 1 {
+		return fmt.Errorf("volumeServerDiskCount must be at least 1")
+	}
 	return nil
 }
 
@@ -103,8 +111,8 @@ func (p *Provider) Sync(c *controller.Context) error {
 	var masterCustomSpec components.MasterCustomSpec
 	c.TryDecodeComponentParameters(master, &masterCustomSpec)
 
-	var volumeCustomSpec components.VolumeCustomSpec
-	c.TryDecodeComponentParameters(volume, &volumeCustomSpec)
+	var topo standalone.StandaloneTopologyConfig
+	c.TryDecodeTopologyParameters(&topo)
 
 	image, err := resolveImage(c, common.ComponentMaster, master)
 	if err != nil {
@@ -129,8 +137,8 @@ func (p *Provider) Sync(c *controller.Context) error {
 		}
 	}
 
-	if volumeCustomSpec.VolumeServerDiskCount != nil {
-		sw.Spec.VolumeServerDiskCount = volumeCustomSpec.VolumeServerDiskCount
+	if topo.VolumeServerDiskCount != nil {
+		sw.Spec.VolumeServerDiskCount = topo.VolumeServerDiskCount
 	}
 
 	return c.Apply(sw)

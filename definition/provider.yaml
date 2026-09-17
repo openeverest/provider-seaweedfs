@@ -6,7 +6,6 @@ components:
     parametersSchema: MasterCustomSpec
   volume:
     type: seaweedfs
-    parametersSchema: VolumeCustomSpec
   filer:
     type: seaweedfs
   s3:

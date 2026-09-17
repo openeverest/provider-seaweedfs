@@ -20,4 +20,6 @@ package standalone
 //
 //	config:
 //	  parametersSchema: StandaloneTopologyConfig
-type StandaloneTopologyConfig struct{}
+type StandaloneTopologyConfig struct {
+	VolumeServerDiskCount *int32 `json:"volumeServerDiskCount,omitempty"`
+}
