@@ -5,12 +5,19 @@ spec:
     seaweedfs:
       versions:
         - default: true
-          image: chrislusf/seaweedfs:3.85
-          version: "3.85"
+          image: chrislusf/seaweedfs:4.47
+          version: "4.47"
   components:
     filer:
       type: seaweedfs
     master:
+      parametersSchema:
+        openAPIV3Schema:
+          properties:
+            masterVolumeSizeLimitMB:
+              format: int32
+              type: integer
+          type: object
       type: seaweedfs
     s3:
       type: seaweedfs
@@ -23,6 +30,13 @@ spec:
         master: {}
         s3: {}
         volume: {}
+      parametersSchema:
+        openAPIV3Schema:
+          properties:
+            volumeServerDiskCount:
+              format: int32
+              type: integer
+          type: object
   uiSchema:
     standalone:
       sections:
@@ -117,6 +131,9 @@ spec:
               path: spec.components.master.replicas
               uiType: number
               validation:
+                celExpressions:
+                  - celExpr: spec.components.master.replicas % 2 == 1
+                    message: The number of master replicas must be odd
                 int: true
                 max: 5
                 min: 1
@@ -151,8 +168,19 @@ spec:
                 - memory
               groupType: line
               uiType: group
+            volumeSizeLimitMB:
+              fieldParams:
+                defaultValue: 1024
+                label: Volume size limit (MB)
+              path: spec.components.master.parameters.masterVolumeSizeLimitMB
+              uiType: number
+              validation:
+                int: true
+                min: 1
+                required: false
           componentsOrder:
             - replicas
+            - volumeSizeLimitMB
             - resources
           description: Configure the SeaweedFS master servers that coordinate the cluster.
           label: Master
@@ -206,6 +234,16 @@ spec:
           label: S3
         volume:
           components:
+            diskCount:
+              fieldParams:
+                defaultValue: 1
+                label: Disks per volume server
+              path: spec.topology.parameters.volumeServerDiskCount
+              uiType: number
+              validation:
+                int: true
+                min: 1
+                required: false
             replicas:
               fieldParams:
                 defaultValue: 2
@@ -263,6 +301,7 @@ spec:
               uiType: group
           componentsOrder:
             - replicas
+            - diskCount
             - resources
           description: Configure the volume servers that store object data.
           label: Volume
@@ -274,9 +313,9 @@ spec:
         - s3
   versions:
     - components:
-        filer: "3.85"
-        master: "3.85"
-        s3: "3.85"
-        volume: "3.85"
+        filer: "4.47"
+        master: "4.47"
+        s3: "4.47"
+        volume: "4.47"
       default: true
-      name: "3.85"
+      name: "4.47"

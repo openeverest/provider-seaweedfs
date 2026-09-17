@@ -7,3 +7,7 @@
 //
 // +k8s:openapi-gen=true
 package components
+
+type MasterCustomSpec struct {
+	MasterVolumeSizeLimitMB *int32 `json:"masterVolumeSizeLimitMB,omitempty"`
+}

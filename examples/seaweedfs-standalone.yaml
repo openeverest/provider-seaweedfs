@@ -10,8 +10,8 @@ spec:
   components:
     master:
       type: seaweedfs
-      version: "3.85"
-      image: chrislusf/seaweedfs:3.85
+      version: "4.47"
+      image: chrislusf/seaweedfs:4.47
       replicas: 1
     volume:
       type: seaweedfs

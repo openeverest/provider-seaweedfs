@@ -125,8 +125,8 @@ spec:
   components:
     master:
       type: seaweedfs
-      version: "3.85"
-      image: chrislusf/seaweedfs:3.85
+      version: "4.47"
+      image: chrislusf/seaweedfs:4.47
       replicas: 1
     volume:
       type: seaweedfs
@@ -168,7 +168,7 @@ kubectl get seaweed -A
 
 | Version bundle | Default | seaweedfs |
 |---|---|---|
-| `3.85` | ✅ | `3.85` (`chrislusf/seaweedfs:3.85`) |
+| `4.47` | ✅ | `4.47` (`chrislusf/seaweedfs:4.47`) |
 
 Source of truth: [definition/versions.yaml](definition/versions.yaml).
 
