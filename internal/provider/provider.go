@@ -71,22 +71,16 @@ func (p *Provider) Validate(c *controller.Context) error {
 		return err
 	}
 
-	var topo standalone.StandaloneTopologyConfig
-	if c.TryDecodeTopologyParameters(&topo) {
-		if err := c.DecodeTopologyParameters(&topo); err != nil {
-			return fmt.Errorf("failed to decode topology parameters: %w", err)
-		}
-		if err := validateTopologyParameters(topo); err != nil {
+	var masterCustomSpec components.MasterCustomSpec
+	if c.TryDecodeComponentParameters(master, &masterCustomSpec) {
+		if err := validateMasterParameters(masterCustomSpec); err != nil {
 			return err
 		}
 	}
 
-	var masterCustomSpec components.MasterCustomSpec
-	if c.TryDecodeComponentParameters(master, &masterCustomSpec) {
-		if err := c.DecodeComponentParameters(master, &masterCustomSpec); err != nil {
-			return fmt.Errorf("failed to decode master component parameters: %w", err)
-		}
-		if err := validateMasterParameters(masterCustomSpec); err != nil {
+	var topo standalone.StandaloneTopologyConfig
+	if c.TryDecodeTopologyParameters(&topo) {
+		if err := validateTopologyParameters(topo); err != nil {
 			return err
 		}
 	}
@@ -114,19 +108,11 @@ func (p *Provider) Sync(c *controller.Context) error {
 	filer := c.Instance().Spec.Components[common.ComponentFiler]
 	s3 := c.Instance().Spec.Components[common.ComponentS3]
 
-	var topo standalone.StandaloneTopologyConfig
-	if c.TryDecodeTopologyParameters(&topo) {
-		if err := c.DecodeTopologyParameters(&topo); err != nil {
-			return fmt.Errorf("failed to decode topology parameters: %w", err)
-		}
-	}
-
 	var masterCustomSpec components.MasterCustomSpec
-	if c.TryDecodeComponentParameters(master, &masterCustomSpec) {
-		if err := c.DecodeComponentParameters(master, &masterCustomSpec); err != nil {
-			return fmt.Errorf("failed to decode master component parameters: %w", err)
-		}
-	}
+	c.TryDecodeComponentParameters(master, &masterCustomSpec)
+
+	var topo standalone.StandaloneTopologyConfig
+	c.TryDecodeTopologyParameters(&topo)
 
 	image, err := resolveImage(c, common.ComponentMaster, master)
 	if err != nil {
@@ -138,10 +124,10 @@ func (p *Provider) Sync(c *controller.Context) error {
 		Spec: seaweedv1.SeaweedSpec{
 			Image:                 image,
 			VolumeServerDiskCount: pointer.ToInt32(DefaultVolumeServerDiskCount),
-			Master: buildMasterSpec(master, masterCustomSpec),
-			Volume: &seaweedv1.VolumeSpec{Replicas: *volume.Replicas},
-			Filer:	&seaweedv1.FilerSpec{Replicas: *filer.Replicas},
-			S3: 	&seaweedv1.S3GatewaySpec{Replicas: *s3.Replicas},
+			Master:                buildMasterSpec(master, masterCustomSpec),
+			Volume:                &seaweedv1.VolumeSpec{Replicas: *volume.Replicas},
+			Filer:                 &seaweedv1.FilerSpec{Replicas: *filer.Replicas},
+			S3:                    &seaweedv1.S3GatewaySpec{Replicas: *s3.Replicas},
 		},
 	}
 
