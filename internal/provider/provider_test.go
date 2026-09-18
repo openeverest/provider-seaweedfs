@@ -273,6 +273,26 @@ func TestBuildVolumeSpec(t *testing.T) {
 		}, components.VolumeCustomSpec{})
 		assert.Equal(t, resource.MustParse("100m"), spec.Requests[corev1.ResourceCPU])
 	})
+
+	t.Run("storage merges with resource requests", func(t *testing.T) {
+		spec := buildVolumeSpec(corev1alpha1.ComponentSpec{
+			Replicas: pointer.ToInt32(1),
+			Resources: &corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("100m"),
+					corev1.ResourceMemory: resource.MustParse("256Mi"),
+				},
+				Limits: corev1.ResourceList{
+					corev1.ResourceCPU: resource.MustParse("1"),
+				},
+			},
+			Storage: &corev1alpha1.Storage{Size: resource.MustParse("10Gi")},
+		}, components.VolumeCustomSpec{})
+		assert.Equal(t, resource.MustParse("10Gi"), spec.Requests[corev1.ResourceStorage])
+		assert.Equal(t, resource.MustParse("100m"), spec.Requests[corev1.ResourceCPU])
+		assert.Equal(t, resource.MustParse("256Mi"), spec.Requests[corev1.ResourceMemory])
+		assert.Equal(t, resource.MustParse("1"), spec.Limits[corev1.ResourceCPU])
+	})
 }
 
 func validComponents() map[string]corev1alpha1.ComponentSpec {

@@ -2,6 +2,7 @@ package provider
 
 import (
 	"fmt"
+	"maps"
 
 	"github.com/AlekSi/pointer"
 	corev1alpha1 "github.com/openeverest/openeverest/v2/api/core/v1alpha1"
@@ -46,9 +47,12 @@ func buildVolumeSpec(comp corev1alpha1.ComponentSpec, volumeCustomSpec component
 	}
 
 	if comp.Storage != nil && !comp.Storage.Size.IsZero() {
-		spec.Requests = corev1.ResourceList{
-			corev1.ResourceStorage: comp.Storage.Size,
-		}
+		// clone requests so we don't mutate the caller's ResourceList when
+		// merging storage into an existing cpu/memory request map.
+		requests := make(corev1.ResourceList, len(spec.Requests)+1)
+		maps.Copy(requests, spec.Requests)
+		requests[corev1.ResourceStorage] = comp.Storage.Size
+		spec.Requests = requests
 
 		if comp.Storage.StorageClass != nil && *comp.Storage.StorageClass != "" {
 			spec.StorageClassName = comp.Storage.StorageClass
