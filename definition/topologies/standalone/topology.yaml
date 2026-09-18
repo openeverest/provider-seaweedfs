@@ -130,6 +130,16 @@ ui:
                         int: true
                         min: 1
                         required: false
+                maxVolumeCounts:
+                    fieldParams:
+                        defaultValue: 8
+                        label: Max volumes per disk
+                    path: spec.components.volume.parameters.maxVolumeCounts
+                    uiType: number
+                    validation:
+                        int: true
+                        min: 1
+                        required: false
                 resources:
                     components:
                         cpu:
@@ -177,6 +187,7 @@ ui:
             componentsOrder:
                 - replicas
                 - diskCount
+                - maxVolumeCounts
                 - resources
             description: Configure the volume servers that store object data.
             label: Volume
