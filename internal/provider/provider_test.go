@@ -118,6 +118,69 @@ func TestValidateMasterParameters(t *testing.T) {
 	assert.Contains(t, err.Error(), "masterVolumeSizeLimitMB must be at least 1")
 }
 
+func TestValidateVolume(t *testing.T) {
+	tests := []struct {
+		name      string
+		comp      corev1alpha1.ComponentSpec
+		present   bool
+		expectErr string
+	}{
+		{
+			name:      "missing volume",
+			present:   false,
+			expectErr: "is required",
+		},
+		{
+			name:      "missing storage",
+			comp:      corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(1)},
+			present:   true,
+			expectErr: "storage.size is required",
+		},
+		{
+			name: "zero storage size",
+			comp: corev1alpha1.ComponentSpec{
+				Replicas: pointer.ToInt32(1),
+				Storage:  &corev1alpha1.Storage{},
+			},
+			present:   true,
+			expectErr: "storage.size is required",
+		},
+		{
+			name: "valid",
+			comp: corev1alpha1.ComponentSpec{
+				Replicas: pointer.ToInt32(1),
+				Storage:  &corev1alpha1.Storage{Size: resource.MustParse("10Gi")},
+			},
+			present: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateVolume(tt.comp, tt.present)
+			if tt.expectErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestValidateVolumeParameters(t *testing.T) {
+	require.NoError(t, validateVolumeParameters(components.VolumeCustomSpec{}))
+	require.NoError(t, validateVolumeParameters(components.VolumeCustomSpec{
+		MaxVolumeCounts: pointer.ToInt32(8),
+	}))
+
+	err := validateVolumeParameters(components.VolumeCustomSpec{
+		MaxVolumeCounts: pointer.ToInt32(0),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "maxVolumeCounts must be at least 1")
+}
+
 func TestValidateTopologyParameters(t *testing.T) {
 	require.NoError(t, validateTopologyParameters(standalone.StandaloneTopologyConfig{}))
 	require.NoError(t, validateTopologyParameters(standalone.StandaloneTopologyConfig{
@@ -166,12 +229,61 @@ func TestBuildMasterSpec(t *testing.T) {
 	})
 }
 
+func TestBuildVolumeSpec(t *testing.T) {
+	t.Run("defaults when no custom spec", func(t *testing.T) {
+		spec := buildVolumeSpec(corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(2)}, components.VolumeCustomSpec{})
+		require.NotNil(t, spec.MaxVolumeCounts)
+		assert.Equal(t, DefaultMaxVolumeCounts, *spec.MaxVolumeCounts)
+		assert.Equal(t, int32(2), spec.Replicas)
+		assert.Nil(t, spec.Requests)
+		assert.Nil(t, spec.StorageClassName)
+	})
+
+	t.Run("custom max volume counts overrides default", func(t *testing.T) {
+		spec := buildVolumeSpec(
+			corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(1)},
+			components.VolumeCustomSpec{MaxVolumeCounts: pointer.ToInt32(16)},
+		)
+		require.NotNil(t, spec.MaxVolumeCounts)
+		assert.Equal(t, int32(16), *spec.MaxVolumeCounts)
+	})
+
+	t.Run("storage is applied", func(t *testing.T) {
+		storageClass := "fast"
+		spec := buildVolumeSpec(corev1alpha1.ComponentSpec{
+			Replicas: pointer.ToInt32(1),
+			Storage: &corev1alpha1.Storage{
+				Size:         resource.MustParse("10Gi"),
+				StorageClass: &storageClass,
+			},
+		}, components.VolumeCustomSpec{})
+		assert.Equal(t, resource.MustParse("10Gi"), spec.Requests[corev1.ResourceStorage])
+		require.NotNil(t, spec.StorageClassName)
+		assert.Equal(t, "fast", *spec.StorageClassName)
+	})
+
+	t.Run("resources are applied", func(t *testing.T) {
+		spec := buildVolumeSpec(corev1alpha1.ComponentSpec{
+			Replicas: pointer.ToInt32(1),
+			Resources: &corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU: resource.MustParse("100m"),
+				},
+			},
+		}, components.VolumeCustomSpec{})
+		assert.Equal(t, resource.MustParse("100m"), spec.Requests[corev1.ResourceCPU])
+	})
+}
+
 func validComponents() map[string]corev1alpha1.ComponentSpec {
 	return map[string]corev1alpha1.ComponentSpec{
 		common.ComponentMaster: {Replicas: pointer.ToInt32(3)},
-		common.ComponentVolume: {Replicas: pointer.ToInt32(2)},
-		common.ComponentFiler:  {Replicas: pointer.ToInt32(1)},
-		common.ComponentS3:     {Replicas: pointer.ToInt32(1)},
+		common.ComponentVolume: {
+			Replicas: pointer.ToInt32(2),
+			Storage:  &corev1alpha1.Storage{Size: resource.MustParse("10Gi")},
+		},
+		common.ComponentFiler: {Replicas: pointer.ToInt32(1)},
+		common.ComponentS3:    {Replicas: pointer.ToInt32(1)},
 	}
 }
 
@@ -225,7 +337,27 @@ func TestValidate(t *testing.T) {
 			expectErr: "masterVolumeSizeLimitMB must be at least 1",
 		},
 		{
-			name:       "invalid volume parameters",
+			name: "missing volume storage",
+			components: func() map[string]corev1alpha1.ComponentSpec {
+				c := validComponents()
+				c[common.ComponentVolume] = corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(2)}
+				return c
+			}(),
+			expectErr: "storage.size is required",
+		},
+		{
+			name: "invalid volume parameters",
+			components: func() map[string]corev1alpha1.ComponentSpec {
+				c := validComponents()
+				volume := c[common.ComponentVolume]
+				volume.Parameters = &runtime.RawExtension{Raw: []byte(`{"maxVolumeCounts":0}`)}
+				c[common.ComponentVolume] = volume
+				return c
+			}(),
+			expectErr: "maxVolumeCounts must be at least 1",
+		},
+		{
+			name:       "invalid topology parameters",
 			components: validComponents(),
 			topology: &corev1alpha1.TopologySpec{
 				Type:       "standalone",
