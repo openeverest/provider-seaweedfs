@@ -410,10 +410,19 @@ func TestValidate(t *testing.T) {
 }
 
 func TestStatus(t *testing.T) {
+	s3Service := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-instance-s3", Namespace: "default"},
+		Spec: corev1.ServiceSpec{
+			Ports: []corev1.ServicePort{{Name: "s3-http", Port: 8333}},
+		},
+	}
+
 	tests := []struct {
-		name        string
-		seaweed     *seaweedv1.Seaweed
-		expectPhase corev1alpha1.InstancePhase
+		name             string
+		seaweed          *seaweedv1.Seaweed
+		service          *corev1.Service
+		expectPhase      corev1alpha1.InstancePhase
+		expectConnection bool
 	}{
 		{
 			name:        "cluster not found is pending",
@@ -421,14 +430,26 @@ func TestStatus(t *testing.T) {
 			expectPhase: corev1alpha1.InstancePhasePending,
 		},
 		{
-			name: "ready condition true is ready",
+			name: "ready with S3 Service publishes connection details",
 			seaweed: &seaweedv1.Seaweed{
 				ObjectMeta: metav1.ObjectMeta{Name: "test-instance", Namespace: "default"},
 				Status: seaweedv1.SeaweedStatus{
 					Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Ready"}},
 				},
 			},
-			expectPhase: corev1alpha1.InstancePhaseReady,
+			service:          s3Service,
+			expectPhase:      corev1alpha1.InstancePhaseReady,
+			expectConnection: true,
+		},
+		{
+			name: "ready without S3 Service stays provisioning",
+			seaweed: &seaweedv1.Seaweed{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-instance", Namespace: "default"},
+				Status: seaweedv1.SeaweedStatus{
+					Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Ready"}},
+				},
+			},
+			expectPhase: corev1alpha1.InstancePhaseProvisioning,
 		},
 		{
 			name: "ready condition false is provisioning",
@@ -469,15 +490,27 @@ func TestStatus(t *testing.T) {
 			scheme := runtime.NewScheme()
 			require.NoError(t, corev1alpha1.AddToScheme(scheme))
 			require.NoError(t, seaweedv1.AddToScheme(scheme))
+			require.NoError(t, corev1.AddToScheme(scheme))
 			builder := fake.NewClientBuilder().WithScheme(scheme).WithObjects(instance)
 			if tt.seaweed != nil {
 				builder = builder.WithObjects(tt.seaweed)
+			}
+			if tt.service != nil {
+				builder = builder.WithObjects(tt.service)
 			}
 			ctx := controller.NewContext(context.Background(), builder.Build(), instance, common.ProviderName)
 
 			status, err := New().Status(ctx)
 			require.NoError(t, err)
 			assert.Equal(t, tt.expectPhase, status.Phase)
+			if tt.expectConnection {
+				assert.Equal(t, "s3", status.ConnectionDetails.Type)
+				assert.Equal(t, common.ProviderName, status.ConnectionDetails.Provider)
+				assert.Equal(t, "test-instance-s3.default.svc", status.ConnectionDetails.Host)
+				assert.Equal(t, "8333", status.ConnectionDetails.Port)
+				assert.Equal(t, "http://test-instance-s3.default.svc:8333", status.ConnectionDetails.URI)
+				assert.Equal(t, "true", status.ConnectionDetails.AdditionalProperties["forcePathStyle"])
+			}
 		})
 	}
 }

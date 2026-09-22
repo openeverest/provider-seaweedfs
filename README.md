@@ -69,8 +69,8 @@ an MVP: several capabilities are stubbed or not wired yet.
 | Monitoring | ❌ | Planned |
 | Pod scheduling (affinity) | ❌ | Planned |
 | TLS | ❌ | Planned |
-| Status / readiness | ⚠️ | Always reports provisioning — status mapping not implemented yet |
-| Connection details | ❌ | No connection Secret published yet |
+| Status / readiness | ✅ | Maps Seaweed Ready condition; publishes S3 connection details |
+| Connection details | ✅ | Reads operator S3 Service; publishes endpoint on Ready |
 
 Stateful workloads additionally report:
 
@@ -154,9 +154,33 @@ kubectl get seaweed -A
 ```
 
 > [!NOTE]
-> Connection endpoints and credentials are **not** published on the `Instance`
-> yet. Inspect the operator-managed Services and Pods for S3 / filer access
-> until status mapping lands.
+> When the Instance is Ready, connection details are published to Secret
+> `<instance-name>-conn` from the operator-managed S3 Service
+> (`<name>-s3`). They include host, port, URI, and
+> `forcePathStyle=true` / `verifyTLS=false` hints for S3 clients.
+>
+> For Postgres backups, point a `BackupStorage` at that endpoint. Without an
+> S3 identity config on the gateway, SeaweedFS accepts requests without auth —
+> create any credentials Secret with `AWS_ACCESS_KEY_ID` /
+> `AWS_SECRET_ACCESS_KEY` for BackupStorage to reference, create the bucket,
+> then attach the storage to the Postgres Instance.
+>
+> ```yaml
+> apiVersion: backup.openeverest.io/v1alpha1
+> kind: BackupStorage
+> metadata:
+>   name: seaweedfs-backups
+> spec:
+>   type: s3
+>   s3:
+>     bucket: seaweedfs-standalone-backups
+>     region: us-east-1
+>     endpointURL: http://seaweedfs-standalone-s3.default.svc:8333
+>     forcePathStyle: true
+>     verifyTLS: false
+>     credentialsSecretRef:
+>       name: my-s3-creds
+> ```
 
 ## Topologies
 

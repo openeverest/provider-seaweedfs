@@ -6,6 +6,25 @@
     - create
     - patch
 - apiGroups:
+    - ""
+  resources:
+    - secrets
+  verbs:
+    - create
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - ""
+  resources:
+    - services
+  verbs:
+    - get
+    - list
+    - watch
+- apiGroups:
     - coordination.k8s.io
   resources:
     - leases
