@@ -3,7 +3,6 @@ package provider
 import (
 	"fmt"
 
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -57,7 +56,7 @@ func (p *Provider) Validate(c *controller.Context) error {
 	}
 
 	volume, isVolumePresent := c.Instance().Spec.Components[common.ComponentVolume]
-	if err := validateRequiredComponent(common.ComponentVolume, volume, isVolumePresent); err != nil {
+	if err := validateVolume(volume, isVolumePresent); err != nil {
 		return err
 	}
 
@@ -74,6 +73,13 @@ func (p *Provider) Validate(c *controller.Context) error {
 	var masterCustomSpec components.MasterCustomSpec
 	if c.TryDecodeComponentParameters(master, &masterCustomSpec) {
 		if err := validateMasterParameters(masterCustomSpec); err != nil {
+			return err
+		}
+	}
+
+	var volumeCustomSpec components.VolumeCustomSpec
+	if c.TryDecodeComponentParameters(volume, &volumeCustomSpec) {
+		if err := validateVolumeParameters(volumeCustomSpec); err != nil {
 			return err
 		}
 	}
@@ -111,6 +117,9 @@ func (p *Provider) Sync(c *controller.Context) error {
 	var masterCustomSpec components.MasterCustomSpec
 	c.TryDecodeComponentParameters(master, &masterCustomSpec)
 
+	var volumeCustomSpec components.VolumeCustomSpec
+	c.TryDecodeComponentParameters(volume, &volumeCustomSpec)
+
 	var topo standalone.StandaloneTopologyConfig
 	c.TryDecodeTopologyParameters(&topo)
 
@@ -125,16 +134,10 @@ func (p *Provider) Sync(c *controller.Context) error {
 			Image:                 image,
 			VolumeServerDiskCount: pointer.ToInt32(DefaultVolumeServerDiskCount),
 			Master:                buildMasterSpec(master, masterCustomSpec),
-			Volume:                &seaweedv1.VolumeSpec{Replicas: *volume.Replicas},
+			Volume:                buildVolumeSpec(volume, volumeCustomSpec),
 			Filer:                 &seaweedv1.FilerSpec{Replicas: *filer.Replicas},
 			S3:                    &seaweedv1.S3GatewaySpec{Replicas: *s3.Replicas},
 		},
-	}
-
-	if volume.Storage != nil {
-		sw.Spec.Volume.Requests = corev1.ResourceList{
-			corev1.ResourceStorage: volume.Storage.Size,
-		}
 	}
 
 	if topo.VolumeServerDiskCount != nil {

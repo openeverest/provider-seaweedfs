@@ -11,3 +11,7 @@ package components
 type MasterCustomSpec struct {
 	MasterVolumeSizeLimitMB *int32 `json:"masterVolumeSizeLimitMB,omitempty"`
 }
+
+type VolumeCustomSpec struct {
+	MaxVolumeCounts *int32 `json:"maxVolumeCounts,omitempty"`
+}
