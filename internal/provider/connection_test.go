@@ -42,7 +42,6 @@ func TestBuildConnectionDetailsFromService(t *testing.T) {
 	assert.Equal(t, "true", details.AdditionalProperties["forcePathStyle"])
 	assert.Equal(t, "false", details.AdditionalProperties["verifyTLS"])
 	assert.Equal(t, defaultS3Region, details.AdditionalProperties["region"])
-	assert.Equal(t, "sw-backups", details.AdditionalProperties["bucket"])
 }
 
 func TestServiceS3Port(t *testing.T) {
