@@ -3,6 +3,7 @@ package provider
 import (
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -170,6 +171,13 @@ func resolveImage(c *controller.Context, componentName string, comp corev1alpha1
 	return "", fmt.Errorf("no image found for component %q", componentName)
 }
 
+func getS3Service(c *controller.Context, svc *corev1.Service) (error) {
+	if err := c.Get(svc, s3ServiceName(c.Name())); err != nil {
+		return err
+	}
+	return nil
+}
+
 // Status computes the current status of the database instance.
 //
 // Query the operator's resource(s) and translate their status
@@ -188,7 +196,16 @@ func (p *Provider) Status(c *controller.Context) (controller.Status, error) {
 
 	if cond := meta.FindStatusCondition(sw.Status.Conditions, "Ready"); cond != nil {
 		if cond.Status == metav1.ConditionTrue {
-			return controller.Ready(), nil
+			svc := &corev1.Service{}
+			if err := getS3Service(c, svc); err != nil {
+				if controller.IsNotFound(err) {
+					return controller.Provisioning("Waiting for S3 Service"), nil
+				}
+				return controller.Status{}, err
+			}
+			return controller.ReadyWithConnectionDetails(
+				buildConnectionDetailsFromService(c, svc),
+			), nil
 		}
 		return controller.Provisioning(cond.Message), nil
 	}

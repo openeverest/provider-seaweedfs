@@ -15,3 +15,9 @@ package provider
 // SeaweedFS operator resources:
 // +kubebuilder:rbac:groups=seaweed.seaweedfs.com,resources=seaweeds,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=seaweed.seaweedfs.com,resources=seaweeds/status,verbs=get
+
+// Operator-managed S3 Service (read for connection details):
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
+
+// Connection details Secret written by provider-runtime on Ready:
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
