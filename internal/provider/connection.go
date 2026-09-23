@@ -40,7 +40,6 @@ func buildConnectionDetailsFromService(c *controller.Context, svc *corev1.Servic
 			"forcePathStyle": "true",
 			"verifyTLS":      "false",
 			"region":         defaultS3Region,
-			"bucket":         c.Name() + "-backups",
 		},
 	}
 }
