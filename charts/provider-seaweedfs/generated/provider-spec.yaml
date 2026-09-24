@@ -9,6 +9,13 @@ spec:
           version: "4.47"
   components:
     filer:
+      parametersSchema:
+        openAPIV3Schema:
+          properties:
+            maxMB:
+              format: int32
+              type: integer
+          type: object
       type: seaweedfs
     master:
       parametersSchema:
@@ -69,6 +76,16 @@ spec:
           label: Basic Information
         filer:
           components:
+            maxMB:
+              fieldParams:
+                defaultValue: 4
+                label: Chunk size (MB)
+              path: spec.components.filer.parameters.maxMB
+              uiType: number
+              validation:
+                int: true
+                min: 1
+                required: false
             replicas:
               fieldParams:
                 defaultValue: 1
@@ -126,6 +143,7 @@ spec:
               uiType: group
           componentsOrder:
             - replicas
+            - maxMB
             - resources
           description: Configure the filer that provides the filesystem namespace and metadata store.
           label: Filer

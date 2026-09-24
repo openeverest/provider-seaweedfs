@@ -204,7 +204,16 @@ ui:
                         max: 5
                         min: 1
                         required: true
-
+                maxMB:
+                    fieldParams:
+                        defaultValue: 4
+                        label: Chunk size (MB)
+                    path: spec.components.filer.parameters.maxMB
+                    uiType: number
+                    validation:
+                        int: true
+                        min: 1
+                        required: false
                 resources:
                     components:
                         cpu:
@@ -251,6 +260,7 @@ ui:
                     uiType: group
             componentsOrder:
                 - replicas
+                - maxMB
                 - resources
             description: Configure the filer that provides the filesystem namespace and metadata store.
             label: Filer

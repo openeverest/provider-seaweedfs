@@ -229,6 +229,120 @@ func TestBuildMasterSpec(t *testing.T) {
 	})
 }
 
+func TestValidateFiler(t *testing.T) {
+	tests := []struct {
+		name      string
+		comp      corev1alpha1.ComponentSpec
+		present   bool
+		expectErr string
+	}{
+		{
+			name:      "missing filer",
+			present:   false,
+			expectErr: "is required",
+		},
+		{
+			name:      "missing storage",
+			comp:      corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(1)},
+			present:   true,
+			expectErr: "storage.size is required",
+		},
+		{
+			name: "zero storage size",
+			comp: corev1alpha1.ComponentSpec{
+				Replicas: pointer.ToInt32(1),
+				Storage:  &corev1alpha1.Storage{},
+			},
+			present:   true,
+			expectErr: "storage.size is required",
+		},
+		{
+			name: "valid",
+			comp: corev1alpha1.ComponentSpec{
+				Replicas: pointer.ToInt32(1),
+				Storage:  &corev1alpha1.Storage{Size: resource.MustParse("1Gi")},
+			},
+			present: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateFiler(tt.comp, tt.present)
+			if tt.expectErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestValidateFilerParameters(t *testing.T) {
+	require.NoError(t, validateFilerParameters(components.FilerCustomSpec{}))
+	require.NoError(t, validateFilerParameters(components.FilerCustomSpec{
+		MaxMB: pointer.ToInt32(8),
+	}))
+
+	err := validateFilerParameters(components.FilerCustomSpec{
+		MaxMB: pointer.ToInt32(0),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "maxMB must be at least 1")
+}
+
+func TestBuildFilerSpec(t *testing.T) {
+	t.Run("replicas only", func(t *testing.T) {
+		spec := buildFilerSpec(corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(2)}, components.FilerCustomSpec{})
+		assert.Equal(t, int32(2), spec.Replicas)
+		assert.Nil(t, spec.Persistence)
+		assert.Nil(t, spec.Config)
+		assert.Nil(t, spec.MaxMB)
+	})
+
+	t.Run("custom maxMB is applied", func(t *testing.T) {
+		spec := buildFilerSpec(
+			corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(1)},
+			components.FilerCustomSpec{MaxMB: pointer.ToInt32(16)},
+		)
+		require.NotNil(t, spec.MaxMB)
+		assert.Equal(t, int32(16), *spec.MaxMB)
+	})
+
+	t.Run("resources are applied", func(t *testing.T) {
+		spec := buildFilerSpec(corev1alpha1.ComponentSpec{
+			Replicas: pointer.ToInt32(1),
+			Resources: &corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU: resource.MustParse("100m"),
+				},
+				Limits: corev1.ResourceList{
+					corev1.ResourceMemory: resource.MustParse("512Mi"),
+				},
+			},
+		}, components.FilerCustomSpec{})
+		assert.Equal(t, resource.MustParse("100m"), spec.Requests[corev1.ResourceCPU])
+		assert.Equal(t, resource.MustParse("512Mi"), spec.Limits[corev1.ResourceMemory])
+	})
+
+	t.Run("storage enables persistence", func(t *testing.T) {
+		storageClass := "fast"
+		spec := buildFilerSpec(corev1alpha1.ComponentSpec{
+			Replicas: pointer.ToInt32(1),
+			Storage: &corev1alpha1.Storage{
+				Size:         resource.MustParse("1Gi"),
+				StorageClass: &storageClass,
+			},
+		}, components.FilerCustomSpec{})
+		require.NotNil(t, spec.Persistence)
+		assert.True(t, spec.Persistence.Enabled)
+		require.NotNil(t, spec.Persistence.StorageClassName)
+		assert.Equal(t, "fast", *spec.Persistence.StorageClassName)
+		assert.Equal(t, resource.MustParse("1Gi"), spec.Persistence.Resources.Requests[corev1.ResourceStorage])
+	})
+}
+
 func TestBuildVolumeSpec(t *testing.T) {
 	t.Run("defaults when no custom spec", func(t *testing.T) {
 		spec := buildVolumeSpec(corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(2)}, components.VolumeCustomSpec{})
@@ -302,8 +416,11 @@ func validComponents() map[string]corev1alpha1.ComponentSpec {
 			Replicas: pointer.ToInt32(2),
 			Storage:  &corev1alpha1.Storage{Size: resource.MustParse("10Gi")},
 		},
-		common.ComponentFiler: {Replicas: pointer.ToInt32(1)},
-		common.ComponentS3:    {Replicas: pointer.ToInt32(1)},
+		common.ComponentFiler: {
+			Replicas: pointer.ToInt32(1),
+			Storage:  &corev1alpha1.Storage{Size: resource.MustParse("1Gi")},
+		},
+		common.ComponentS3: {Replicas: pointer.ToInt32(1)},
 	}
 }
 
@@ -364,6 +481,26 @@ func TestValidate(t *testing.T) {
 				return c
 			}(),
 			expectErr: "storage.size is required",
+		},
+		{
+			name: "missing filer storage",
+			components: func() map[string]corev1alpha1.ComponentSpec {
+				c := validComponents()
+				c[common.ComponentFiler] = corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(1)}
+				return c
+			}(),
+			expectErr: "storage.size is required",
+		},
+		{
+			name: "invalid filer parameters",
+			components: func() map[string]corev1alpha1.ComponentSpec {
+				c := validComponents()
+				filer := c[common.ComponentFiler]
+				filer.Parameters = &runtime.RawExtension{Raw: []byte(`{"maxMB":0}`)}
+				c[common.ComponentFiler] = filer
+				return c
+			}(),
+			expectErr: "maxMB must be at least 1",
 		},
 		{
 			name: "invalid volume parameters",

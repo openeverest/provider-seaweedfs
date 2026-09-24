@@ -62,7 +62,7 @@ func (p *Provider) Validate(c *controller.Context) error {
 	}
 
 	filer, isFilerPresent := c.Instance().Spec.Components[common.ComponentFiler]
-	if err := validateRequiredComponent(common.ComponentFiler, filer, isFilerPresent); err != nil {
+	if err := validateFiler(filer, isFilerPresent); err != nil {
 		return err
 	}
 
@@ -81,6 +81,13 @@ func (p *Provider) Validate(c *controller.Context) error {
 	var volumeCustomSpec components.VolumeCustomSpec
 	if c.TryDecodeComponentParameters(volume, &volumeCustomSpec) {
 		if err := validateVolumeParameters(volumeCustomSpec); err != nil {
+			return err
+		}
+	}
+
+	var filerCustomSpec components.FilerCustomSpec
+	if c.TryDecodeComponentParameters(filer, &filerCustomSpec) {
+		if err := validateFilerParameters(filerCustomSpec); err != nil {
 			return err
 		}
 	}
@@ -121,6 +128,9 @@ func (p *Provider) Sync(c *controller.Context) error {
 	var volumeCustomSpec components.VolumeCustomSpec
 	c.TryDecodeComponentParameters(volume, &volumeCustomSpec)
 
+	var filerCustomSpec components.FilerCustomSpec
+	c.TryDecodeComponentParameters(filer, &filerCustomSpec)
+
 	var topo standalone.StandaloneTopologyConfig
 	c.TryDecodeTopologyParameters(&topo)
 
@@ -136,7 +146,7 @@ func (p *Provider) Sync(c *controller.Context) error {
 			VolumeServerDiskCount: pointer.ToInt32(DefaultVolumeServerDiskCount),
 			Master:                buildMasterSpec(master, masterCustomSpec),
 			Volume:                buildVolumeSpec(volume, volumeCustomSpec),
-			Filer:                 &seaweedv1.FilerSpec{Replicas: *filer.Replicas},
+			Filer:                 buildFilerSpec(filer, filerCustomSpec),
 			S3:                    &seaweedv1.S3GatewaySpec{Replicas: *s3.Replicas},
 		},
 	}
