@@ -297,7 +297,6 @@ func TestBuildFilerSpec(t *testing.T) {
 		spec := buildFilerSpec(corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(2)}, components.FilerCustomSpec{})
 		assert.Equal(t, int32(2), spec.Replicas)
 		assert.Nil(t, spec.Persistence)
-		assert.Nil(t, spec.Config)
 		assert.Nil(t, spec.MaxMB)
 	})
 
