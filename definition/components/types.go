@@ -15,3 +15,7 @@ type MasterCustomSpec struct {
 type VolumeCustomSpec struct {
 	MaxVolumeCounts *int32 `json:"maxVolumeCounts,omitempty"`
 }
+
+type FilerCustomSpec struct {
+	MaxMB *int32 `json:"maxMB,omitempty"`
+}

@@ -121,10 +121,16 @@ test-integration: ## Run integration tests (kuttl) against a running cluster.
 
 ##@ Local Development Cluster
 
+K3D_CLUSTER_NAME ?= provider-seaweedfs-test
+
 .PHONY: k3d-cluster-up
 k3d-cluster-up: ## Create a local k3d cluster for development.
-	$(info Creating k3d cluster for testing)
-	k3d cluster create --config ./dev/k3d_config.yaml
+	@if k3d cluster list $(K3D_CLUSTER_NAME) >/dev/null 2>&1; then \
+		echo "k3d cluster '$(K3D_CLUSTER_NAME)' already exists"; \
+	else \
+		echo "Creating k3d cluster for testing"; \
+		k3d cluster create --config ./dev/k3d_config.yaml; \
+	fi
 
 .PHONY: k3d-cluster-down
 k3d-cluster-down: ## Delete the local k3d cluster.

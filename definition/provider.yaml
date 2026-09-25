@@ -9,5 +9,6 @@ components:
     parametersSchema: VolumeCustomSpec
   filer:
     type: seaweedfs
+    parametersSchema: FilerCustomSpec
   s3:
     type: seaweedfs

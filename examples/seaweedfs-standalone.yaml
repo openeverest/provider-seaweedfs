@@ -21,6 +21,8 @@ spec:
     filer:
       type: seaweedfs
       replicas: 1
+      storage:
+        size: 1Gi
     s3:
       type: seaweedfs
       replicas: 1
