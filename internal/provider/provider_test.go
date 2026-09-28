@@ -292,6 +292,114 @@ func TestValidateFilerParameters(t *testing.T) {
 	assert.Contains(t, err.Error(), "maxMB must be at least 1")
 }
 
+func TestValidateS3(t *testing.T) {
+	tests := []struct {
+		name      string
+		comp      corev1alpha1.ComponentSpec
+		present   bool
+		expectErr string
+	}{
+		{
+			name:      "missing s3",
+			present:   false,
+			expectErr: "is required",
+		},
+		{
+			name:      "missing replicas",
+			comp:      corev1alpha1.ComponentSpec{},
+			present:   true,
+			expectErr: "replicas is required",
+		},
+		{
+			name:      "zero replicas",
+			comp:      corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(0)},
+			present:   true,
+			expectErr: "replicas must be at least 1",
+		},
+		{
+			name:    "valid",
+			comp:    corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(1)},
+			present: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateS3(tt.comp, tt.present)
+			if tt.expectErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestValidateS3Parameters(t *testing.T) {
+	require.NoError(t, validateS3Parameters(components.S3CustomSpec{}))
+	require.NoError(t, validateS3Parameters(components.S3CustomSpec{
+		Port:       pointer.ToInt32(8333),
+		DomainName: pointer.To("s3.example.com"),
+	}))
+	require.NoError(t, validateS3Parameters(components.S3CustomSpec{
+		Port: pointer.ToInt32(65535),
+	}))
+
+	err := validateS3Parameters(components.S3CustomSpec{
+		Port: pointer.ToInt32(0),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "port must be between 1 and 65535")
+
+	err = validateS3Parameters(components.S3CustomSpec{
+		Port: pointer.ToInt32(65536),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "port must be between 1 and 65535")
+}
+
+func TestBuildS3Spec(t *testing.T) {
+	t.Run("replicas only", func(t *testing.T) {
+		spec := buildS3Spec(corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(2)}, components.S3CustomSpec{})
+		assert.Equal(t, int32(2), spec.Replicas)
+		assert.Nil(t, spec.Port)
+		assert.Nil(t, spec.DomainName)
+		assert.Nil(t, spec.Requests)
+		assert.Nil(t, spec.Limits)
+	})
+
+	t.Run("custom port and domainName are applied", func(t *testing.T) {
+		spec := buildS3Spec(
+			corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(1)},
+			components.S3CustomSpec{
+				Port:       pointer.ToInt32(9000),
+				DomainName: pointer.To("s3.example.com"),
+			},
+		)
+		require.NotNil(t, spec.Port)
+		assert.Equal(t, int32(9000), *spec.Port)
+		require.NotNil(t, spec.DomainName)
+		assert.Equal(t, "s3.example.com", *spec.DomainName)
+	})
+
+	t.Run("resources are applied", func(t *testing.T) {
+		spec := buildS3Spec(corev1alpha1.ComponentSpec{
+			Replicas: pointer.ToInt32(1),
+			Resources: &corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU: resource.MustParse("100m"),
+				},
+				Limits: corev1.ResourceList{
+					corev1.ResourceMemory: resource.MustParse("512Mi"),
+				},
+			},
+		}, components.S3CustomSpec{})
+		assert.Equal(t, resource.MustParse("100m"), spec.Requests[corev1.ResourceCPU])
+		assert.Equal(t, resource.MustParse("512Mi"), spec.Limits[corev1.ResourceMemory])
+	})
+}
+
 func TestBuildFilerSpec(t *testing.T) {
 	t.Run("replicas only", func(t *testing.T) {
 		spec := buildFilerSpec(corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(2)}, components.FilerCustomSpec{})
@@ -500,6 +608,17 @@ func TestValidate(t *testing.T) {
 				return c
 			}(),
 			expectErr: "maxMB must be at least 1",
+		},
+		{
+			name: "invalid s3 parameters",
+			components: func() map[string]corev1alpha1.ComponentSpec {
+				c := validComponents()
+				s3 := c[common.ComponentS3]
+				s3.Parameters = &runtime.RawExtension{Raw: []byte(`{"port":0}`)}
+				c[common.ComponentS3] = s3
+				return c
+			}(),
+			expectErr: "port must be between 1 and 65535",
 		},
 		{
 			name: "invalid volume parameters",

@@ -12,3 +12,4 @@ components:
     parametersSchema: FilerCustomSpec
   s3:
     type: seaweedfs
+    parametersSchema: S3CustomSpec

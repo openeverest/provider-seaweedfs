@@ -277,6 +277,24 @@ ui:
                         max: 5
                         min: 1
                         required: true
+                port:
+                    fieldParams:
+                        defaultValue: 8333
+                        label: S3 port
+                    path: spec.components.s3.parameters.port
+                    uiType: number
+                    validation:
+                        int: true
+                        max: 65535
+                        min: 1
+                        required: false
+                domainName:
+                    fieldParams:
+                        label: Domain name
+                    path: spec.components.s3.parameters.domainName
+                    uiType: text
+                    validation:
+                        required: false
                 resources:
                     components:
                         cpu:
@@ -309,6 +327,8 @@ ui:
                     uiType: group
             componentsOrder:
                 - replicas
+                - port
+                - domainName
                 - resources
             description: Configure the S3-compatible gateway for object access.
             label: S3

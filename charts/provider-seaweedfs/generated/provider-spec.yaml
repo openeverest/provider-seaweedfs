@@ -27,6 +27,15 @@ spec:
           type: object
       type: seaweedfs
     s3:
+      parametersSchema:
+        openAPIV3Schema:
+          properties:
+            domainName:
+              type: string
+            port:
+              format: int32
+              type: integer
+          type: object
       type: seaweedfs
     volume:
       parametersSchema:
@@ -211,6 +220,24 @@ spec:
           label: Master
         s3:
           components:
+            domainName:
+              fieldParams:
+                label: Domain name
+              path: spec.components.s3.parameters.domainName
+              uiType: text
+              validation:
+                required: false
+            port:
+              fieldParams:
+                defaultValue: 8333
+                label: S3 port
+              path: spec.components.s3.parameters.port
+              uiType: number
+              validation:
+                int: true
+                max: 65535
+                min: 1
+                required: false
             replicas:
               fieldParams:
                 defaultValue: 1
@@ -254,6 +281,8 @@ spec:
               uiType: group
           componentsOrder:
             - replicas
+            - port
+            - domainName
             - resources
           description: Configure the S3-compatible gateway for object access.
           label: S3
