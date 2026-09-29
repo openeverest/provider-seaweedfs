@@ -231,7 +231,7 @@ spec:
             port:
               fieldParams:
                 defaultValue: 8333
-                helperText: Changing the port after creation updates the Service immediately and breaks existing clients and BackupStorage endpoints.
+                helperText: Cannot be changed after creation without breaking existing clients and BackupStorage endpoints.
                 label: S3 port
                 modes:
                   edit:
@@ -244,11 +244,6 @@ spec:
                 int: true
                 max: 55535
                 min: 1
-                modes:
-                  edit:
-                    celExpressions:
-                      - celExpr: spec.components.s3.parameters.port == original.spec.components.s3.parameters.port
-                        message: S3 port cannot be changed after creation
                 required: false
             replicas:
               fieldParams:
