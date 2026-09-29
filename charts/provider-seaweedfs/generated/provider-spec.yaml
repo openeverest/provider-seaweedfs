@@ -222,7 +222,6 @@ spec:
           components:
             domainName:
               fieldParams:
-                helperText: Comma-separated DNS hostnames for virtual-hosted-style buckets (for example s3.example.com).
                 label: Domain name
               path: spec.components.s3.parameters.domainName
               uiType: text
@@ -231,24 +230,13 @@ spec:
             port:
               fieldParams:
                 defaultValue: 8333
-                helperText: Changing the port after creation updates the Service immediately and breaks existing clients and BackupStorage endpoints.
                 label: S3 port
-                modes:
-                  edit:
-                    disabled: true
-                  restore:
-                    disabled: true
               path: spec.components.s3.parameters.port
               uiType: number
               validation:
                 int: true
-                max: 55535
+                max: 65535
                 min: 1
-                modes:
-                  edit:
-                    celExpressions:
-                      - celExpr: spec.components.s3.parameters.port == original.spec.components.s3.parameters.port
-                        message: S3 port cannot be changed after creation
                 required: false
             replicas:
               fieldParams:
