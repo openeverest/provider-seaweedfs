@@ -67,7 +67,7 @@ func (p *Provider) Validate(c *controller.Context) error {
 	}
 
 	s3, isS3Present := c.Instance().Spec.Components[common.ComponentS3]
-	if err := validateRequiredComponent(common.ComponentS3, s3, isS3Present); err != nil {
+	if err := validateS3(s3, isS3Present); err != nil {
 		return err
 	}
 
@@ -88,6 +88,13 @@ func (p *Provider) Validate(c *controller.Context) error {
 	var filerCustomSpec components.FilerCustomSpec
 	if c.TryDecodeComponentParameters(filer, &filerCustomSpec) {
 		if err := validateFilerParameters(filerCustomSpec); err != nil {
+			return err
+		}
+	}
+
+	var s3CustomSpec components.S3CustomSpec
+	if c.TryDecodeComponentParameters(s3, &s3CustomSpec) {
+		if err := validateS3Parameters(s3CustomSpec); err != nil {
 			return err
 		}
 	}
@@ -131,6 +138,9 @@ func (p *Provider) Sync(c *controller.Context) error {
 	var filerCustomSpec components.FilerCustomSpec
 	c.TryDecodeComponentParameters(filer, &filerCustomSpec)
 
+	var s3CustomSpec components.S3CustomSpec
+	c.TryDecodeComponentParameters(s3, &s3CustomSpec)
+
 	var topo standalone.StandaloneTopologyConfig
 	c.TryDecodeTopologyParameters(&topo)
 
@@ -147,7 +157,7 @@ func (p *Provider) Sync(c *controller.Context) error {
 			Master:                buildMasterSpec(master, masterCustomSpec),
 			Volume:                buildVolumeSpec(volume, volumeCustomSpec),
 			Filer:                 buildFilerSpec(filer, filerCustomSpec),
-			S3:                    &seaweedv1.S3GatewaySpec{Replicas: *s3.Replicas},
+			S3:                    buildS3Spec(s3, s3CustomSpec),
 		},
 	}
 

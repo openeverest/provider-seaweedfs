@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/AlekSi/pointer"
@@ -292,6 +293,88 @@ func TestValidateFilerParameters(t *testing.T) {
 	assert.Contains(t, err.Error(), "maxMB must be at least 1")
 }
 
+func TestValidateS3Parameters(t *testing.T) {
+	require.NoError(t, validateS3Parameters(components.S3CustomSpec{}))
+	require.NoError(t, validateS3Parameters(components.S3CustomSpec{
+		Port:       pointer.ToInt32(8333),
+		DomainName: pointer.To("s3.example.com"),
+	}))
+	require.NoError(t, validateS3Parameters(components.S3CustomSpec{
+		Port: pointer.ToInt32(MaxS3Port),
+	}))
+	require.NoError(t, validateS3Parameters(components.S3CustomSpec{
+		DomainName: pointer.To(""),
+	}))
+	require.NoError(t, validateS3Parameters(components.S3CustomSpec{
+		DomainName: pointer.To("s3.example.com,cdn.example.com"),
+	}))
+
+	err := validateS3Parameters(components.S3CustomSpec{
+		Port: pointer.ToInt32(0),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), fmt.Sprintf("port must be between 1 and %d", MaxS3Port))
+
+	err = validateS3Parameters(components.S3CustomSpec{
+		Port: pointer.ToInt32(MaxS3Port + 1),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), fmt.Sprintf("port must be between 1 and %d", MaxS3Port))
+
+	err = validateS3Parameters(components.S3CustomSpec{
+		DomainName: pointer.To("x;id"),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "domainName")
+
+	err = validateS3Parameters(components.S3CustomSpec{
+		DomainName: pointer.To("s3.example.com,$(id)"),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "domainName")
+}
+
+func TestBuildS3Spec(t *testing.T) {
+	t.Run("replicas only", func(t *testing.T) {
+		spec := buildS3Spec(corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(2)}, components.S3CustomSpec{})
+		assert.Equal(t, int32(2), spec.Replicas)
+		assert.Nil(t, spec.Port)
+		assert.Nil(t, spec.DomainName)
+		assert.Nil(t, spec.Requests)
+		assert.Nil(t, spec.Limits)
+	})
+
+	t.Run("custom port and domainName are applied", func(t *testing.T) {
+		spec := buildS3Spec(
+			corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(1)},
+			components.S3CustomSpec{
+				Port:       pointer.ToInt32(9000),
+				DomainName: pointer.To("s3.example.com"),
+			},
+		)
+		require.NotNil(t, spec.Port)
+		assert.Equal(t, int32(9000), *spec.Port)
+		require.NotNil(t, spec.DomainName)
+		assert.Equal(t, "s3.example.com", *spec.DomainName)
+	})
+
+	t.Run("resources are applied", func(t *testing.T) {
+		spec := buildS3Spec(corev1alpha1.ComponentSpec{
+			Replicas: pointer.ToInt32(1),
+			Resources: &corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU: resource.MustParse("100m"),
+				},
+				Limits: corev1.ResourceList{
+					corev1.ResourceMemory: resource.MustParse("512Mi"),
+				},
+			},
+		}, components.S3CustomSpec{})
+		assert.Equal(t, resource.MustParse("100m"), spec.Requests[corev1.ResourceCPU])
+		assert.Equal(t, resource.MustParse("512Mi"), spec.Limits[corev1.ResourceMemory])
+	})
+}
+
 func TestBuildFilerSpec(t *testing.T) {
 	t.Run("replicas only", func(t *testing.T) {
 		spec := buildFilerSpec(corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(2)}, components.FilerCustomSpec{})
@@ -500,6 +583,28 @@ func TestValidate(t *testing.T) {
 				return c
 			}(),
 			expectErr: "maxMB must be at least 1",
+		},
+		{
+			name: "invalid s3 parameters",
+			components: func() map[string]corev1alpha1.ComponentSpec {
+				c := validComponents()
+				s3 := c[common.ComponentS3]
+				s3.Parameters = &runtime.RawExtension{Raw: []byte(`{"port":0}`)}
+				c[common.ComponentS3] = s3
+				return c
+			}(),
+			expectErr: fmt.Sprintf("port must be between 1 and %d", MaxS3Port),
+		},
+		{
+			name: "invalid s3 domainName",
+			components: func() map[string]corev1alpha1.ComponentSpec {
+				c := validComponents()
+				s3 := c[common.ComponentS3]
+				s3.Parameters = &runtime.RawExtension{Raw: []byte(`{"domainName":"x;id"}`)}
+				c[common.ComponentS3] = s3
+				return c
+			}(),
+			expectErr: "domainName",
 		},
 		{
 			name: "invalid volume parameters",

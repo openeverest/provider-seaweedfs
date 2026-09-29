@@ -27,6 +27,15 @@ spec:
           type: object
       type: seaweedfs
     s3:
+      parametersSchema:
+        openAPIV3Schema:
+          properties:
+            domainName:
+              type: string
+            port:
+              format: int32
+              type: integer
+          type: object
       type: seaweedfs
     volume:
       parametersSchema:
@@ -211,6 +220,31 @@ spec:
           label: Master
         s3:
           components:
+            domainName:
+              fieldParams:
+                helperText: Comma-separated DNS hostnames for virtual-hosted-style buckets (for example s3.example.com).
+                label: Domain name
+              path: spec.components.s3.parameters.domainName
+              uiType: text
+              validation:
+                required: false
+            port:
+              fieldParams:
+                defaultValue: 8333
+                helperText: Cannot be changed after creation without breaking existing clients and BackupStorage endpoints.
+                label: S3 port
+                modes:
+                  edit:
+                    disabled: true
+                  restore:
+                    disabled: true
+              path: spec.components.s3.parameters.port
+              uiType: number
+              validation:
+                int: true
+                max: 55535
+                min: 1
+                required: false
             replicas:
               fieldParams:
                 defaultValue: 1
@@ -254,6 +288,8 @@ spec:
               uiType: group
           componentsOrder:
             - replicas
+            - port
+            - domainName
             - resources
           description: Configure the S3-compatible gateway for object access.
           label: S3

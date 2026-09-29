@@ -19,3 +19,8 @@ type VolumeCustomSpec struct {
 type FilerCustomSpec struct {
 	MaxMB *int32 `json:"maxMB,omitempty"`
 }
+
+type S3CustomSpec struct {
+	Port       *int32  `json:"port,omitempty"`
+	DomainName *string `json:"domainName,omitempty"`
+}
