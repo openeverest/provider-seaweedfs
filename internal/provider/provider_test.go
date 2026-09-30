@@ -91,6 +91,15 @@ func TestValidateMaster(t *testing.T) {
 			comp:    corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(3)},
 			present: true,
 		},
+		{
+			name: "unsupported service type",
+			comp: corev1alpha1.ComponentSpec{
+				Replicas: pointer.ToInt32(1),
+				Service:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeExternalName},
+			},
+			present:   true,
+			expectErr: "unsupported serviceType",
+		},
 	}
 
 	for _, tt := range tests {
@@ -154,6 +163,25 @@ func TestValidateVolume(t *testing.T) {
 			},
 			present: true,
 		},
+		{
+			name: "default ClusterIP service is allowed",
+			comp: corev1alpha1.ComponentSpec{
+				Replicas: pointer.ToInt32(1),
+				Storage:  &corev1alpha1.Storage{Size: resource.MustParse("10Gi")},
+				Service:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeClusterIP},
+			},
+			present: true,
+		},
+		{
+			name: "NodePort service is not supported on volume",
+			comp: corev1alpha1.ComponentSpec{
+				Replicas: pointer.ToInt32(1),
+				Storage:  &corev1alpha1.Storage{Size: resource.MustParse("10Gi")},
+				Service:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeNodePort},
+			},
+			present:   true,
+			expectErr: "service exposure is not supported",
+		},
 	}
 
 	for _, tt := range tests {
@@ -195,6 +223,127 @@ func TestValidateTopologyParameters(t *testing.T) {
 	assert.Contains(t, err.Error(), "volumeServerDiskCount must be at least 1")
 }
 
+func TestValidateService(t *testing.T) {
+	tests := []struct {
+		name      string
+		svc       *corev1alpha1.Service
+		expectErr string
+	}{
+		{name: "nil service"},
+		{name: "empty service", svc: &corev1alpha1.Service{}},
+		{
+			name: "ClusterIP",
+			svc:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeClusterIP},
+		},
+		{
+			name: "NodePort",
+			svc:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeNodePort},
+		},
+		{
+			name: "LoadBalancer",
+			svc:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeLoadBalancer},
+		},
+		{
+			name: "LoadBalancer with empty loadBalancerService",
+			svc: &corev1alpha1.Service{
+				ServiceType:         corev1.ServiceTypeLoadBalancer,
+				LoadBalancerService: &corev1alpha1.LoadBalancerService{},
+			},
+		},
+		{
+			name: "loadBalancerService with empty serviceType",
+			svc: &corev1alpha1.Service{
+				LoadBalancerService: &corev1alpha1.LoadBalancerService{},
+			},
+			expectErr: "loadBalancerService is only valid with serviceType LoadBalancer",
+		},
+		{
+			name: "ExternalName unsupported",
+			svc: &corev1alpha1.Service{
+				ServiceType: corev1.ServiceTypeExternalName,
+			},
+			expectErr: "unsupported serviceType",
+		},
+		{
+			name: "loadBalancerService without LoadBalancer type",
+			svc: &corev1alpha1.Service{
+				ServiceType:         corev1.ServiceTypeClusterIP,
+				LoadBalancerService: &corev1alpha1.LoadBalancerService{},
+			},
+			expectErr: "loadBalancerService is only valid with serviceType LoadBalancer",
+		},
+		{
+			name: "sourceRanges unsupported",
+			svc: &corev1alpha1.Service{
+				ServiceType: corev1.ServiceTypeLoadBalancer,
+				LoadBalancerService: &corev1alpha1.LoadBalancerService{
+					SourceRanges: corev1alpha1.SourceRanges{"10.0.0.0/8"},
+				},
+			},
+			expectErr: "sourceRanges is not supported",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateService(common.ComponentS3, tt.svc)
+			if tt.expectErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestBuildServiceSpec(t *testing.T) {
+	t.Run("nil service leaves operator defaults", func(t *testing.T) {
+		assert.Nil(t, buildServiceSpec(nil))
+	})
+
+	t.Run("default ClusterIP leaves operator defaults", func(t *testing.T) {
+		assert.Nil(t, buildServiceSpec(&corev1alpha1.Service{}))
+		assert.Nil(t, buildServiceSpec(&corev1alpha1.Service{ServiceType: corev1.ServiceTypeClusterIP}))
+	})
+
+	t.Run("ClusterIP with annotations is applied", func(t *testing.T) {
+		spec := buildServiceSpec(&corev1alpha1.Service{
+			ServiceType: corev1.ServiceTypeClusterIP,
+			Annotations: map[string]string{"example.com/owner": "team-a"},
+		})
+		require.NotNil(t, spec)
+		assert.Equal(t, corev1.ServiceTypeClusterIP, spec.Type)
+		assert.Equal(t, map[string]string{"example.com/owner": "team-a"}, spec.Annotations)
+	})
+
+	t.Run("NodePort", func(t *testing.T) {
+		spec := buildServiceSpec(&corev1alpha1.Service{ServiceType: corev1.ServiceTypeNodePort})
+		require.NotNil(t, spec)
+		assert.Equal(t, corev1.ServiceTypeNodePort, spec.Type)
+		assert.Nil(t, spec.Annotations)
+	})
+
+	t.Run("LoadBalancer with annotations", func(t *testing.T) {
+		spec := buildServiceSpec(&corev1alpha1.Service{
+			ServiceType: corev1.ServiceTypeLoadBalancer,
+			Annotations: map[string]string{"service.beta.kubernetes.io/aws-load-balancer-type": "nlb"},
+		})
+		require.NotNil(t, spec)
+		assert.Equal(t, corev1.ServiceTypeLoadBalancer, spec.Type)
+		require.Equal(t, map[string]string{"service.beta.kubernetes.io/aws-load-balancer-type": "nlb"}, spec.Annotations)
+	})
+
+	t.Run("LoadBalancer with empty loadBalancerService still sets Type", func(t *testing.T) {
+		spec := buildServiceSpec(&corev1alpha1.Service{
+			ServiceType:         corev1.ServiceTypeLoadBalancer,
+			LoadBalancerService: &corev1alpha1.LoadBalancerService{},
+		})
+		require.NotNil(t, spec)
+		assert.Equal(t, corev1.ServiceTypeLoadBalancer, spec.Type)
+	})
+}
+
 func TestBuildMasterSpec(t *testing.T) {
 	t.Run("defaults when no custom spec", func(t *testing.T) {
 		spec := buildMasterSpec(corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(3)}, components.MasterCustomSpec{})
@@ -202,6 +351,16 @@ func TestBuildMasterSpec(t *testing.T) {
 		assert.Equal(t, DefaultMasterVolumeSizeLimitMB, *spec.VolumeSizeLimitMB)
 		assert.Equal(t, int32(3), spec.Replicas)
 		assert.Nil(t, spec.Persistence)
+		assert.Nil(t, spec.Service)
+	})
+
+	t.Run("service type from component", func(t *testing.T) {
+		spec := buildMasterSpec(corev1alpha1.ComponentSpec{
+			Replicas: pointer.ToInt32(1),
+			Service:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeNodePort},
+		}, components.MasterCustomSpec{})
+		require.NotNil(t, spec.Service)
+		assert.Equal(t, corev1.ServiceTypeNodePort, spec.Service.Type)
 	})
 
 	t.Run("custom volume size limit overrides default", func(t *testing.T) {
@@ -264,6 +423,16 @@ func TestValidateFiler(t *testing.T) {
 				Storage:  &corev1alpha1.Storage{Size: resource.MustParse("1Gi")},
 			},
 			present: true,
+		},
+		{
+			name: "unsupported service type",
+			comp: corev1alpha1.ComponentSpec{
+				Replicas: pointer.ToInt32(1),
+				Storage:  &corev1alpha1.Storage{Size: resource.MustParse("1Gi")},
+				Service:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeExternalName},
+			},
+			present:   true,
+			expectErr: "unsupported serviceType",
 		},
 	}
 
@@ -342,6 +511,17 @@ func TestBuildS3Spec(t *testing.T) {
 		assert.Nil(t, spec.DomainName)
 		assert.Nil(t, spec.Requests)
 		assert.Nil(t, spec.Limits)
+		assert.Nil(t, spec.Service)
+	})
+
+	t.Run("service type from component", func(t *testing.T) {
+		spec := buildS3Spec(corev1alpha1.ComponentSpec{
+			Replicas: pointer.ToInt32(1),
+			Service:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeLoadBalancer},
+		}, components.S3CustomSpec{})
+		require.NotNil(t, spec.Service)
+		assert.Equal(t, corev1.ServiceTypeLoadBalancer, spec.Service.Type)
+		assert.Nil(t, spec.Service.Annotations)
 	})
 
 	t.Run("custom port and domainName are applied", func(t *testing.T) {
@@ -381,6 +561,16 @@ func TestBuildFilerSpec(t *testing.T) {
 		assert.Equal(t, int32(2), spec.Replicas)
 		assert.Nil(t, spec.Persistence)
 		assert.Nil(t, spec.MaxMB)
+		assert.Nil(t, spec.Service)
+	})
+
+	t.Run("service type from component", func(t *testing.T) {
+		spec := buildFilerSpec(corev1alpha1.ComponentSpec{
+			Replicas: pointer.ToInt32(1),
+			Service:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeNodePort},
+		}, components.FilerCustomSpec{})
+		require.NotNil(t, spec.Service)
+		assert.Equal(t, corev1.ServiceTypeNodePort, spec.Service.Type)
 	})
 
 	t.Run("custom maxMB is applied", func(t *testing.T) {
@@ -433,6 +623,7 @@ func TestBuildVolumeSpec(t *testing.T) {
 		assert.Equal(t, int32(2), spec.Replicas)
 		assert.Nil(t, spec.Requests)
 		assert.Nil(t, spec.StorageClassName)
+		assert.Nil(t, spec.Service)
 	})
 
 	t.Run("custom max volume counts overrides default", func(t *testing.T) {

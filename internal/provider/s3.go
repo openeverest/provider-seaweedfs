@@ -13,7 +13,10 @@ import (
 )
 
 func validateS3(comp corev1alpha1.ComponentSpec, present bool) error {
-	return validateRequiredComponent(common.ComponentS3, comp, present)
+	if err := validateRequiredComponent(common.ComponentS3, comp, present); err != nil {
+		return err
+	}
+	return validateService(common.ComponentS3, comp.Service)
 }
 
 func validateS3Parameters(spec components.S3CustomSpec) error {
@@ -48,6 +51,7 @@ func buildS3Spec(comp corev1alpha1.ComponentSpec, s3CustomSpec components.S3Cust
 		Replicas:   *comp.Replicas,
 		Port:       s3CustomSpec.Port,
 		DomainName: s3CustomSpec.DomainName,
+		Service:    buildServiceSpec(comp.Service),
 	}
 
 	if comp.Resources != nil {

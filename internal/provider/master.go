@@ -28,9 +28,15 @@ func validateMaster(comp corev1alpha1.ComponentSpec, present bool) error {
 	if err := validateRequiredComponent(common.ComponentMaster, comp, present); err != nil {
 		return err
 	}
+
+	if err := validateService(common.ComponentMaster, comp.Service); err != nil {
+		return err
+	}
+
 	if *comp.Replicas%2 == 0 {
 		return fmt.Errorf("%q component: the number of replicas must be odd", common.ComponentMaster)
 	}
+
 	return nil
 }
 
@@ -45,6 +51,7 @@ func buildMasterSpec(comp corev1alpha1.ComponentSpec, masterCustomSpec component
 	spec := &seaweedv1.MasterSpec{
 		Replicas:          *comp.Replicas,
 		VolumeSizeLimitMB: pointer.ToInt32(DefaultMasterVolumeSizeLimitMB),
+		Service:           buildServiceSpec(comp.Service),
 	}
 
 	if masterCustomSpec.MasterVolumeSizeLimitMB != nil {

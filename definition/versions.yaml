@@ -1,30 +1,30 @@
 # Component type version catalog.
 # Add new versions here when operator releases are available.
-# Mark exactly one version per type as `default: true`.
+# Name the default version per type via `defaultVersion`.
 #
 # Run `provider-sdk add component` to populate this file automatically.
 #
 # Example:
 # componentTypes:
 #   mongod:
+#     defaultVersion: "1.0.0"
 #     versions:
 #     - version: "1.0.0"
 #       image: example/my-database:1.0.0
-#       default: true
 
 componentTypes:
   seaweedfs:
+    defaultVersion: "4.47"
     versions:
       - version: "4.47"
         image: chrislusf/seaweedfs:4.47
-        default: true
 
 # Version bundles — curated sets of component versions known to work together.
 # Users set spec.version on an Instance to select a bundle.
-# The bundle with default: true is used when spec.version is omitted.
+# The bundle named by defaultVersion is used when spec.version is omitted.
+defaultVersion: "4.47"
 versions:
   - name: "4.47"
-    default: true
     components:
       master: "4.47"
       volume: "4.47"

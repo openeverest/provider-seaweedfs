@@ -1,10 +1,79 @@
 package provider
 
 import (
+	"fmt"
+	"maps"
+
 	corev1alpha1 "github.com/openeverest/openeverest/v2/api/core/v1alpha1"
 	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
 	corev1 "k8s.io/api/core/v1"
 )
+
+// OpenEverest exposes ServiceType, Annotations, and LoadBalancerService.SourceRanges.
+// SourceRanges has no operator field, so it is rejected.
+func validateService(component string, svc *corev1alpha1.Service) error {
+	if svc == nil {
+		return nil
+	}
+
+	switch svc.ServiceType {
+	case "", corev1.ServiceTypeClusterIP, corev1.ServiceTypeNodePort, corev1.ServiceTypeLoadBalancer:
+		// ok - operator CRD type is an unvalidated string; we restrict here
+	default:
+		// ExternalName would be passed through by the operator with no ExternalName
+		// hostname field, producing an invalid Service.
+		return fmt.Errorf("%q component: unsupported serviceType %q (must be ClusterIP, NodePort, or LoadBalancer)", component, svc.ServiceType)
+	}
+
+	if svc.LoadBalancerService != nil {
+		if svc.ServiceType != corev1.ServiceTypeLoadBalancer {
+			return fmt.Errorf("%q component: loadBalancerService is only valid with serviceType LoadBalancer", component)
+		}
+		if len(svc.LoadBalancerService.SourceRanges) > 0 {
+			return fmt.Errorf("%q component: loadBalancerService.sourceRanges is not supported", component)
+		}
+	}
+
+	return nil
+}
+
+// isDefaultInClusterService is true when the Instance service is unset or is
+// the no-op ClusterIP default (no annotations, no loadBalancerService).
+func isDefaultInClusterService(svc *corev1alpha1.Service) bool {
+	if svc == nil {
+		return true
+	}
+	if len(svc.Annotations) > 0 || svc.LoadBalancerService != nil {
+		return false
+	}
+	return svc.ServiceType == "" || svc.ServiceType == corev1.ServiceTypeClusterIP
+}
+
+// buildServiceSpec maps OpenEverest ComponentSpec.Service onto the operator
+// ServiceSpec for master / filer / S3 Services. Returns nil for the default
+// ClusterIP case so the operator keeps its own defaults. That matters because
+// when Spec.Service is non-nil the operator replaces annotations with
+// copyAnnotations(user), wiping the built-in tolerate-unready annotation.
+func buildServiceSpec(svc *corev1alpha1.Service) *seaweedv1.ServiceSpec {
+	if isDefaultInClusterService(svc) {
+		return nil
+	}
+
+	serviceType := corev1.ServiceTypeClusterIP
+	if svc != nil && svc.ServiceType != "" {
+		serviceType = svc.ServiceType
+	}
+	spec := &seaweedv1.ServiceSpec{
+		Type: serviceType,
+	}
+
+	if svc != nil && len(svc.Annotations) > 0 {
+		spec.Annotations = make(map[string]string, len(svc.Annotations))
+		maps.Copy(spec.Annotations, svc.Annotations)
+	}
+
+	return spec
+}
 
 func buildPersistenceSpec(storage *corev1alpha1.Storage) *seaweedv1.PersistenceSpec {
 	if storage == nil || storage.Size.IsZero() {

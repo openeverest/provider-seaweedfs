@@ -191,7 +191,7 @@ func resolveImage(c *controller.Context, componentName string, comp corev1alpha1
 	return "", fmt.Errorf("no image found for component %q", componentName)
 }
 
-func getS3Service(c *controller.Context, svc *corev1.Service) (error) {
+func getS3Service(c *controller.Context, svc *corev1.Service) error {
 	if err := c.Get(svc, s3ServiceName(c.Name())); err != nil {
 		return err
 	}
