@@ -1,6 +1,6 @@
 module github.com/openeverest/provider-seaweedfs
 
-go 1.26.4
+go 1.27.1
 
 require (
 	github.com/AlekSi/pointer v1.2.0

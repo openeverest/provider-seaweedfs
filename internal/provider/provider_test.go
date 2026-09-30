@@ -91,6 +91,15 @@ func TestValidateMaster(t *testing.T) {
 			comp:    corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(3)},
 			present: true,
 		},
+		{
+			name: "unsupported service type",
+			comp: corev1alpha1.ComponentSpec{
+				Replicas: pointer.ToInt32(1),
+				Service:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeExternalName},
+			},
+			present:   true,
+			expectErr: "unsupported serviceType",
+		},
 	}
 
 	for _, tt := range tests {
@@ -153,6 +162,25 @@ func TestValidateVolume(t *testing.T) {
 				Storage:  &corev1alpha1.Storage{Size: resource.MustParse("10Gi")},
 			},
 			present: true,
+		},
+		{
+			name: "default ClusterIP service is allowed",
+			comp: corev1alpha1.ComponentSpec{
+				Replicas: pointer.ToInt32(1),
+				Storage:  &corev1alpha1.Storage{Size: resource.MustParse("10Gi")},
+				Service:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeClusterIP},
+			},
+			present: true,
+		},
+		{
+			name: "NodePort service is not supported on volume",
+			comp: corev1alpha1.ComponentSpec{
+				Replicas: pointer.ToInt32(1),
+				Storage:  &corev1alpha1.Storage{Size: resource.MustParse("10Gi")},
+				Service:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeNodePort},
+			},
+			present:   true,
+			expectErr: "service exposure is not supported",
 		},
 	}
 
@@ -326,6 +354,15 @@ func TestBuildMasterSpec(t *testing.T) {
 		assert.Nil(t, spec.Service)
 	})
 
+	t.Run("service type from component", func(t *testing.T) {
+		spec := buildMasterSpec(corev1alpha1.ComponentSpec{
+			Replicas: pointer.ToInt32(1),
+			Service:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeNodePort},
+		}, components.MasterCustomSpec{})
+		require.NotNil(t, spec.Service)
+		assert.Equal(t, corev1.ServiceTypeNodePort, spec.Service.Type)
+	})
+
 	t.Run("custom volume size limit overrides default", func(t *testing.T) {
 		spec := buildMasterSpec(
 			corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(1)},
@@ -386,6 +423,16 @@ func TestValidateFiler(t *testing.T) {
 				Storage:  &corev1alpha1.Storage{Size: resource.MustParse("1Gi")},
 			},
 			present: true,
+		},
+		{
+			name: "unsupported service type",
+			comp: corev1alpha1.ComponentSpec{
+				Replicas: pointer.ToInt32(1),
+				Storage:  &corev1alpha1.Storage{Size: resource.MustParse("1Gi")},
+				Service:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeExternalName},
+			},
+			present:   true,
+			expectErr: "unsupported serviceType",
 		},
 	}
 
@@ -515,6 +562,15 @@ func TestBuildFilerSpec(t *testing.T) {
 		assert.Nil(t, spec.Persistence)
 		assert.Nil(t, spec.MaxMB)
 		assert.Nil(t, spec.Service)
+	})
+
+	t.Run("service type from component", func(t *testing.T) {
+		spec := buildFilerSpec(corev1alpha1.ComponentSpec{
+			Replicas: pointer.ToInt32(1),
+			Service:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeNodePort},
+		}, components.FilerCustomSpec{})
+		require.NotNil(t, spec.Service)
+		assert.Equal(t, corev1.ServiceTypeNodePort, spec.Service.Type)
 	})
 
 	t.Run("custom maxMB is applied", func(t *testing.T) {

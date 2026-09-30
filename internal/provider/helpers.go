@@ -10,7 +10,7 @@ import (
 )
 
 // OpenEverest exposes ServiceType, Annotations, and LoadBalancerService.SourceRanges.
-// Only S3 supports service exposure today. SourceRanges has no operator field, so it is rejected.
+// SourceRanges has no operator field, so it is rejected.
 func validateService(component string, svc *corev1alpha1.Service) error {
 	if svc == nil {
 		return nil
@@ -50,8 +50,10 @@ func isDefaultInClusterService(svc *corev1alpha1.Service) bool {
 }
 
 // buildServiceSpec maps OpenEverest ComponentSpec.Service onto the operator
-// ServiceSpec for the S3 gateway. Returns nil for the default ClusterIP case so
-// the operator keeps its own defaults.
+// ServiceSpec for master / filer / S3 Services. Returns nil for the default
+// ClusterIP case so the operator keeps its own defaults. That matters because
+// when Spec.Service is non-nil the operator replaces annotations with
+// copyAnnotations(user), wiping the built-in tolerate-unready annotation.
 func buildServiceSpec(svc *corev1alpha1.Service) *seaweedv1.ServiceSpec {
 	if isDefaultInClusterService(svc) {
 		return nil
