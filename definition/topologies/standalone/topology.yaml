@@ -61,22 +61,6 @@ ui:
                         celExpressions:
                           - celExpr: "spec.components.master.replicas % 2 == 1"
                             message: "The number of master replicas must be odd"
-                serviceType:
-                    fieldParams:
-                        defaultValue: ClusterIP
-                        helperText: ClusterIP is in-cluster only. NodePort and LoadBalancer expose the service externally.
-                        label: Service type
-                        options:
-                            - label: ClusterIP (internal)
-                              value: ClusterIP
-                            - label: NodePort
-                              value: NodePort
-                            - label: LoadBalancer
-                              value: LoadBalancer
-                    path: spec.components.master.service.serviceType
-                    uiType: select
-                    validation:
-                        required: false
                 volumeSizeLimitMB:
                     fieldParams:
                         defaultValue: 1024
@@ -119,7 +103,6 @@ ui:
                     uiType: group
             componentsOrder:
                 - replicas
-                - serviceType
                 - volumeSizeLimitMB
                 - resources
             description: Configure the SeaweedFS master servers that coordinate the cluster.
@@ -221,22 +204,6 @@ ui:
                         max: 5
                         min: 1
                         required: true
-                serviceType:
-                    fieldParams:
-                        defaultValue: ClusterIP
-                        helperText: ClusterIP is in-cluster only. NodePort and LoadBalancer expose the service externally.
-                        label: Service type
-                        options:
-                            - label: ClusterIP (internal)
-                              value: ClusterIP
-                            - label: NodePort
-                              value: NodePort
-                            - label: LoadBalancer
-                              value: LoadBalancer
-                    path: spec.components.filer.service.serviceType
-                    uiType: select
-                    validation:
-                        required: false
                 maxMB:
                     fieldParams:
                         defaultValue: 4
@@ -293,7 +260,6 @@ ui:
                     uiType: group
             componentsOrder:
                 - replicas
-                - serviceType
                 - maxMB
                 - resources
             description: Configure the filer that provides the filesystem namespace and metadata store.

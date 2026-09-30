@@ -18,22 +18,11 @@ func validateVolume(comp corev1alpha1.ComponentSpec, present bool) error {
 		return err
 	}
 
-	if err := validateVolumeService(comp.Service); err != nil {
-		return err
-	}
-
 	if comp.Storage == nil || comp.Storage.Size.IsZero() {
 		return fmt.Errorf("%q component: storage.size is required", common.ComponentVolume)
 	}
 
 	return nil
-}
-
-func validateVolumeService(svc *corev1alpha1.Service) error {
-	if isDefaultInClusterService(svc) {
-		return nil
-	}
-	return fmt.Errorf("%q component: service exposure is not supported", common.ComponentVolume)
 }
 
 func validateVolumeParameters(spec components.VolumeCustomSpec) error {
