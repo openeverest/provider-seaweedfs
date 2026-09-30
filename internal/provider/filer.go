@@ -15,10 +15,6 @@ func validateFiler(comp corev1alpha1.ComponentSpec, present bool) error {
 		return err
 	}
 
-	if err := validateService(common.ComponentFiler, comp.Service); err != nil {
-		return err
-	}
-
 	if comp.Storage == nil || comp.Storage.Size.IsZero() {
 		return fmt.Errorf("%q component: storage.size is required", common.ComponentFiler)
 	}
@@ -37,7 +33,6 @@ func buildFilerSpec(comp corev1alpha1.ComponentSpec, filerCustomSpec components.
 	spec := &seaweedv1.FilerSpec{
 		Replicas: *comp.Replicas,
 		MaxMB:    filerCustomSpec.MaxMB,
-		Service:  buildServiceSpec(comp.Service),
 	}
 
 	if comp.Resources != nil {
