@@ -17,11 +17,9 @@ func validateVolume(comp corev1alpha1.ComponentSpec, present bool) error {
 	if err := validateRequiredComponent(common.ComponentVolume, comp, present); err != nil {
 		return err
 	}
-
 	if comp.Storage == nil || comp.Storage.Size.IsZero() {
 		return fmt.Errorf("%q component: storage.size is required", common.ComponentVolume)
 	}
-
 	return nil
 }
 
