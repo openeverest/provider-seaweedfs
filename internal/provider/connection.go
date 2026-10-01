@@ -29,18 +29,42 @@ func buildConnectionDetailsFromService(c *controller.Context, svc *corev1.Servic
 	portStr := fmt.Sprintf("%d", port)
 	endpoint := fmt.Sprintf("http://%s:%d", host, port)
 
+	props := map[string]string{
+		"endpointURL":    endpoint,
+		"forcePathStyle": "true",
+		"verifyTLS":      "false",
+		"region":         defaultS3Region,
+	}
+
+	// Host stays in-cluster (BackupStorage needs it). For NodePort/LoadBalancer,
+	// also surface an external endpoint so clients outside the cluster can connect.
+	switch svc.Spec.Type {
+	case corev1.ServiceTypeLoadBalancer:
+		if ing := svc.Status.LoadBalancer.Ingress; len(ing) > 0 {
+			extHost := ing[0].Hostname
+			if extHost == "" {
+				extHost = ing[0].IP
+			}
+			if extHost != "" {
+				props["externalEndpointURL"] = fmt.Sprintf("http://%s:%d", extHost, port)
+			}
+		}
+	case corev1.ServiceTypeNodePort:
+		for _, p := range svc.Spec.Ports {
+			if p.Name == "s3-http" && p.NodePort > 0 {
+				props["externalNodePort"] = fmt.Sprintf("%d", p.NodePort)
+				break
+			}
+		}
+	}
+
 	return controller.ConnectionDetails{
-		Type:     "s3",
-		Provider: common.ProviderName,
-		Host:     host,
-		Port:     portStr,
-		URI:      endpoint,
-		AdditionalProperties: map[string]string{
-			"endpointURL":    endpoint,
-			"forcePathStyle": "true",
-			"verifyTLS":      "false",
-			"region":         defaultS3Region,
-		},
+		Type:                 "s3",
+		Provider:             common.ProviderName,
+		Host:                 host,
+		Port:                 portStr,
+		URI:                  endpoint,
+		AdditionalProperties: props,
 	}
 }
 

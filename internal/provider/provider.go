@@ -223,6 +223,11 @@ func (p *Provider) Status(c *controller.Context) (controller.Status, error) {
 				}
 				return controller.Status{}, err
 			}
+			// Stay Provisioning until LoadBalancer ingress is assigned so
+			// connection details can include an actionable externalEndpointURL.
+			if svc.Spec.Type == corev1.ServiceTypeLoadBalancer && len(svc.Status.LoadBalancer.Ingress) == 0 {
+				return controller.Provisioning("Waiting for LoadBalancer ingress"), nil
+			}
 			return controller.ReadyWithConnectionDetails(
 				buildConnectionDetailsFromService(c, svc),
 			), nil

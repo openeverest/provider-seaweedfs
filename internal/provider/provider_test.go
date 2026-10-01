@@ -91,6 +91,15 @@ func TestValidateMaster(t *testing.T) {
 			comp:    corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(3)},
 			present: true,
 		},
+		{
+			name: "rejects non-default service",
+			comp: corev1alpha1.ComponentSpec{
+				Replicas: pointer.ToInt32(1),
+				Service:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeNodePort},
+			},
+			present:   true,
+			expectErr: "service exposure is not supported",
+		},
 	}
 
 	for _, tt := range tests {
@@ -153,6 +162,16 @@ func TestValidateVolume(t *testing.T) {
 				Storage:  &corev1alpha1.Storage{Size: resource.MustParse("10Gi")},
 			},
 			present: true,
+		},
+		{
+			name: "rejects non-default service",
+			comp: corev1alpha1.ComponentSpec{
+				Replicas: pointer.ToInt32(1),
+				Storage:  &corev1alpha1.Storage{Size: resource.MustParse("10Gi")},
+				Service:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeLoadBalancer},
+			},
+			present:   true,
+			expectErr: "service exposure is not supported",
 		},
 	}
 
@@ -386,6 +405,16 @@ func TestValidateFiler(t *testing.T) {
 				Storage:  &corev1alpha1.Storage{Size: resource.MustParse("1Gi")},
 			},
 			present: true,
+		},
+		{
+			name: "rejects non-default service",
+			comp: corev1alpha1.ComponentSpec{
+				Replicas: pointer.ToInt32(1),
+				Storage:  &corev1alpha1.Storage{Size: resource.MustParse("1Gi")},
+				Service:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeNodePort},
+			},
+			present:   true,
+			expectErr: "service exposure is not supported",
 		},
 	}
 
@@ -680,6 +709,27 @@ func TestValidate(t *testing.T) {
 			expectErr: "is required",
 		},
 		{
+			name: "master with exposed service rejected",
+			components: func() map[string]corev1alpha1.ComponentSpec {
+				c := validComponents()
+				master := c[common.ComponentMaster]
+				master.Service = &corev1alpha1.Service{ServiceType: corev1.ServiceTypeNodePort}
+				c[common.ComponentMaster] = master
+				return c
+			}(),
+			expectErr: "service exposure is not supported",
+		},
+		{
+			name: "s3 with NodePort allowed",
+			components: func() map[string]corev1alpha1.ComponentSpec {
+				c := validComponents()
+				s3 := c[common.ComponentS3]
+				s3.Service = &corev1alpha1.Service{ServiceType: corev1.ServiceTypeNodePort}
+				c[common.ComponentS3] = s3
+				return c
+			}(),
+		},
+		{
 			name: "invalid master parameters",
 			components: func() map[string]corev1alpha1.ComponentSpec {
 				c := validComponents()
@@ -794,11 +844,12 @@ func TestStatus(t *testing.T) {
 	}
 
 	tests := []struct {
-		name             string
-		seaweed          *seaweedv1.Seaweed
-		service          *corev1.Service
-		expectPhase      corev1alpha1.InstancePhase
-		expectConnection bool
+		name               string
+		seaweed            *seaweedv1.Seaweed
+		service            *corev1.Service
+		expectPhase        corev1alpha1.InstancePhase
+		expectConnection   bool
+		expectExternalURL  string
 	}{
 		{
 			name:        "cluster not found is pending",
@@ -816,6 +867,47 @@ func TestStatus(t *testing.T) {
 			service:          s3Service,
 			expectPhase:      corev1alpha1.InstancePhaseReady,
 			expectConnection: true,
+		},
+		{
+			name: "ready LoadBalancer without ingress stays provisioning",
+			seaweed: &seaweedv1.Seaweed{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-instance", Namespace: "default"},
+				Status: seaweedv1.SeaweedStatus{
+					Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Ready"}},
+				},
+			},
+			service: &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-instance-s3", Namespace: "default"},
+				Spec: corev1.ServiceSpec{
+					Type:  corev1.ServiceTypeLoadBalancer,
+					Ports: []corev1.ServicePort{{Name: "s3-http", Port: 8333}},
+				},
+			},
+			expectPhase: corev1alpha1.InstancePhaseProvisioning,
+		},
+		{
+			name: "ready LoadBalancer with ingress publishes external endpoint",
+			seaweed: &seaweedv1.Seaweed{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-instance", Namespace: "default"},
+				Status: seaweedv1.SeaweedStatus{
+					Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Ready"}},
+				},
+			},
+			service: &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-instance-s3", Namespace: "default"},
+				Spec: corev1.ServiceSpec{
+					Type:  corev1.ServiceTypeLoadBalancer,
+					Ports: []corev1.ServicePort{{Name: "s3-http", Port: 8333}},
+				},
+				Status: corev1.ServiceStatus{
+					LoadBalancer: corev1.LoadBalancerStatus{
+						Ingress: []corev1.LoadBalancerIngress{{Hostname: "lb.example.com"}},
+					},
+				},
+			},
+			expectPhase:       corev1alpha1.InstancePhaseReady,
+			expectConnection:  true,
+			expectExternalURL: "http://lb.example.com:8333",
 		},
 		{
 			name: "ready without S3 Service stays provisioning",
@@ -886,6 +978,11 @@ func TestStatus(t *testing.T) {
 				assert.Equal(t, "8333", status.ConnectionDetails.Port)
 				assert.Equal(t, "http://test-instance-s3.default.svc:8333", status.ConnectionDetails.URI)
 				assert.Equal(t, "true", status.ConnectionDetails.AdditionalProperties["forcePathStyle"])
+				if tt.expectExternalURL != "" {
+					assert.Equal(t, tt.expectExternalURL, status.ConnectionDetails.AdditionalProperties["externalEndpointURL"])
+				} else {
+					assert.NotContains(t, status.ConnectionDetails.AdditionalProperties, "externalEndpointURL")
+				}
 			}
 		})
 	}

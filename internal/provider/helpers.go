@@ -37,6 +37,16 @@ func validateService(component string, svc *corev1alpha1.Service) error {
 	return nil
 }
 
+// validateNoService rejects non-default service exposure on components that
+// do not support it. Only S3 can be exposed today; other components silently
+// ignore Service, which would mislead users into thinking they exposed something.
+func validateNoService(component string, comp corev1alpha1.ComponentSpec) error {
+	if !isDefaultInClusterService(comp.Service) {
+		return fmt.Errorf("%q component: service exposure is not supported, only s3 can be exposed", component)
+	}
+	return nil
+}
+
 // isDefaultInClusterService is true when the Instance service is unset or is
 // the no-op ClusterIP default (no annotations, no loadBalancerService).
 func isDefaultInClusterService(svc *corev1alpha1.Service) bool {
@@ -52,6 +62,12 @@ func isDefaultInClusterService(svc *corev1alpha1.Service) bool {
 // buildServiceSpec maps OpenEverest ComponentSpec.Service onto the operator
 // ServiceSpec for the S3 gateway. Returns nil for the default ClusterIP case so
 // the operator keeps its own defaults.
+//
+// Limitation: seaweedfs-operator CreateOrUpdateService merges annotations into
+// the existing Service and never deletes keys. Removing an annotation from the
+// Instance (or switching LoadBalancer -> ClusterIP) can leave stale cloud LB
+// annotations behind until they are cleaned up out-of-band.
+// Issue tracked here: https://github.com/seaweedfs/seaweedfs-operator/issues/403
 func buildServiceSpec(svc *corev1alpha1.Service) *seaweedv1.ServiceSpec {
 	if isDefaultInClusterService(svc) {
 		return nil

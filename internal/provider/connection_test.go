@@ -26,22 +26,85 @@ func TestBuildConnectionDetailsFromService(t *testing.T) {
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(instance).Build()
 	ctx := controller.NewContext(context.Background(), cl, instance, common.ProviderName)
 
-	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "sw-s3", Namespace: "ns"},
-		Spec: corev1.ServiceSpec{
-			Ports: []corev1.ServicePort{{Name: "s3-http", Port: 8333}},
-		},
-	}
+	t.Run("ClusterIP", func(t *testing.T) {
+		svc := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "sw-s3", Namespace: "ns"},
+			Spec: corev1.ServiceSpec{
+				Type:  corev1.ServiceTypeClusterIP,
+				Ports: []corev1.ServicePort{{Name: "s3-http", Port: 8333}},
+			},
+		}
 
-	details := buildConnectionDetailsFromService(ctx, svc)
-	assert.Equal(t, "s3", details.Type)
-	assert.Equal(t, common.ProviderName, details.Provider)
-	assert.Equal(t, "sw-s3.ns.svc", details.Host)
-	assert.Equal(t, "8333", details.Port)
-	assert.Equal(t, "http://sw-s3.ns.svc:8333", details.URI)
-	assert.Equal(t, "true", details.AdditionalProperties["forcePathStyle"])
-	assert.Equal(t, "false", details.AdditionalProperties["verifyTLS"])
-	assert.Equal(t, defaultS3Region, details.AdditionalProperties["region"])
+		details := buildConnectionDetailsFromService(ctx, svc)
+		assert.Equal(t, "s3", details.Type)
+		assert.Equal(t, common.ProviderName, details.Provider)
+		assert.Equal(t, "sw-s3.ns.svc", details.Host)
+		assert.Equal(t, "8333", details.Port)
+		assert.Equal(t, "http://sw-s3.ns.svc:8333", details.URI)
+		assert.Equal(t, "http://sw-s3.ns.svc:8333", details.AdditionalProperties["endpointURL"])
+		assert.Equal(t, "true", details.AdditionalProperties["forcePathStyle"])
+		assert.Equal(t, "false", details.AdditionalProperties["verifyTLS"])
+		assert.Equal(t, defaultS3Region, details.AdditionalProperties["region"])
+		assert.NotContains(t, details.AdditionalProperties, "externalEndpointURL")
+		assert.NotContains(t, details.AdditionalProperties, "externalNodePort")
+	})
+
+	t.Run("LoadBalancer with hostname ingress", func(t *testing.T) {
+		svc := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "sw-s3", Namespace: "ns"},
+			Spec: corev1.ServiceSpec{
+				Type:  corev1.ServiceTypeLoadBalancer,
+				Ports: []corev1.ServicePort{{Name: "s3-http", Port: 8333}},
+			},
+			Status: corev1.ServiceStatus{
+				LoadBalancer: corev1.LoadBalancerStatus{
+					Ingress: []corev1.LoadBalancerIngress{{Hostname: "lb.example.com"}},
+				},
+			},
+		}
+
+		details := buildConnectionDetailsFromService(ctx, svc)
+		assert.Equal(t, "sw-s3.ns.svc", details.Host)
+		assert.Equal(t, "http://sw-s3.ns.svc:8333", details.AdditionalProperties["endpointURL"])
+		assert.Equal(t, "http://lb.example.com:8333", details.AdditionalProperties["externalEndpointURL"])
+	})
+
+	t.Run("LoadBalancer with IP ingress", func(t *testing.T) {
+		svc := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "sw-s3", Namespace: "ns"},
+			Spec: corev1.ServiceSpec{
+				Type:  corev1.ServiceTypeLoadBalancer,
+				Ports: []corev1.ServicePort{{Name: "s3-http", Port: 8333}},
+			},
+			Status: corev1.ServiceStatus{
+				LoadBalancer: corev1.LoadBalancerStatus{
+					Ingress: []corev1.LoadBalancerIngress{{IP: "203.0.113.10"}},
+				},
+			},
+		}
+
+		details := buildConnectionDetailsFromService(ctx, svc)
+		assert.Equal(t, "http://203.0.113.10:8333", details.AdditionalProperties["externalEndpointURL"])
+	})
+
+	t.Run("NodePort", func(t *testing.T) {
+		svc := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "sw-s3", Namespace: "ns"},
+			Spec: corev1.ServiceSpec{
+				Type: corev1.ServiceTypeNodePort,
+				Ports: []corev1.ServicePort{{
+					Name:     "s3-http",
+					Port:     8333,
+					NodePort: 30080,
+				}},
+			},
+		}
+
+		details := buildConnectionDetailsFromService(ctx, svc)
+		assert.Equal(t, "sw-s3.ns.svc", details.Host)
+		assert.Equal(t, "30080", details.AdditionalProperties["externalNodePort"])
+		assert.NotContains(t, details.AdditionalProperties, "externalEndpointURL")
+	})
 }
 
 func TestServiceS3Port(t *testing.T) {
