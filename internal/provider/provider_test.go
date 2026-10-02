@@ -12,7 +12,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	corev1alpha1 "github.com/openeverest/openeverest/v2/api/core/v1alpha1"
 	"github.com/openeverest/openeverest/v2/provider-runtime/controller"
@@ -984,6 +986,56 @@ func TestStatus(t *testing.T) {
 					assert.NotContains(t, status.ConnectionDetails.AdditionalProperties, "externalEndpointURL")
 				}
 			}
+		})
+	}
+}
+
+func TestS3ServiceToInstance(t *testing.T) {
+	seaweedOwner := func(name string) []metav1.OwnerReference {
+		return []metav1.OwnerReference{{
+			APIVersion: seaweedv1.GroupVersion.String(),
+			Kind:       "Seaweed",
+			Name:       name,
+			Controller: pointer.ToBool(true),
+		}}
+	}
+
+	tests := []struct {
+		name   string
+		svc    *corev1.Service
+		expect []reconcile.Request
+	}{
+		{
+			name: "S3 Service owned by Seaweed enqueues Instance",
+			svc: &corev1.Service{ObjectMeta: metav1.ObjectMeta{
+				Name: "sw-s3", Namespace: "ns", OwnerReferences: seaweedOwner("sw"),
+			}},
+			expect: []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "sw"}}},
+		},
+		{
+			name: "non-S3 Service owned by Seaweed is ignored",
+			svc: &corev1.Service{ObjectMeta: metav1.ObjectMeta{
+				Name: "sw-master", Namespace: "ns", OwnerReferences: seaweedOwner("sw"),
+			}},
+		},
+		{
+			name: "Service without controller owner is ignored",
+			svc:  &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "sw-s3", Namespace: "ns"}},
+		},
+		{
+			name: "Service owned by another kind is ignored",
+			svc: &corev1.Service{ObjectMeta: metav1.ObjectMeta{
+				Name: "sw-s3", Namespace: "ns",
+				OwnerReferences: []metav1.OwnerReference{{
+					APIVersion: "apps/v1", Kind: "Deployment", Name: "sw", Controller: pointer.ToBool(true),
+				}},
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expect, s3ServiceToInstance(context.Background(), tt.svc))
 		})
 	}
 }

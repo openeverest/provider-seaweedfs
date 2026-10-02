@@ -1,13 +1,18 @@
 package provider
 
 import (
+	"context"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/AlekSi/pointer"
 	corev1alpha1 "github.com/openeverest/openeverest/v2/api/core/v1alpha1"
@@ -38,9 +43,28 @@ func New() *Provider {
 			},
 			WatchConfigs: []controller.WatchConfig{
 				controller.WatchOwned(&seaweedv1.Seaweed{}),
+				// The operator does not touch the Seaweed CR when LB ingress or NodePort
+				// changes, so watch the S3 Service directly to refresh status.
+				controller.WatchExternal(&corev1.Service{},
+					handler.EnqueueRequestsFromMapFunc(s3ServiceToInstance)),
 			},
 		},
 	}
+}
+
+// s3ServiceToInstance maps the operator-owned S3 Service to its Instance; the
+// Seaweed CR shares the Instance name.
+func s3ServiceToInstance(_ context.Context, obj client.Object) []reconcile.Request {
+	owner := metav1.GetControllerOf(obj)
+	if owner == nil || owner.Kind != "Seaweed" || owner.APIVersion != seaweedv1.GroupVersion.String() {
+		return nil
+	}
+	if obj.GetName() != s3ServiceName(owner.Name) {
+		return nil
+	}
+	return []reconcile.Request{{
+		NamespacedName: types.NamespacedName{Namespace: obj.GetNamespace(), Name: owner.Name},
+	}}
 }
 
 // Validate checks if the Instance spec is valid.
