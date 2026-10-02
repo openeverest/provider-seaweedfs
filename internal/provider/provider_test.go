@@ -12,7 +12,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	corev1alpha1 "github.com/openeverest/openeverest/v2/api/core/v1alpha1"
 	"github.com/openeverest/openeverest/v2/provider-runtime/controller"
@@ -91,6 +93,15 @@ func TestValidateMaster(t *testing.T) {
 			comp:    corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(3)},
 			present: true,
 		},
+		{
+			name: "rejects non-default service",
+			comp: corev1alpha1.ComponentSpec{
+				Replicas: pointer.ToInt32(1),
+				Service:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeNodePort},
+			},
+			present:   true,
+			expectErr: "service exposure is not supported",
+		},
 	}
 
 	for _, tt := range tests {
@@ -154,6 +165,16 @@ func TestValidateVolume(t *testing.T) {
 			},
 			present: true,
 		},
+		{
+			name: "rejects non-default service",
+			comp: corev1alpha1.ComponentSpec{
+				Replicas: pointer.ToInt32(1),
+				Storage:  &corev1alpha1.Storage{Size: resource.MustParse("10Gi")},
+				Service:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeLoadBalancer},
+			},
+			present:   true,
+			expectErr: "service exposure is not supported",
+		},
 	}
 
 	for _, tt := range tests {
@@ -195,6 +216,127 @@ func TestValidateTopologyParameters(t *testing.T) {
 	assert.Contains(t, err.Error(), "volumeServerDiskCount must be at least 1")
 }
 
+func TestValidateService(t *testing.T) {
+	tests := []struct {
+		name      string
+		svc       *corev1alpha1.Service
+		expectErr string
+	}{
+		{name: "nil service"},
+		{name: "empty service", svc: &corev1alpha1.Service{}},
+		{
+			name: "ClusterIP",
+			svc:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeClusterIP},
+		},
+		{
+			name: "NodePort",
+			svc:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeNodePort},
+		},
+		{
+			name: "LoadBalancer",
+			svc:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeLoadBalancer},
+		},
+		{
+			name: "LoadBalancer with empty loadBalancerService",
+			svc: &corev1alpha1.Service{
+				ServiceType:         corev1.ServiceTypeLoadBalancer,
+				LoadBalancerService: &corev1alpha1.LoadBalancerService{},
+			},
+		},
+		{
+			name: "loadBalancerService with empty serviceType",
+			svc: &corev1alpha1.Service{
+				LoadBalancerService: &corev1alpha1.LoadBalancerService{},
+			},
+			expectErr: "loadBalancerService is only valid with serviceType LoadBalancer",
+		},
+		{
+			name: "ExternalName unsupported",
+			svc: &corev1alpha1.Service{
+				ServiceType: corev1.ServiceTypeExternalName,
+			},
+			expectErr: "unsupported serviceType",
+		},
+		{
+			name: "loadBalancerService without LoadBalancer type",
+			svc: &corev1alpha1.Service{
+				ServiceType:         corev1.ServiceTypeClusterIP,
+				LoadBalancerService: &corev1alpha1.LoadBalancerService{},
+			},
+			expectErr: "loadBalancerService is only valid with serviceType LoadBalancer",
+		},
+		{
+			name: "sourceRanges unsupported",
+			svc: &corev1alpha1.Service{
+				ServiceType: corev1.ServiceTypeLoadBalancer,
+				LoadBalancerService: &corev1alpha1.LoadBalancerService{
+					SourceRanges: corev1alpha1.SourceRanges{"10.0.0.0/8"},
+				},
+			},
+			expectErr: "sourceRanges is not supported",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateService(common.ComponentS3, tt.svc)
+			if tt.expectErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestBuildServiceSpec(t *testing.T) {
+	t.Run("nil service leaves operator defaults", func(t *testing.T) {
+		assert.Nil(t, buildServiceSpec(nil))
+	})
+
+	t.Run("default ClusterIP leaves operator defaults", func(t *testing.T) {
+		assert.Nil(t, buildServiceSpec(&corev1alpha1.Service{}))
+		assert.Nil(t, buildServiceSpec(&corev1alpha1.Service{ServiceType: corev1.ServiceTypeClusterIP}))
+	})
+
+	t.Run("ClusterIP with annotations is applied", func(t *testing.T) {
+		spec := buildServiceSpec(&corev1alpha1.Service{
+			ServiceType: corev1.ServiceTypeClusterIP,
+			Annotations: map[string]string{"example.com/owner": "team-a"},
+		})
+		require.NotNil(t, spec)
+		assert.Equal(t, corev1.ServiceTypeClusterIP, spec.Type)
+		assert.Equal(t, map[string]string{"example.com/owner": "team-a"}, spec.Annotations)
+	})
+
+	t.Run("NodePort", func(t *testing.T) {
+		spec := buildServiceSpec(&corev1alpha1.Service{ServiceType: corev1.ServiceTypeNodePort})
+		require.NotNil(t, spec)
+		assert.Equal(t, corev1.ServiceTypeNodePort, spec.Type)
+		assert.Nil(t, spec.Annotations)
+	})
+
+	t.Run("LoadBalancer with annotations", func(t *testing.T) {
+		spec := buildServiceSpec(&corev1alpha1.Service{
+			ServiceType: corev1.ServiceTypeLoadBalancer,
+			Annotations: map[string]string{"service.beta.kubernetes.io/aws-load-balancer-type": "nlb"},
+		})
+		require.NotNil(t, spec)
+		assert.Equal(t, corev1.ServiceTypeLoadBalancer, spec.Type)
+		require.Equal(t, map[string]string{"service.beta.kubernetes.io/aws-load-balancer-type": "nlb"}, spec.Annotations)
+	})
+
+	t.Run("LoadBalancer with empty loadBalancerService still sets Type", func(t *testing.T) {
+		spec := buildServiceSpec(&corev1alpha1.Service{
+			ServiceType:         corev1.ServiceTypeLoadBalancer,
+			LoadBalancerService: &corev1alpha1.LoadBalancerService{},
+		})
+		require.NotNil(t, spec)
+		assert.Equal(t, corev1.ServiceTypeLoadBalancer, spec.Type)
+	})
+}
+
 func TestBuildMasterSpec(t *testing.T) {
 	t.Run("defaults when no custom spec", func(t *testing.T) {
 		spec := buildMasterSpec(corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(3)}, components.MasterCustomSpec{})
@@ -202,6 +344,7 @@ func TestBuildMasterSpec(t *testing.T) {
 		assert.Equal(t, DefaultMasterVolumeSizeLimitMB, *spec.VolumeSizeLimitMB)
 		assert.Equal(t, int32(3), spec.Replicas)
 		assert.Nil(t, spec.Persistence)
+		assert.Nil(t, spec.Service)
 	})
 
 	t.Run("custom volume size limit overrides default", func(t *testing.T) {
@@ -264,6 +407,16 @@ func TestValidateFiler(t *testing.T) {
 				Storage:  &corev1alpha1.Storage{Size: resource.MustParse("1Gi")},
 			},
 			present: true,
+		},
+		{
+			name: "rejects non-default service",
+			comp: corev1alpha1.ComponentSpec{
+				Replicas: pointer.ToInt32(1),
+				Storage:  &corev1alpha1.Storage{Size: resource.MustParse("1Gi")},
+				Service:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeNodePort},
+			},
+			present:   true,
+			expectErr: "service exposure is not supported",
 		},
 	}
 
@@ -342,6 +495,17 @@ func TestBuildS3Spec(t *testing.T) {
 		assert.Nil(t, spec.DomainName)
 		assert.Nil(t, spec.Requests)
 		assert.Nil(t, spec.Limits)
+		assert.Nil(t, spec.Service)
+	})
+
+	t.Run("service type from component", func(t *testing.T) {
+		spec := buildS3Spec(corev1alpha1.ComponentSpec{
+			Replicas: pointer.ToInt32(1),
+			Service:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeLoadBalancer},
+		}, components.S3CustomSpec{})
+		require.NotNil(t, spec.Service)
+		assert.Equal(t, corev1.ServiceTypeLoadBalancer, spec.Service.Type)
+		assert.Nil(t, spec.Service.Annotations)
 	})
 
 	t.Run("custom port and domainName are applied", func(t *testing.T) {
@@ -381,6 +545,7 @@ func TestBuildFilerSpec(t *testing.T) {
 		assert.Equal(t, int32(2), spec.Replicas)
 		assert.Nil(t, spec.Persistence)
 		assert.Nil(t, spec.MaxMB)
+		assert.Nil(t, spec.Service)
 	})
 
 	t.Run("custom maxMB is applied", func(t *testing.T) {
@@ -433,6 +598,7 @@ func TestBuildVolumeSpec(t *testing.T) {
 		assert.Equal(t, int32(2), spec.Replicas)
 		assert.Nil(t, spec.Requests)
 		assert.Nil(t, spec.StorageClassName)
+		assert.Nil(t, spec.Service)
 	})
 
 	t.Run("custom max volume counts overrides default", func(t *testing.T) {
@@ -543,6 +709,27 @@ func TestValidate(t *testing.T) {
 				return c
 			}(),
 			expectErr: "is required",
+		},
+		{
+			name: "master with exposed service rejected",
+			components: func() map[string]corev1alpha1.ComponentSpec {
+				c := validComponents()
+				master := c[common.ComponentMaster]
+				master.Service = &corev1alpha1.Service{ServiceType: corev1.ServiceTypeNodePort}
+				c[common.ComponentMaster] = master
+				return c
+			}(),
+			expectErr: "service exposure is not supported",
+		},
+		{
+			name: "s3 with NodePort allowed",
+			components: func() map[string]corev1alpha1.ComponentSpec {
+				c := validComponents()
+				s3 := c[common.ComponentS3]
+				s3.Service = &corev1alpha1.Service{ServiceType: corev1.ServiceTypeNodePort}
+				c[common.ComponentS3] = s3
+				return c
+			}(),
 		},
 		{
 			name: "invalid master parameters",
@@ -659,11 +846,12 @@ func TestStatus(t *testing.T) {
 	}
 
 	tests := []struct {
-		name             string
-		seaweed          *seaweedv1.Seaweed
-		service          *corev1.Service
-		expectPhase      corev1alpha1.InstancePhase
-		expectConnection bool
+		name               string
+		seaweed            *seaweedv1.Seaweed
+		service            *corev1.Service
+		expectPhase        corev1alpha1.InstancePhase
+		expectConnection   bool
+		expectExternalURL  string
 	}{
 		{
 			name:        "cluster not found is pending",
@@ -681,6 +869,47 @@ func TestStatus(t *testing.T) {
 			service:          s3Service,
 			expectPhase:      corev1alpha1.InstancePhaseReady,
 			expectConnection: true,
+		},
+		{
+			name: "ready LoadBalancer without ingress stays provisioning",
+			seaweed: &seaweedv1.Seaweed{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-instance", Namespace: "default"},
+				Status: seaweedv1.SeaweedStatus{
+					Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Ready"}},
+				},
+			},
+			service: &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-instance-s3", Namespace: "default"},
+				Spec: corev1.ServiceSpec{
+					Type:  corev1.ServiceTypeLoadBalancer,
+					Ports: []corev1.ServicePort{{Name: "s3-http", Port: 8333}},
+				},
+			},
+			expectPhase: corev1alpha1.InstancePhaseProvisioning,
+		},
+		{
+			name: "ready LoadBalancer with ingress publishes external endpoint",
+			seaweed: &seaweedv1.Seaweed{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-instance", Namespace: "default"},
+				Status: seaweedv1.SeaweedStatus{
+					Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Ready"}},
+				},
+			},
+			service: &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-instance-s3", Namespace: "default"},
+				Spec: corev1.ServiceSpec{
+					Type:  corev1.ServiceTypeLoadBalancer,
+					Ports: []corev1.ServicePort{{Name: "s3-http", Port: 8333}},
+				},
+				Status: corev1.ServiceStatus{
+					LoadBalancer: corev1.LoadBalancerStatus{
+						Ingress: []corev1.LoadBalancerIngress{{Hostname: "lb.example.com"}},
+					},
+				},
+			},
+			expectPhase:       corev1alpha1.InstancePhaseReady,
+			expectConnection:  true,
+			expectExternalURL: "http://lb.example.com:8333",
 		},
 		{
 			name: "ready without S3 Service stays provisioning",
@@ -751,7 +980,62 @@ func TestStatus(t *testing.T) {
 				assert.Equal(t, "8333", status.ConnectionDetails.Port)
 				assert.Equal(t, "http://test-instance-s3.default.svc:8333", status.ConnectionDetails.URI)
 				assert.Equal(t, "true", status.ConnectionDetails.AdditionalProperties["forcePathStyle"])
+				if tt.expectExternalURL != "" {
+					assert.Equal(t, tt.expectExternalURL, status.ConnectionDetails.AdditionalProperties["externalEndpointURL"])
+				} else {
+					assert.NotContains(t, status.ConnectionDetails.AdditionalProperties, "externalEndpointURL")
+				}
 			}
+		})
+	}
+}
+
+func TestS3ServiceToInstance(t *testing.T) {
+	seaweedOwner := func(name string) []metav1.OwnerReference {
+		return []metav1.OwnerReference{{
+			APIVersion: seaweedv1.GroupVersion.String(),
+			Kind:       "Seaweed",
+			Name:       name,
+			Controller: pointer.ToBool(true),
+		}}
+	}
+
+	tests := []struct {
+		name   string
+		svc    *corev1.Service
+		expect []reconcile.Request
+	}{
+		{
+			name: "S3 Service owned by Seaweed enqueues Instance",
+			svc: &corev1.Service{ObjectMeta: metav1.ObjectMeta{
+				Name: "sw-s3", Namespace: "ns", OwnerReferences: seaweedOwner("sw"),
+			}},
+			expect: []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "sw"}}},
+		},
+		{
+			name: "non-S3 Service owned by Seaweed is ignored",
+			svc: &corev1.Service{ObjectMeta: metav1.ObjectMeta{
+				Name: "sw-master", Namespace: "ns", OwnerReferences: seaweedOwner("sw"),
+			}},
+		},
+		{
+			name: "Service without controller owner is ignored",
+			svc:  &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "sw-s3", Namespace: "ns"}},
+		},
+		{
+			name: "Service owned by another kind is ignored",
+			svc: &corev1.Service{ObjectMeta: metav1.ObjectMeta{
+				Name: "sw-s3", Namespace: "ns",
+				OwnerReferences: []metav1.OwnerReference{{
+					APIVersion: "apps/v1", Kind: "Deployment", Name: "sw", Controller: pointer.ToBool(true),
+				}},
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expect, s3ServiceToInstance(context.Background(), tt.svc))
 		})
 	}
 }

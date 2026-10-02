@@ -31,7 +31,7 @@ func validateMaster(comp corev1alpha1.ComponentSpec, present bool) error {
 	if *comp.Replicas%2 == 0 {
 		return fmt.Errorf("%q component: the number of replicas must be odd", common.ComponentMaster)
 	}
-	return nil
+	return validateNoService(common.ComponentMaster, comp)
 }
 
 func validateMasterParameters(spec components.MasterCustomSpec) error {

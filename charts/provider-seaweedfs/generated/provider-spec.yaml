@@ -3,9 +3,9 @@
 spec:
   componentTypes:
     seaweedfs:
+      defaultVersion: "4.47"
       versions:
-        - default: true
-          image: chrislusf/seaweedfs:4.47
+        - image: chrislusf/seaweedfs:4.47
           version: "4.47"
   components:
     filer:
@@ -46,6 +46,9 @@ spec:
               type: integer
           type: object
       type: seaweedfs
+  defaultVersion: "4.47"
+  release:
+    version: 0.1.0
   topologies:
     standalone:
       components:
@@ -286,8 +289,25 @@ spec:
                 - memory
               groupType: line
               uiType: group
+            serviceType:
+              fieldParams:
+                defaultValue: ClusterIP
+                helperText: ClusterIP is in-cluster only. NodePort and LoadBalancer expose the service externally.
+                label: Service type
+                options:
+                  - label: ClusterIP (internal)
+                    value: ClusterIP
+                  - label: NodePort
+                    value: NodePort
+                  - label: LoadBalancer
+                    value: LoadBalancer
+              path: spec.components.s3.service.serviceType
+              uiType: select
+              validation:
+                required: false
           componentsOrder:
             - replicas
+            - serviceType
             - port
             - domainName
             - resources
@@ -389,5 +409,4 @@ spec:
         master: "4.47"
         s3: "4.47"
         volume: "4.47"
-      default: true
       name: "4.47"

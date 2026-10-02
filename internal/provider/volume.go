@@ -20,7 +20,7 @@ func validateVolume(comp corev1alpha1.ComponentSpec, present bool) error {
 	if comp.Storage == nil || comp.Storage.Size.IsZero() {
 		return fmt.Errorf("%q component: storage.size is required", common.ComponentVolume)
 	}
-	return nil
+	return validateNoService(common.ComponentVolume, comp)
 }
 
 func validateVolumeParameters(spec components.VolumeCustomSpec) error {

@@ -8,6 +8,15 @@
 - apiGroups:
     - ""
   resources:
+    - pods
+    - services
+  verbs:
+    - get
+    - list
+    - watch
+- apiGroups:
+    - ""
+  resources:
     - secrets
   verbs:
     - create
@@ -15,14 +24,6 @@
     - list
     - patch
     - update
-    - watch
-- apiGroups:
-    - ""
-  resources:
-    - services
-  verbs:
-    - get
-    - list
     - watch
 - apiGroups:
     - coordination.k8s.io

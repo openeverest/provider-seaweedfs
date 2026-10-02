@@ -17,7 +17,7 @@ func validateFiler(comp corev1alpha1.ComponentSpec, present bool) error {
 	if comp.Storage == nil || comp.Storage.Size.IsZero() {
 		return fmt.Errorf("%q component: storage.size is required", common.ComponentFiler)
 	}
-	return nil
+	return validateNoService(common.ComponentFiler, comp)
 }
 
 func validateFilerParameters(spec components.FilerCustomSpec) error {
