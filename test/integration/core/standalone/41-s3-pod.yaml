@@ -1,0 +1,16 @@
+# Stand-in for an operator-managed S3 pod: the provider publishes the hostIP of
+# a ready pod behind the Service as the NodePort endpoint.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-seaweedfs-s3-0
+  labels:
+    app.kubernetes.io/name: seaweedfs
+    app.kubernetes.io/instance: test-seaweedfs
+    app.kubernetes.io/component: s3
+spec:
+  containers:
+    - name: pause
+      # Sandbox image preloaded on every k3s node.
+      image: rancher/mirrored-pause:3.6
+      imagePullPolicy: IfNotPresent

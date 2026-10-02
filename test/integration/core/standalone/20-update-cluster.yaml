@@ -1,0 +1,21 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: test-seaweedfs
+spec:
+  components:
+    master:
+      replicas: 5
+    volume:
+      replicas: 3
+      resources:
+        limits:
+          cpu: "2"
+          memory: 2Gi
+        requests:
+          cpu: 500m
+          memory: 512Mi
+    filer:
+      replicas: 2
+    s3:
+      replicas: 2

@@ -1,0 +1,29 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: test-seaweedfs
+status:
+  phase: Ready
+---
+apiVersion: seaweed.seaweedfs.com/v1
+kind: Seaweed
+metadata:
+  name: test-seaweedfs
+spec:
+  master:
+    replicas: 5
+  volume:
+    replicas: 3
+    maxVolumeCounts: 16
+    storageClassName: local-path
+    limits:
+      cpu: "2"
+      memory: 2Gi
+    requests:
+      cpu: 500m
+      memory: 512Mi
+      storage: 10Gi
+  filer:
+    replicas: 2
+  s3:
+    replicas: 2

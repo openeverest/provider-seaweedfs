@@ -1,0 +1,22 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: test-seaweedfs
+status:
+  phase: Ready
+---
+apiVersion: seaweed.seaweedfs.com/v1
+kind: Seaweed
+metadata:
+  name: test-seaweedfs
+spec:
+  s3:
+    # Plain ClusterIP is the operator default, so the provider sets nothing.
+    (service == null): true
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: test-seaweedfs-conn
+data:
+  (externalEndpointURL == null): true

@@ -1,0 +1,7 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: test-seaweedfs
+status:
+  phase: Provisioning
+  message: "Master: (1/3 ready), Volume: (0/2 ready), Filer: (0/1 ready), S3: (0/1 ready)"
