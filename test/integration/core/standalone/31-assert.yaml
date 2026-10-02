@@ -1,0 +1,8 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: test-seaweedfs
+status:
+  # Connection details need an external address, so Ready waits for LB ingress.
+  phase: Provisioning
+  message: Waiting for LoadBalancer ingress

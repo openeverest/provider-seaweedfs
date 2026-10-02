@@ -1,0 +1,25 @@
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: core-validation
+spec:
+  description: |
+    Instances that break a provider validation rule end up Failed and never
+    produce a Seaweed cluster.
+  catch:
+    - script:
+        content: kubectl -n $NAMESPACE get instance,seaweed -o yaml
+    - podLogs:
+        namespace: provider-system
+        selector: app.kubernetes.io/name=provider-seaweedfs
+        tail: 100
+  steps:
+    - name: reject-invalid-instances
+      try:
+        - apply:
+            file: 10-create-invalid-instances.yaml
+        - assert:
+            file: 10-assert.yaml
+        - error:
+            file: 10-errors.yaml
