@@ -252,9 +252,11 @@ func (p *Provider) Status(c *controller.Context) (controller.Status, error) {
 			if svc.Spec.Type == corev1.ServiceTypeLoadBalancer && len(svc.Status.LoadBalancer.Ingress) == 0 {
 				return controller.Provisioning("Waiting for LoadBalancer ingress"), nil
 			}
-			return controller.ReadyWithConnectionDetails(
-				buildConnectionDetailsFromService(c, svc),
-			), nil
+			details, err := buildConnectionDetailsFromService(c, svc)
+			if err != nil {
+				return controller.Status{}, err
+			}
+			return controller.ReadyWithConnectionDetails(details), nil
 		}
 		return controller.Provisioning(cond.Message), nil
 	}
