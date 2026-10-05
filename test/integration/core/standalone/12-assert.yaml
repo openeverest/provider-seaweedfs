@@ -1,0 +1,26 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: test-seaweedfs
+status:
+  phase: Ready
+  connectionSecretRef:
+    name: test-seaweedfs-conn
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: test-seaweedfs-conn
+  (ownerReferences[?kind == 'Instance' && name == 'test-seaweedfs'] | length(@)): 1
+data:
+  (base64_decode(type)): s3
+  (base64_decode(provider)): provider-seaweedfs
+  (base64_decode(host) == join('', ['test-seaweedfs-s3.', $namespace, '.svc'])): true
+  (base64_decode(port)): "8333"
+  (base64_decode(uri) == join('', ['http://test-seaweedfs-s3.', $namespace, '.svc:8333'])): true
+  (base64_decode(endpointURL) == join('', ['http://test-seaweedfs-s3.', $namespace, '.svc:8333'])): true
+  (base64_decode(region)): us-east-1
+  (base64_decode(forcePathStyle)): "true"
+  (base64_decode(verifyTLS)): "false"
+  # ClusterIP is in-cluster only.
+  (externalEndpointURL == null): true

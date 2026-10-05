@@ -1,0 +1,9 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: test-seaweedfs
+spec:
+  components:
+    s3:
+      service:
+        serviceType: ClusterIP

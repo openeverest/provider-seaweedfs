@@ -1,0 +1,15 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: test-seaweedfs
+status:
+  phase: Ready
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: test-seaweedfs-conn
+data:
+  # Host stays in-cluster; the LB address is published separately.
+  (base64_decode(host) == join('', ['test-seaweedfs-s3.', $namespace, '.svc'])): true
+  (base64_decode(externalEndpointURL)): http://203.0.113.10:8333

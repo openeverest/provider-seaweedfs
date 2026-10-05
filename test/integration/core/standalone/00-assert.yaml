@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: provider-seaweedfs
+  namespace: provider-system
+status:
+  availableReplicas: 1
+---
+# Scaled to 0 so the tests drive Seaweed status by hand.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: seaweedfs-operator
+  namespace: provider-system
+spec:
+  replicas: 0
+---
+apiVersion: core.openeverest.io/v1alpha1
+kind: Provider
+metadata:
+  name: provider-seaweedfs

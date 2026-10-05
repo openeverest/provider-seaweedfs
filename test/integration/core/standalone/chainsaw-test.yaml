@@ -1,0 +1,166 @@
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: core-standalone
+spec:
+  description: |
+    Lifecycle of a standalone Instance: create, provisioning progress, ready
+    with S3 connection details, scale and resize, S3 exposure through
+    LoadBalancer, NodePort and ClusterIP, and deletion.
+  catch:
+    - script:
+        content: kubectl -n $NAMESPACE get instance,seaweed,service,pod,secret -o yaml
+    - podLogs:
+        namespace: provider-system
+        selector: app.kubernetes.io/name=provider-seaweedfs
+        tail: 100
+  steps:
+    - name: provider-operator-installed
+      try:
+        - assert:
+            file: 00-assert.yaml
+
+    - name: create-cluster
+      try:
+        - apply:
+            file: 10-create-cluster.yaml
+        - assert:
+            file: 10-assert.yaml
+
+    # The seaweedfs-operator is scaled to 0, so the tests stand in for it by
+    # patching the Seaweed status.
+    - name: cluster-provisioning
+      try:
+        - script:
+            content: |
+              kubectl patch seaweed/test-seaweedfs --subresource status -n $NAMESPACE --type=merge -p '{"status":{
+                "master":{"replicas":3,"readyReplicas":1},
+                "volume":{"replicas":2},
+                "filer":{"replicas":1},
+                "s3":{"replicas":1}}}'
+        - assert:
+            file: 11-assert.yaml
+
+    # Ready also needs the operator-owned S3 Service, which the provider reads
+    # for connection details. Create it before flipping the Ready condition.
+    - name: cluster-ready
+      try:
+        - script:
+            content: |
+              set -e
+              SEAWEED_UID=$(kubectl get seaweed/test-seaweedfs -n $NAMESPACE -o jsonpath='{.metadata.uid}')
+              kubectl apply -n $NAMESPACE -f - <<EOF
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: test-seaweedfs-s3
+                ownerReferences:
+                  - apiVersion: seaweed.seaweedfs.com/v1
+                    kind: Seaweed
+                    name: test-seaweedfs
+                    uid: ${SEAWEED_UID}
+                    controller: true
+              spec:
+                type: ClusterIP
+                selector:
+                  app.kubernetes.io/name: seaweedfs
+                  app.kubernetes.io/instance: test-seaweedfs
+                  app.kubernetes.io/component: s3
+                ports:
+                  - name: s3-http
+                    port: 8333
+                    targetPort: 8333
+              EOF
+              kubectl patch seaweed/test-seaweedfs --subresource status -n $NAMESPACE --type=merge -p '{"status":{
+                "conditions":[{"type":"Ready","status":"True","reason":"ClusterReady","message":"","lastTransitionTime":"2026-01-01T00:00:00Z"}],
+                "master":{"replicas":3,"readyReplicas":3},
+                "volume":{"replicas":2,"readyReplicas":2},
+                "filer":{"replicas":1,"readyReplicas":1},
+                "s3":{"replicas":1,"readyReplicas":1}}}'
+        - assert:
+            file: 12-assert.yaml
+
+    - name: scale-cluster
+      try:
+        - apply:
+            file: 20-update-cluster.yaml
+        - assert:
+            file: 20-assert.yaml
+
+    - name: expose-load-balancer
+      try:
+        - apply:
+            file: 30-update-cluster-lb.yaml
+        - assert:
+            file: 30-assert.yaml
+        - script:
+            content: |
+              kubectl patch service/test-seaweedfs-s3 -n $NAMESPACE --type=merge -p '{"spec":{"type":"LoadBalancer"}}'
+        - assert:
+            file: 31-assert.yaml
+        - script:
+            content: |
+              kubectl patch service/test-seaweedfs-s3 --subresource status -n $NAMESPACE --type=merge \
+                -p '{"status":{"loadBalancer":{"ingress":[{"ip":"203.0.113.10"}]}}}'
+        - assert:
+            file: 32-assert.yaml
+
+    - name: expose-node-port
+      try:
+        - apply:
+            file: 40-update-cluster-node-port.yaml
+        - assert:
+            file: 40-assert.yaml
+        # Pods are not watched, so the pod must be ready before the Service
+        # change triggers the reconcile that resolves its hostIP.
+        - apply:
+            file: 41-s3-pod.yaml
+        - wait:
+            apiVersion: v1
+            kind: Pod
+            name: test-seaweedfs-s3-0
+            timeout: 1m
+            for:
+              condition:
+                name: Ready
+                value: "true"
+        - script:
+            content: |
+              kubectl patch service/test-seaweedfs-s3 -n $NAMESPACE --type=merge -p '{"spec":{
+                "type":"NodePort",
+                "ports":[{"name":"s3-http","port":8333,"targetPort":8333,"nodePort":30333}]}}'
+        - assert:
+            file: 41-assert.yaml
+
+    - name: expose-cluster-ip
+      try:
+        - apply:
+            file: 50-update-cluster-cluster-ip.yaml
+        - script:
+            content: |
+              kubectl patch service/test-seaweedfs-s3 -n $NAMESPACE --type=merge -p '{"spec":{
+                "type":"ClusterIP",
+                "ports":[{"name":"s3-http","port":8333,"targetPort":8333}]}}'
+        - assert:
+            file: 50-assert.yaml
+
+    - name: delete-cluster
+      try:
+        - delete:
+            ref:
+              apiVersion: core.openeverest.io/v1alpha1
+              kind: Instance
+              name: test-seaweedfs
+        - wait:
+            apiVersion: seaweed.seaweedfs.com/v1
+            kind: Seaweed
+            name: test-seaweedfs
+            for:
+              deletion: {}
+        - wait:
+            apiVersion: v1
+            kind: Secret
+            name: test-seaweedfs-conn
+            for:
+              deletion: {}
