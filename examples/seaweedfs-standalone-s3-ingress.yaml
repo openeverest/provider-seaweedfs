@@ -1,0 +1,41 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: seaweedfs-standalone-s3-ingress
+spec:
+  providerRef:
+    name: provider-seaweedfs
+  components:
+    master:
+      type: seaweedfs
+      version: "4.47"
+      image: chrislusf/seaweedfs:4.47
+      replicas: 1
+    volume:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 10Gi
+    filer:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 1Gi
+    s3:
+      type: seaweedfs
+      replicas: 1
+      parameters:
+        # Client HTTPS via Ingress TLS termination. The in-cluster S3 Service
+        # stays HTTP; connection details keep endpointURL=http://…svc and set
+        # externalEndpointURL=https://s3.example.com.
+        ingress:
+          enabled: true
+          host: s3.example.com
+          className: nginx
+          annotations:
+            # Optional: let cert-manager issue into the secretName below.
+            # cert-manager.io/cluster-issuer: letsencrypt-prod
+            nginx.ingress.kubernetes.io/proxy-body-size: "0"
+          tls:
+            secretName: seaweed-s3-tls
+            # verifyTLS: false   # set for self-signed certs

@@ -32,6 +32,26 @@ spec:
           properties:
             domainName:
               type: string
+            ingress:
+              properties:
+                annotations:
+                  additionalProperties:
+                    type: string
+                  type: object
+                className:
+                  type: string
+                enabled:
+                  type: boolean
+                host:
+                  type: string
+                tls:
+                  properties:
+                    secretName:
+                      type: string
+                    verifyTLS:
+                      type: boolean
+                  type: object
+              type: object
             port:
               format: int32
               type: integer
@@ -59,6 +79,49 @@ spec:
       parametersSchema:
         openAPIV3Schema:
           properties:
+            securityConfig:
+              properties:
+                jwtSigning:
+                  properties:
+                    expiresAfterSeconds:
+                      properties:
+                        filerRead:
+                          format: int32
+                          type: integer
+                        filerWrite:
+                          format: int32
+                          type: integer
+                        volumeRead:
+                          format: int32
+                          type: integer
+                        volumeWrite:
+                          format: int32
+                          type: integer
+                      type: object
+                    filerRead:
+                      type: boolean
+                    filerWrite:
+                      type: boolean
+                    volumeRead:
+                      type: boolean
+                    volumeWrite:
+                      type: boolean
+                  type: object
+              type: object
+            tls:
+              properties:
+                enabled:
+                  type: boolean
+                issuerRef:
+                  properties:
+                    group:
+                      type: string
+                    kind:
+                      type: string
+                    name:
+                      type: string
+                  type: object
+              type: object
             volumeServerDiskCount:
               format: int32
               type: integer
@@ -113,6 +176,7 @@ spec:
               components:
                 cpu:
                   fieldParams:
+                    badge: core(s)
                     defaultValue: 1
                     label: CPU
                     step: 1
@@ -179,6 +243,7 @@ spec:
               components:
                 cpu:
                   fieldParams:
+                    badge: core(s)
                     defaultValue: 1
                     label: CPU
                     step: 1
@@ -231,6 +296,39 @@ spec:
               uiType: text
               validation:
                 required: false
+            ingressClassName:
+              fieldParams:
+                helperText: IngressClass name (for example nginx).
+                label: Ingress class
+              path: spec.components.s3.parameters.ingress.className
+              uiType: text
+              validation:
+                required: false
+            ingressEnabled:
+              fieldParams:
+                defaultValue: false
+                helperText: Expose S3 through a Kubernetes Ingress. With TLS, external clients get https://<host>.
+                label: Ingress
+              path: spec.components.s3.parameters.ingress.enabled
+              uiType: toggle
+              validation:
+                required: false
+            ingressHost:
+              fieldParams:
+                helperText: Public hostname for the S3 Ingress (required when Ingress is enabled).
+                label: Ingress host
+              path: spec.components.s3.parameters.ingress.host
+              uiType: text
+              validation:
+                required: false
+            ingressTLSSecret:
+              fieldParams:
+                helperText: kubernetes.io/tls Secret name. Create it by hand or via a cert-manager annotation on the Ingress.
+                label: Ingress TLS secret
+              path: spec.components.s3.parameters.ingress.tls.secretName
+              uiType: text
+              validation:
+                required: false
             port:
               fieldParams:
                 defaultValue: 8333
@@ -263,6 +361,7 @@ spec:
               components:
                 cpu:
                   fieldParams:
+                    badge: core(s)
                     defaultValue: 1
                     label: CPU
                     step: 1
@@ -307,12 +406,55 @@ spec:
                 required: false
           componentsOrder:
             - replicas
+            - resources
             - serviceType
             - port
             - domainName
-            - resources
+            - ingressEnabled
+            - ingressHost
+            - ingressClassName
+            - ingressTLSSecret
           description: Configure the S3-compatible gateway for object access.
           label: S3
+        tls:
+          components:
+            enabled:
+              fieldParams:
+                defaultValue: false
+                helperText: Enables gRPC mTLS between master, volume, filer, and S3. Requires cert-manager.
+                label: Inter-component TLS
+              path: spec.topology.parameters.tls.enabled
+              uiType: toggle
+              validation:
+                required: false
+            issuerKind:
+              fieldParams:
+                defaultValue: Issuer
+                helperText: Issuer is namespaced, ClusterIssuer is cluster-scoped.
+                label: Issuer kind
+                options:
+                  - label: Issuer
+                    value: Issuer
+                  - label: ClusterIssuer
+                    value: ClusterIssuer
+              path: spec.topology.parameters.tls.issuerRef.kind
+              uiType: select
+              validation:
+                required: false
+            issuerName:
+              fieldParams:
+                helperText: Optional cert-manager Issuer or ClusterIssuer name. Leave empty for the operator's self-signed CA.
+                label: Issuer name
+              path: spec.topology.parameters.tls.issuerRef.name
+              uiType: text
+              validation:
+                required: false
+          componentsOrder:
+            - enabled
+            - issuerName
+            - issuerKind
+          description: Encrypt traffic between SeaweedFS components (gRPC mTLS). S3 clients still use HTTP unless you terminate TLS at an Ingress or LoadBalancer.
+          label: TLS
         volume:
           components:
             diskCount:
@@ -350,6 +492,7 @@ spec:
               components:
                 cpu:
                   fieldParams:
+                    badge: core(s)
                     defaultValue: 1
                     label: CPU
                     step: 1
@@ -403,6 +546,7 @@ spec:
         - volume
         - filer
         - s3
+        - tls
   versions:
     - components:
         filer: "4.47"

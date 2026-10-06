@@ -11,7 +11,7 @@ registries:
   create:
     name: k3d-provider-seaweedfs-registry
     host: "0.0.0.0"
-    hostPort: "5000"
+    hostPort: "42069"
 options:
   k3d:
     wait: true

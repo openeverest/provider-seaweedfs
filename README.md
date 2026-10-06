@@ -9,6 +9,7 @@
 <!-- Remove the MVP banner and the status badge when the provider leaves MVP. -->
 
 [![Status](https://img.shields.io/badge/status-MVP-orange)](https://github.com/openeverest/openeverest)
+[![CI](https://github.com/openeverest/provider-seaweedfs/actions/workflows/CI.yaml/badge.svg?branch=main)](https://github.com/openeverest/provider-seaweedfs/actions/workflows/CI.yaml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
 Run **SeaweedFS** — distributed object storage with an S3-compatible gateway — on Kubernetes
@@ -40,7 +41,7 @@ flowchart LR
     P -->|reconciles into| O["Seaweed CR<br/>seaweed.seaweedfs.com"]
     O --> W["seaweedfs-operator"]
     W --> R[("Master, Volume,<br/>Filer, S3 workloads")]
-    P -->|status| I
+    P -->|status, endpoints| I
 ```
 
 The provider watches `Instance` resources whose `spec.providerRef.name` is
@@ -51,7 +52,7 @@ It never manages pods directly — all lifecycle work is delegated to the operat
 
 | provider-seaweedfs | OpenEverest | seaweedfs-operator | Kubernetes |
 |---|---|---|---|
-| `0.1.x` (MVP) | `>= 2.0.0` | `0.1.41` | `1.30` – `1.34` |
+| `0.1.x` (MVP) | `2.0.0-dev.x` | `0.1.41` | `1.30` – `1.34` |
 
 ## Capabilities
 
@@ -61,29 +62,31 @@ an MVP: several capabilities are stubbed or not wired yet.
 | Capability | Status | Notes |
 |---|---|---|
 | Provisioning | ✅ | Creates a `Seaweed` CR with master, volume, filer, and S3 components |
-| Horizontal scaling | ✅ | Per-component `spec.components.*.replicas` |
-| Vertical scaling (CPU / memory) | ❌ | Planned — resources are defined in the topology UI but not yet applied |
+| Horizontal scaling | ✅ | Per-component `spec.components.*.replicas` (master must be odd) |
+| Vertical scaling (CPU / memory) | ✅ | `spec.components.*.resources` |
 | Version selection | ✅ | `spec.version` / component image from [definition/versions.yaml](definition/versions.yaml) |
 | High availability | ⚠️ | Replica counts are passed through; HA semantics are operator-dependent |
-| Custom configuration | ❌ | Planned |
+| Custom configuration | ✅ | Master `masterVolumeSizeLimitMB`; volume `maxVolumeCounts` / `volumeServerDiskCount`; filer `maxMB`; S3 `port` / `domainName` / Ingress |
+| S3 service exposure | ✅ | `spec.components.s3.service.serviceType`: ClusterIP, NodePort, or LoadBalancer |
 | Monitoring | ❌ | Planned |
 | Pod scheduling (affinity) | ❌ | Planned |
-| TLS | ❌ | Planned |
-| Status / readiness | ✅ | Maps Seaweed Ready condition; publishes S3 connection details |
-| Connection details | ✅ | Reads operator S3 Service; publishes endpoint on Ready |
+| TLS | ✅ | Inter-component gRPC mTLS via `topology.parameters.tls`. Client HTTPS via S3 Ingress TLS (`components.s3.parameters.ingress`) → `externalEndpointURL=https://…`. Native S3 HTTPS on the gateway is not supported by the operator yet ([seaweedfs-operator#411](https://github.com/seaweedfs/seaweedfs-operator/issues/411)) |
+| Status / readiness | ✅ | Maps Seaweed Ready condition; waits for TLS Secret / LoadBalancer / Ingress when configured |
+| Connection details | ✅ | Publishes in-cluster S3 endpoint on Ready; NodePort / LoadBalancer / Ingress add `externalEndpointURL` |
 
 Stateful workloads additionally report:
 
 | Capability | Status | Notes |
 |---|---|---|
-| Persistent storage | ✅ | `spec.components.volume.storage.size` (and filer storage in the topology UI) |
+| Persistent storage | ✅ | `spec.components.volume.storage.size` and `spec.components.filer.storage.size` (both required) |
 | Storage expansion | ❌ | Planned |
 | Backups | ❌ | Not in scope for MVP |
 | Restore | ❌ | Not in scope for MVP |
 
 ## Installation
 
-Install from the chart in this repository (OCI publish is not set up for MVP yet):
+Install from the chart in this repository (OCI chart publish is not set up for MVP yet;
+container images are published to GHCR on tagged releases):
 
 ```bash
 make helm-deps
@@ -136,6 +139,8 @@ spec:
     filer:
       type: seaweedfs
       replicas: 1
+      storage:
+        size: 1Gi
     s3:
       type: seaweedfs
       replicas: 1
@@ -144,7 +149,42 @@ spec:
 Component names are defined by this provider — see
 [definition/provider.yaml](definition/provider.yaml). `spec.version` and
 `spec.topology` are optional; the provider defaults apply. More examples live in
-[examples/](examples/).
+[examples/](examples/), including [TLS](examples/seaweedfs-standalone-tls.yaml) and
+[S3 Ingress](examples/seaweedfs-standalone-s3-ingress.yaml).
+
+Enable inter-component mTLS (requires cert-manager):
+
+```yaml
+spec:
+  topology:
+    type: standalone
+    parameters:
+      tls:
+        enabled: true
+        # optional — omit for the operator's self-signed CA
+        # issuerRef:
+        #   name: my-ca-issuer
+        #   kind: ClusterIssuer
+```
+
+Expose S3 outside the cluster (NodePort / LoadBalancer), or terminate client HTTPS
+at an Ingress — see [examples/seaweedfs-standalone-s3-ingress.yaml](examples/seaweedfs-standalone-s3-ingress.yaml):
+
+```yaml
+spec:
+  components:
+    s3:
+      type: seaweedfs
+      replicas: 1
+      service:
+        serviceType: LoadBalancer   # or NodePort
+      # parameters:
+      #   ingress:
+      #     enabled: true
+      #     host: s3.example.com
+      #     tls:
+      #       secretName: seaweed-s3-tls
+```
 
 Watch it come up:
 
@@ -158,6 +198,23 @@ kubectl get seaweed -A
 > `<instance-name>-conn` from the operator-managed S3 Service
 > (`<name>-s3`). They include host, port, URI, and
 > `forcePathStyle=true` / `verifyTLS=false` hints for S3 clients.
+>
+> **TLS note:** `topology.parameters.tls.enabled` turns on **gRPC mTLS between
+> SeaweedFS components** (master/volume/filer/S3 gRPC). The S3 Service stays
+> plain HTTP — in-cluster `endpointURL` remains `http://…` with `verifyTLS=false`.
+>
+> For **client-facing HTTPS**, enable S3 Ingress TLS
+> (`spec.components.s3.parameters.ingress`). Connection details then publish
+> `externalEndpointURL=https://<host>` and `externalVerifyTLS` (default `true`).
+> See [examples/seaweedfs-standalone-s3-ingress.yaml](examples/seaweedfs-standalone-s3-ingress.yaml).
+>
+> NodePort and LoadBalancer also publish `externalEndpointURL` (HTTP) when the
+> service is assigned. The Instance stays Provisioning until a LoadBalancer
+> ingress address appears (or until the TLS Secret / Ingress exists when those
+> are enabled).
+>
+> Inter-component mTLS requires cert-manager; without it the Instance stays
+> Provisioning until the `<name>-server-tls` Secret appears.
 >
 > For Postgres backups, point a `BackupStorage` at that endpoint. Without an
 > S3 identity config on the gateway, SeaweedFS accepts requests without auth —
@@ -204,14 +261,18 @@ Source of truth: [definition/versions.yaml](definition/versions.yaml).
   (`kubectl get provider provider-seaweedfs -o yaml`). The API server and the UI
   validate user input against these schemas.
 
-MVP sync maps replica counts and volume storage size onto the upstream `Seaweed`
-CR. Further knobs (resources, affinity, TLS, custom SeaweedFS options) are not
+MVP sync maps replica counts, resources, volume/filer/master persistence, S3
+service exposure and Ingress, component parameters (`masterVolumeSizeLimitMB`,
+`maxVolumeCounts`, `maxMB`, `port`, `domainName`), and optional TLS
+(`topology.parameters.tls`) / JWT signing (`topology.parameters.securityConfig`)
+onto the upstream `Seaweed` CR. Affinity and further SeaweedFS options are not
 applied yet.
 
 ## Development
 
 Requires Go (see [go.mod](go.mod)), Docker, Helm, kubectl, and a Kubernetes
-cluster you can reach. For local development we recommend [k3d](https://k3d.io).
+cluster you can reach. For local development we recommend [k3d](https://k3d.io)
+and [Tilt](https://tilt.dev/) — see [dev/README.md](dev/README.md).
 
 ```bash
 make k3d-cluster-up    # local k3d cluster
@@ -219,6 +280,7 @@ make generate          # RBAC, provider spec, Helm chart sync
 make run               # run the provider locally against the cluster
 make test              # unit tests
 make helm-install      # install chart (+ seaweedfs-operator dependency)
+make dev-up            # k3d + Tilt (live-reload provider + OpenEverest)
 make k3d-cluster-down
 ```
 
@@ -240,12 +302,12 @@ markers, watches, and code generation are documented once for all providers in
 | `charts/provider-seaweedfs/` | Helm chart (`generated/` is produced by `make generate`) |
 | `config/rbac/role.yaml` | Generated `ClusterRole` — do not edit |
 | `examples/` | Example `Instance` resources |
-| `dev/` | k3d cluster config |
+| `dev/` | k3d cluster config and Tilt setup |
 
 ### Testing
 
 - **Unit tests** — `make test`.
-- **Integration tests** — Makefile target exists (`make test-integration`); suites are still being filled in for MVP.
+- **Integration tests** — Makefile target exists (`make test-integration`); suites are not checked in yet for MVP.
 
 ## Troubleshooting
 
@@ -255,10 +317,11 @@ kubectl logs -n everest-system deploy/provider-seaweedfs -f
 
 | Symptom | Where to look |
 |---|---|
-| `Instance` stuck in `Creating` | `kubectl describe instance <name>` conditions, then the provider logs. Status currently always reports provisioning. |
+| `Instance` stuck in `Provisioning` | `kubectl describe instance <name>` conditions, then the provider logs. Common waits: Seaweed Ready, S3 Service, LoadBalancer ingress, S3 Ingress, or `<name>-server-tls` Secret when TLS is enabled |
 | No `Provider` resource in the cluster | Is the chart installed? Check the provider deployment logs |
 | `Instance` ignored entirely | `spec.providerRef.name` must be `provider-seaweedfs` |
 | `Seaweed` resource created but no pods | Inspect the `Seaweed` custom resource status — the failure is upstream in the operator |
+| TLS enabled but never Ready | Is [cert-manager](https://cert-manager.io) installed? Check for Certificate / Secret `<name>-server-tls` |
 
 ## Contributing
 
