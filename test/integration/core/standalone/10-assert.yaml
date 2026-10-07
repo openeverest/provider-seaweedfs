@@ -23,6 +23,15 @@ spec:
       core.openeverest.io/component: master
       core.openeverest.io/instance: test-seaweedfs
       core.openeverest.io/provider: provider-seaweedfs
+    affinity:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - topologyKey: kubernetes.io/hostname
+            labelSelector:
+              matchLabels:
+                core.openeverest.io/component: master
+                core.openeverest.io/instance: test-seaweedfs
+                core.openeverest.io/provider: provider-seaweedfs
     limits:
       cpu: 500m
       memory: 512Mi
@@ -41,6 +50,15 @@ spec:
       core.openeverest.io/component: volume
       core.openeverest.io/instance: test-seaweedfs
       core.openeverest.io/provider: provider-seaweedfs
+    affinity:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - topologyKey: kubernetes.io/hostname
+            labelSelector:
+              matchLabels:
+                core.openeverest.io/component: volume
+                core.openeverest.io/instance: test-seaweedfs
+                core.openeverest.io/provider: provider-seaweedfs
     storageClassName: local-path
     limits:
       cpu: "1"
@@ -56,6 +74,7 @@ spec:
       core.openeverest.io/component: filer
       core.openeverest.io/instance: test-seaweedfs
       core.openeverest.io/provider: provider-seaweedfs
+    (affinity == null): true
     persistence:
       enabled: true
       resources:
@@ -69,5 +88,6 @@ spec:
       core.openeverest.io/component: s3
       core.openeverest.io/instance: test-seaweedfs
       core.openeverest.io/provider: provider-seaweedfs
+    (affinity == null): true
     # Default ClusterIP leaves the operator's own Service defaults in place.
     (service == null): true

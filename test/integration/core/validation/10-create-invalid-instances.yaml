@@ -231,3 +231,33 @@ spec:
     s3:
       type: seaweedfs
       replicas: 1
+---
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: invalid-topology-spread
+spec:
+  providerRef:
+    name: provider-seaweedfs
+  components:
+    master:
+      type: seaweedfs
+      replicas: 1
+    volume:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 1Gi
+      schedulingPolicy:
+        topologySpreadConstraints:
+          - maxSkew: 1
+            topologyKey: kubernetes.io/hostname
+            whenUnsatisfiable: DoNotSchedule
+    filer:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 1Gi
+    s3:
+      type: seaweedfs
+      replicas: 1

@@ -43,3 +43,8 @@ apiVersion: seaweed.seaweedfs.com/v1
 kind: Seaweed
 metadata:
   name: invalid-volume-server-disk-count
+---
+apiVersion: seaweed.seaweedfs.com/v1
+kind: Seaweed
+metadata:
+  name: invalid-topology-spread
