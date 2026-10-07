@@ -245,7 +245,17 @@ markers, watches, and code generation are documented once for all providers in
 ### Testing
 
 - **Unit tests** — `make test`.
-- **Integration tests** — Makefile target exists (`make test-integration`); suites are still being filled in for MVP.
+- **Integration tests** — [chainsaw](https://kyverno.github.io/chainsaw/) suites in `test/integration/`. The seaweedfs-operator is scaled to 0 and the tests patch `Seaweed` status to simulate it, so they check the provider's mapping and status logic quickly. To run them locally:
+
+  ```bash
+  make k3d-cluster-up
+  make docker-build load-image install-crds deploy-provider-ci IMG=provider-seaweedfs:ci
+  # OpenEverest controller, built from an openeverest/openeverest checkout:
+  (cd ../openeverest && make build-controller docker-build-controller)
+  make load-openeverest-controller-image
+  (cd ../openeverest && make deploy-test-controller)
+  make test-integration            # or test-integration-core-standalone / -validation
+  ```
 
 ## Troubleshooting
 

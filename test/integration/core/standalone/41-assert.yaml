@@ -1,0 +1,15 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: test-seaweedfs
+status:
+  phase: Ready
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: test-seaweedfs-conn
+data:
+  (base64_decode(host) == join('', ['test-seaweedfs-s3.', $namespace, '.svc'])): true
+  (starts_with(base64_decode(externalEndpointURL), 'http://')): true
+  (ends_with(base64_decode(externalEndpointURL), ':30333')): true

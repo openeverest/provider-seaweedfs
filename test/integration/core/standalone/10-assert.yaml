@@ -1,0 +1,73 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: test-seaweedfs
+  labels:
+    core.openeverest.io/provider: provider-seaweedfs
+status:
+  # Nothing reports component replicas until the operator acts.
+  phase: Initializing
+---
+apiVersion: seaweed.seaweedfs.com/v1
+kind: Seaweed
+metadata:
+  name: test-seaweedfs
+  (ownerReferences[?kind == 'Instance' && name == 'test-seaweedfs'] | length(@)): 1
+spec:
+  image: chrislusf/seaweedfs:4.47
+  volumeServerDiskCount: 2
+  master:
+    replicas: 3
+    volumeSizeLimitMB: 512
+    labels:
+      core.openeverest.io/component: master
+      core.openeverest.io/instance: test-seaweedfs
+      core.openeverest.io/provider: provider-seaweedfs
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    persistence:
+      enabled: true
+      resources:
+        requests:
+          storage: 1Gi
+  volume:
+    replicas: 2
+    maxVolumeCounts: 16
+    labels:
+      core.openeverest.io/component: volume
+      core.openeverest.io/instance: test-seaweedfs
+      core.openeverest.io/provider: provider-seaweedfs
+    storageClassName: local-path
+    limits:
+      cpu: "1"
+      memory: 1Gi
+    requests:
+      cpu: 200m
+      memory: 256Mi
+      storage: 10Gi
+  filer:
+    replicas: 1
+    maxMB: 8
+    labels:
+      core.openeverest.io/component: filer
+      core.openeverest.io/instance: test-seaweedfs
+      core.openeverest.io/provider: provider-seaweedfs
+    persistence:
+      enabled: true
+      resources:
+        requests:
+          storage: 2Gi
+  s3:
+    replicas: 1
+    port: 8333
+    domainName: s3.example.com
+    labels:
+      core.openeverest.io/component: s3
+      core.openeverest.io/instance: test-seaweedfs
+      core.openeverest.io/provider: provider-seaweedfs
+    # Default ClusterIP leaves the operator's own Service defaults in place.
+    (service == null): true
