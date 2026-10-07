@@ -188,8 +188,19 @@ func (p *Provider) Sync(c *controller.Context) error {
 	if topo.VolumeServerDiskCount != nil {
 		sw.Spec.VolumeServerDiskCount = topo.VolumeServerDiskCount
 	}
+	labelPods(c, sw)
 
 	return c.Apply(sw)
+}
+
+// labelPods labels every component's pods so the runtime counts them into
+// the Instance's status.components. The operator adds them to the pod
+// templates only, never to the StatefulSet/Deployment selectors.
+func labelPods(c *controller.Context, sw *seaweedv1.Seaweed) {
+	sw.Spec.Master.Labels = c.PodLabels(common.ComponentMaster)
+	sw.Spec.Volume.Labels = c.PodLabels(common.ComponentVolume)
+	sw.Spec.Filer.Labels = c.PodLabels(common.ComponentFiler)
+	sw.Spec.S3.Labels = c.PodLabels(common.ComponentS3)
 }
 
 func resolveImage(c *controller.Context, componentName string, comp corev1alpha1.ComponentSpec) (string, error) {
