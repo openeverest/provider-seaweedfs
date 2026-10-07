@@ -189,6 +189,7 @@ func (p *Provider) Sync(c *controller.Context) error {
 		sw.Spec.VolumeServerDiskCount = topo.VolumeServerDiskCount
 	}
 	labelPods(c, sw)
+	applyScheduling(c, sw)
 
 	return c.Apply(sw)
 }

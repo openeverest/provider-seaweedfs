@@ -21,7 +21,7 @@ func validateRequiredComponent(name string, comp corev1alpha1.ComponentSpec, pre
 	if *comp.Replicas < 1 {
 		return fmt.Errorf("%q component: replicas must be at least 1", name)
 	}
-	return nil
+	return validateSchedulingPolicy(name, comp.SchedulingPolicy)
 }
 
 func validateMaster(comp corev1alpha1.ComponentSpec, present bool) error {

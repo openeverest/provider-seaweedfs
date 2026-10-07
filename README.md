@@ -67,7 +67,7 @@ an MVP: several capabilities are stubbed or not wired yet.
 | High availability | ⚠️ | Replica counts are passed through; HA semantics are operator-dependent |
 | Custom configuration | ❌ | Planned |
 | Monitoring | ❌ | Planned |
-| Pod scheduling (affinity) | ❌ | Planned |
+| Pod scheduling | ✅ | `schedulingPolicy` affinity, nodeSelector, tolerations and schedulerName. Master and volume pods require separate nodes by default; `affinity: {}` opts out. `topologySpreadConstraints` is rejected (no seaweedfs-operator field) |
 | TLS | ❌ | Planned |
 | Status / readiness | ✅ | Maps Seaweed Ready condition; publishes S3 connection details |
 | Connection details | ✅ | Reads operator S3 Service; publishes endpoint on Ready |
@@ -204,9 +204,9 @@ Source of truth: [definition/versions.yaml](definition/versions.yaml).
   (`kubectl get provider provider-seaweedfs -o yaml`). The API server and the UI
   validate user input against these schemas.
 
-MVP sync maps replica counts and volume storage size onto the upstream `Seaweed`
-CR. Further knobs (resources, affinity, TLS, custom SeaweedFS options) are not
-applied yet.
+MVP sync maps replica counts, volume storage size and pod scheduling onto the
+upstream `Seaweed` CR. Further knobs (resources, TLS, custom SeaweedFS options)
+are not applied yet.
 
 ## Development
 

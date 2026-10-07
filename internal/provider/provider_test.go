@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	commonv1alpha1 "github.com/openeverest/openeverest/v2/api/common/v1alpha1"
 	corev1alpha1 "github.com/openeverest/openeverest/v2/api/core/v1alpha1"
 	"github.com/openeverest/openeverest/v2/provider-runtime/controller"
 
@@ -806,6 +807,15 @@ func TestValidate(t *testing.T) {
 			expectErr: "maxVolumeCounts must be at least 1",
 		},
 		{
+			name: "topology spread constraints rejected",
+			components: withSchedulingPolicy(common.ComponentFiler, &commonv1alpha1.SchedulingPolicy{
+				TopologySpreadConstraints: &[]corev1.TopologySpreadConstraint{{
+					MaxSkew: 1, TopologyKey: corev1.LabelHostname, WhenUnsatisfiable: corev1.DoNotSchedule,
+				}},
+			}),
+			expectErr: "topologySpreadConstraints is not supported",
+		},
+		{
 			name:       "invalid topology parameters",
 			components: validComponents(),
 			topology: &corev1alpha1.TopologySpec{
@@ -1051,58 +1061,64 @@ func syncSeaweed(t *testing.T, cl client.Client, instance *corev1alpha1.Instance
 	return ctx, sw
 }
 
-func TestSync(t *testing.T) {
-	newInstance := func(s3Service *corev1alpha1.Service) *corev1alpha1.Instance {
-		comps := validComponents()
-		master := comps[common.ComponentMaster]
-		master.Image = "chrislusf/seaweedfs:4.47"
-		comps[common.ComponentMaster] = master
-		s3 := comps[common.ComponentS3]
-		s3.Service = s3Service
-		comps[common.ComponentS3] = s3
-		return &corev1alpha1.Instance{
-			ObjectMeta: metav1.ObjectMeta{Name: "test-instance", Namespace: "default", UID: "test-uid"},
-			Spec:       corev1alpha1.InstanceSpec{Components: comps},
-		}
+func newSyncInstance(comps map[string]corev1alpha1.ComponentSpec) *corev1alpha1.Instance {
+	master := comps[common.ComponentMaster]
+	master.Image = "chrislusf/seaweedfs:4.47"
+	comps[common.ComponentMaster] = master
+	return &corev1alpha1.Instance{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-instance", Namespace: "default", UID: "test-uid"},
+		Spec:       corev1alpha1.InstanceSpec{Components: comps},
 	}
-	newClient := func(t *testing.T, instance *corev1alpha1.Instance) client.Client {
-		t.Helper()
-		scheme := runtime.NewScheme()
-		require.NoError(t, corev1alpha1.AddToScheme(scheme))
-		require.NoError(t, seaweedv1.AddToScheme(scheme))
-		return fake.NewClientBuilder().WithScheme(scheme).WithObjects(instance).Build()
+}
+
+func newSyncClient(t *testing.T, instance *corev1alpha1.Instance) client.Client {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1alpha1.AddToScheme(scheme))
+	require.NoError(t, seaweedv1.AddToScheme(scheme))
+	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(instance).Build()
+}
+
+func podLabels(instance, component string) map[string]string {
+	return map[string]string{
+		controller.ProviderLabel:  common.ProviderName,
+		controller.InstanceLabel:  instance,
+		controller.ComponentLabel: component,
+	}
+}
+
+func TestSync(t *testing.T) {
+	withS3Service := func(svc *corev1alpha1.Service) map[string]corev1alpha1.ComponentSpec {
+		comps := validComponents()
+		s3 := comps[common.ComponentS3]
+		s3.Service = svc
+		comps[common.ComponentS3] = s3
+		return comps
 	}
 
 	t.Run("labels every component's pods", func(t *testing.T) {
-		instance := newInstance(nil)
-		ctx, sw := syncSeaweed(t, newClient(t, instance), instance)
+		instance := newSyncInstance(validComponents())
+		ctx, sw := syncSeaweed(t, newSyncClient(t, instance), instance)
 
-		podLabels := func(component string) map[string]string {
-			return map[string]string{
-				controller.ProviderLabel:  common.ProviderName,
-				controller.InstanceLabel:  instance.Name,
-				controller.ComponentLabel: component,
-			}
-		}
-		assert.Equal(t, podLabels(common.ComponentMaster), sw.Spec.Master.Labels)
-		assert.Equal(t, podLabels(common.ComponentVolume), sw.Spec.Volume.Labels)
-		assert.Equal(t, podLabels(common.ComponentFiler), sw.Spec.Filer.Labels)
-		assert.Equal(t, podLabels(common.ComponentS3), sw.Spec.S3.Labels)
+		assert.Equal(t, podLabels(instance.Name, common.ComponentMaster), sw.Spec.Master.Labels)
+		assert.Equal(t, podLabels(instance.Name, common.ComponentVolume), sw.Spec.Volume.Labels)
+		assert.Equal(t, podLabels(instance.Name, common.ComponentFiler), sw.Spec.Filer.Labels)
+		assert.Equal(t, podLabels(instance.Name, common.ComponentS3), sw.Spec.S3.Labels)
 		assert.ElementsMatch(t,
 			[]string{common.ComponentMaster, common.ComponentVolume, common.ComponentFiler, common.ComponentS3},
 			ctx.LabelledComponents())
 	})
 
 	t.Run("server-side apply drops fields the provider stops setting", func(t *testing.T) {
-		instance := newInstance(&corev1alpha1.Service{
+		instance := newSyncInstance(withS3Service(&corev1alpha1.Service{
 			ServiceType: corev1.ServiceTypeLoadBalancer,
 			Annotations: map[string]string{"service.beta.kubernetes.io/aws-load-balancer-type": "nlb"},
-		})
-		cl := newClient(t, instance)
+		}))
+		cl := newSyncClient(t, instance)
 		_, sw := syncSeaweed(t, cl, instance)
 		require.NotNil(t, sw.Spec.S3.Service)
 
-		instance.Spec.Components = newInstance(nil).Spec.Components
+		instance.Spec.Components = newSyncInstance(withS3Service(nil)).Spec.Components
 		_, sw = syncSeaweed(t, cl, instance)
 		assert.Nil(t, sw.Spec.S3.Service)
 	})
