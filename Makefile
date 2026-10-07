@@ -9,6 +9,16 @@ CONTAINER_TOOL ?= docker
 # Image URL to use for building/pushing image targets
 IMG ?= ghcr.io/openeverest/provider-seaweedfs-dev:latest
 
+# OpenEverest branch to use for OpenEverest CRD installation.
+OPENEVEREST_BRANCH ?= main
+
+# Image URL for OpenEverest controller used in integration tests (must be pre-built).
+OPENEVEREST_CONTROLLER_IMG ?= ghcr.io/openeverest/openeverest-controller-dev:0.0.0
+
+# Split IMG into repository and tag for Helm values
+_IMG_REPO = $(firstword $(subst :, ,$(IMG)))
+_IMG_TAG  = $(lastword $(subst :, ,$(IMG)))
+
 # controller-gen version
 CONTROLLER_TOOLS_VERSION ?= v0.18.0
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen-$(CONTROLLER_TOOLS_VERSION)
@@ -18,7 +28,7 @@ YQ_VERSION ?= v4.44.6
 YQ ?= $(LOCALBIN)/yq-$(YQ_VERSION)
 
 # golangci-lint version
-GOLANGCI_LINT_VERSION ?= v1.63.4
+GOLANGCI_LINT_VERSION ?= v2.14.0
 GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint-$(GOLANGCI_LINT_VERSION)
 
 # Helm chart directory
@@ -116,8 +126,54 @@ test-unit: ## Run unit tests.
 	go test -race ./... -coverprofile cover.out
 
 .PHONY: test-integration
-test-integration: ## Run integration tests (kuttl) against a running cluster.
-	. ./test/vars.sh && kubectl kuttl test --config ./test/integration/kuttl.yaml
+test-integration: ## Run all integration tests against K8S cluster.
+	. ./test/vars.sh && chainsaw test --config ./test/integration/.chainsaw.yaml ./test/integration
+
+.PHONY: test-integration-core
+test-integration-core: ## Run core integration tests.
+	. ./test/vars.sh && chainsaw test --config ./test/integration/.chainsaw.yaml ./test/integration/core
+
+.PHONY: test-integration-core-standalone
+test-integration-core-standalone: ## Run core standalone integration tests.
+	. ./test/vars.sh && chainsaw test --config ./test/integration/.chainsaw.yaml ./test/integration/core/standalone
+
+.PHONY: test-integration-core-validation
+test-integration-core-validation: ## Run core validation integration tests.
+	. ./test/vars.sh && chainsaw test --config ./test/integration/.chainsaw.yaml ./test/integration/core/validation
+
+.PHONY: load-image
+load-image: ## Import the provider image (IMG) into the k3d cluster.
+	k3d image import ${IMG} -c ${K3D_CLUSTER_NAME}
+
+.PHONY: load-openeverest-controller-image
+load-openeverest-controller-image: ## Import the OpenEverest controller image into the k3d cluster.
+	k3d image import ${OPENEVEREST_CONTROLLER_IMG} -c ${K3D_CLUSTER_NAME}
+
+.PHONY: install-crds
+install-crds: ## Install OpenEverest CRDs into the cluster (the Seaweed CRD ships with the chart).
+	kubectl apply -f https://raw.githubusercontent.com/openeverest/openeverest/$(OPENEVEREST_BRANCH)/config/crd/bases/core.openeverest.io_providers.yaml
+	kubectl apply -f https://raw.githubusercontent.com/openeverest/openeverest/$(OPENEVEREST_BRANCH)/config/crd/bases/core.openeverest.io_instances.yaml
+	kubectl apply -f https://raw.githubusercontent.com/openeverest/openeverest/$(OPENEVEREST_BRANCH)/config/crd/bases/monitoring.openeverest.io_monitoringconfigs.yaml
+	kubectl apply -f https://raw.githubusercontent.com/openeverest/openeverest/$(OPENEVEREST_BRANCH)/config/crd/bases/backup.openeverest.io_backupclasses.yaml
+	kubectl apply -f https://raw.githubusercontent.com/openeverest/openeverest/$(OPENEVEREST_BRANCH)/config/crd/bases/backup.openeverest.io_backups.yaml
+	kubectl apply -f https://raw.githubusercontent.com/openeverest/openeverest/$(OPENEVEREST_BRANCH)/config/crd/bases/backup.openeverest.io_restores.yaml
+	kubectl apply -f https://raw.githubusercontent.com/openeverest/openeverest/$(OPENEVEREST_BRANCH)/config/crd/bases/backup.openeverest.io_backupstorages.yaml
+	kubectl apply -f https://raw.githubusercontent.com/openeverest/openeverest/$(OPENEVEREST_BRANCH)/config/crd/bases/core.openeverest.io_instancepresets.yaml
+	kubectl apply -f https://raw.githubusercontent.com/openeverest/openeverest/$(OPENEVEREST_BRANCH)/config/crd/bases/backup.openeverest.io_backupimports.yaml
+
+# The operator is scaled to 0 so tests drive Seaweed status by hand; its webhook
+# would then have no endpoints and reject every Seaweed write, so it is disabled.
+.PHONY: deploy-provider-ci
+deploy-provider-ci: helm-deps ## Deploy the provider via Helm for CI (IMG must already be imported into k3d).
+	helm upgrade --install provider-seaweedfs $(CHART_DIR) \
+		--create-namespace \
+		--namespace provider-system \
+		--set image.repository=$(_IMG_REPO) \
+		--set image.tag=$(_IMG_TAG) \
+		--set image.pullPolicy=Never \
+		--set seaweedfs-operator.replicaCount=0 \
+		--set seaweedfs-operator.webhook.enabled=false \
+		--wait --timeout 2m
 
 ##@ Local Development Cluster
 
@@ -169,7 +225,7 @@ $(YQ): $(LOCALBIN)
 .PHONY: golangci-lint
 golangci-lint: $(GOLANGCI_LINT) ## Install golangci-lint.
 $(GOLANGCI_LINT): $(LOCALBIN)
-	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
+	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/v2/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
 
 # go-install-tool will 'go install' any package with custom target and target name. Usage:
 # $(call go-install-tool,<target>,<package>,<version>)

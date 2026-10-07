@@ -1,0 +1,9 @@
+apiVersion: seaweed.seaweedfs.com/v1
+kind: Seaweed
+metadata:
+  name: test-seaweedfs
+spec:
+  s3:
+    service:
+      type: NodePort
+      (annotations == null): true
