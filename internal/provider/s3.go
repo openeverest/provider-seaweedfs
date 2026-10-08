@@ -26,6 +26,27 @@ func validateS3Parameters(spec components.S3CustomSpec) error {
 	if err := validateS3DomainName(spec.DomainName); err != nil {
 		return err
 	}
+	if err := validateS3Ingress(spec.Ingress); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateS3Ingress(ing *components.S3IngressSpec) error {
+	if ing == nil || !ing.Enabled {
+		return nil
+	}
+	if ing.Host == "" {
+		return fmt.Errorf("ingress.host is required when ingress is enabled")
+	}
+	if errs := validation.IsDNS1123Subdomain(ing.Host); len(errs) > 0 {
+		return fmt.Errorf("ingress.host %q is invalid: %s", ing.Host, strings.Join(errs, "; "))
+	}
+	if tls := ing.TLS; tls != nil {
+		if tls.SecretName == "" {
+			return fmt.Errorf("ingress.tls.secretName is required when ingress.tls is set")
+		}
+	}
 	return nil
 }
 
@@ -52,6 +73,7 @@ func buildS3Spec(comp corev1alpha1.ComponentSpec, s3CustomSpec components.S3Cust
 		Port:       s3CustomSpec.Port,
 		DomainName: s3CustomSpec.DomainName,
 		Service:    buildServiceSpec(comp.Service),
+		Ingress:    buildS3IngressSpec(s3CustomSpec.Ingress),
 	}
 
 	if comp.Resources != nil {
@@ -59,4 +81,23 @@ func buildS3Spec(comp corev1alpha1.ComponentSpec, s3CustomSpec components.S3Cust
 	}
 
 	return spec
+}
+
+func buildS3IngressSpec(ing *components.S3IngressSpec) *seaweedv1.IngressSpec {
+	if ing == nil || !ing.Enabled {
+		return nil
+	}
+	out := &seaweedv1.IngressSpec{
+		Enabled:     true,
+		Host:        ing.Host,
+		ClassName:   ing.ClassName,
+		Annotations: ing.Annotations,
+	}
+	if tls := ing.TLS; tls != nil && tls.SecretName != "" {
+		out.TLS = []seaweedv1.IngressTLS{{
+			Hosts:      []string{ing.Host},
+			SecretName: tls.SecretName,
+		}}
+	}
+	return out
 }

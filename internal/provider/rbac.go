@@ -25,3 +25,6 @@ package provider
 
 // Connection details Secret written by provider-runtime on Ready:
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
+
+// Operator-managed S3 Ingress (read for HTTPS connection details):
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch

@@ -216,6 +216,15 @@ func TestValidateTopologyParameters(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "volumeServerDiskCount must be at least 1")
+
+	err = validateTopologyParameters(standalone.StandaloneTopologyConfig{
+		TLS: &seaweedv1.TLSSpec{
+			Enabled:   true,
+			IssuerRef: &seaweedv1.TLSIssuerRef{Kind: "Issuer"},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "tls.issuerRef.name is required")
 }
 
 func TestValidateService(t *testing.T) {
@@ -487,6 +496,30 @@ func TestValidateS3Parameters(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "domainName")
+
+	require.NoError(t, validateS3Parameters(components.S3CustomSpec{
+		Ingress: &components.S3IngressSpec{
+			Enabled: true,
+			Host:    "s3.example.com",
+			TLS:     &components.S3IngressTLS{SecretName: "s3-tls"},
+		},
+	}))
+
+	err = validateS3Parameters(components.S3CustomSpec{
+		Ingress: &components.S3IngressSpec{Enabled: true},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ingress.host is required")
+
+	err = validateS3Parameters(components.S3CustomSpec{
+		Ingress: &components.S3IngressSpec{
+			Enabled: true,
+			Host:    "s3.example.com",
+			TLS:     &components.S3IngressTLS{},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ingress.tls.secretName is required")
 }
 
 func TestBuildS3Spec(t *testing.T) {
@@ -824,6 +857,16 @@ func TestValidate(t *testing.T) {
 			},
 			expectErr: "volumeServerDiskCount must be at least 1",
 		},
+		{
+			name:       "invalid tls issuerRef",
+			components: validComponents(),
+			topology: &corev1alpha1.TopologySpec{
+				Type: "standalone",
+				Parameters: &runtime.RawExtension{Raw: []byte(
+					`{"tls":{"enabled":true,"issuerRef":{"kind":"Issuer"}}}`)},
+			},
+			expectErr: "tls.issuerRef.name is required",
+		},
 	}
 
 	for _, tt := range tests {
@@ -857,12 +900,14 @@ func TestStatus(t *testing.T) {
 	}
 
 	tests := []struct {
-		name               string
-		seaweed            *seaweedv1.Seaweed
-		service            *corev1.Service
-		expectPhase        corev1alpha1.InstancePhase
-		expectConnection   bool
-		expectExternalURL  string
+		name              string
+		seaweed           *seaweedv1.Seaweed
+		service           *corev1.Service
+		extraObjs         []client.Object
+		expectPhase       corev1alpha1.InstancePhase
+		expectConnection  bool
+		expectExternalURL string
+		expectMessagePart string
 	}{
 		{
 			name:        "cluster not found is pending",
@@ -878,6 +923,41 @@ func TestStatus(t *testing.T) {
 				},
 			},
 			service:          s3Service,
+			expectPhase:      corev1alpha1.InstancePhaseReady,
+			expectConnection: true,
+		},
+		{
+			name: "TLS enabled without server secret stays provisioning",
+			seaweed: &seaweedv1.Seaweed{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-instance", Namespace: "default"},
+				Spec: seaweedv1.SeaweedSpec{
+					TLS: &seaweedv1.TLSSpec{Enabled: true},
+				},
+				Status: seaweedv1.SeaweedStatus{
+					Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Ready"}},
+				},
+			},
+			service:           s3Service,
+			expectPhase:       corev1alpha1.InstancePhaseProvisioning,
+			expectMessagePart: "Waiting for TLS certificate",
+		},
+		{
+			name: "TLS enabled with server secret becomes ready",
+			seaweed: &seaweedv1.Seaweed{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-instance", Namespace: "default"},
+				Spec: seaweedv1.SeaweedSpec{
+					TLS: &seaweedv1.TLSSpec{Enabled: true},
+				},
+				Status: seaweedv1.SeaweedStatus{
+					Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Ready"}},
+				},
+			},
+			service: s3Service,
+			extraObjs: []client.Object{
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+					Name: "test-instance-server-tls", Namespace: "default",
+				}},
+			},
 			expectPhase:      corev1alpha1.InstancePhaseReady,
 			expectConnection: true,
 		},
@@ -940,7 +1020,8 @@ func TestStatus(t *testing.T) {
 					Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionFalse, Reason: "NotReady", Message: "scaling up"}},
 				},
 			},
-			expectPhase: corev1alpha1.InstancePhaseProvisioning,
+			expectPhase:       corev1alpha1.InstancePhaseProvisioning,
+			expectMessagePart: "scaling up",
 		},
 		{
 			name: "no condition with replicas is provisioning",
@@ -979,11 +1060,17 @@ func TestStatus(t *testing.T) {
 			if tt.service != nil {
 				builder = builder.WithObjects(tt.service)
 			}
+			if len(tt.extraObjs) > 0 {
+				builder = builder.WithObjects(tt.extraObjs...)
+			}
 			ctx := controller.NewContext(context.Background(), builder.Build(), instance, common.ProviderName)
 
 			status, err := New().Status(ctx)
 			require.NoError(t, err)
 			assert.Equal(t, tt.expectPhase, status.Phase)
+			if tt.expectMessagePart != "" {
+				assert.Contains(t, status.Message, tt.expectMessagePart)
+			}
 			if tt.expectConnection {
 				assert.Equal(t, "s3", status.ConnectionDetails.Type)
 				assert.Equal(t, common.ProviderName, status.ConnectionDetails.Provider)
@@ -991,6 +1078,7 @@ func TestStatus(t *testing.T) {
 				assert.Equal(t, "8333", status.ConnectionDetails.Port)
 				assert.Equal(t, "http://test-instance-s3.default.svc:8333", status.ConnectionDetails.URI)
 				assert.Equal(t, "true", status.ConnectionDetails.AdditionalProperties["forcePathStyle"])
+				assert.Equal(t, "false", status.ConnectionDetails.AdditionalProperties["verifyTLS"])
 				if tt.expectExternalURL != "" {
 					assert.Equal(t, tt.expectExternalURL, status.ConnectionDetails.AdditionalProperties["externalEndpointURL"])
 				} else {
@@ -999,6 +1087,52 @@ func TestStatus(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSyncPassesTLSAndSecurityConfig(t *testing.T) {
+	components := validComponents()
+	master := components[common.ComponentMaster]
+	master.Image = "chrislusf/seaweedfs:4.47"
+	components[common.ComponentMaster] = master
+
+	instance := &corev1alpha1.Instance{
+		ObjectMeta: metav1.ObjectMeta{Name: "sw-tls", Namespace: "default"},
+		Spec: corev1alpha1.InstanceSpec{
+			Components: components,
+			Topology: &corev1alpha1.TopologySpec{
+				Type: "standalone",
+				Parameters: &runtime.RawExtension{Raw: []byte(`{
+					"tls":{"enabled":true,"issuerRef":{"name":"my-ca","kind":"ClusterIssuer"}},
+					"securityConfig":{"jwtSigning":{"volumeWrite":true,"filerWrite":true}}
+				}`)},
+			},
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1alpha1.AddToScheme(scheme))
+	require.NoError(t, seaweedv1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(instance).Build()
+	ctx := controller.NewContext(context.Background(), fakeClient, instance, common.ProviderName)
+
+	require.NoError(t, New().Sync(ctx))
+
+	sw := &seaweedv1.Seaweed{}
+	require.NoError(t, fakeClient.Get(context.Background(), types.NamespacedName{
+		Namespace: "default", Name: "sw-tls",
+	}, sw))
+
+	require.NotNil(t, sw.Spec.TLS)
+	assert.True(t, sw.Spec.TLS.Enabled)
+	require.NotNil(t, sw.Spec.TLS.IssuerRef)
+	assert.Equal(t, "my-ca", sw.Spec.TLS.IssuerRef.Name)
+	assert.Equal(t, "ClusterIssuer", sw.Spec.TLS.IssuerRef.Kind)
+
+	require.NotNil(t, sw.Spec.SecurityConfig)
+	require.NotNil(t, sw.Spec.SecurityConfig.JWTSigning)
+	assert.True(t, sw.Spec.SecurityConfig.JWTSigning.VolumeWrite)
+	assert.True(t, sw.Spec.SecurityConfig.JWTSigning.FilerWrite)
 }
 
 func TestS3ServiceToInstance(t *testing.T) {

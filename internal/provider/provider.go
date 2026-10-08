@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -40,6 +41,7 @@ func New() *Provider {
 			ProviderName: common.ProviderName,
 			SchemeFuncs: []func(*runtime.Scheme) error{
 				seaweedv1.AddToScheme,
+				networkingv1.AddToScheme,
 			},
 			WatchConfigs: []controller.WatchConfig{
 				controller.WatchOwned(&seaweedv1.Seaweed{}),
@@ -47,12 +49,19 @@ func New() *Provider {
 				// changes, so watch the S3 Service directly to refresh status.
 				controller.WatchExternal(&corev1.Service{},
 					handler.EnqueueRequestsFromMapFunc(s3ServiceToInstance)),
+				// S3 Ingress is owned by Seaweed so watch it for HTTPS connection details.
+				controller.WatchExternal(&networkingv1.Ingress{},
+					handler.EnqueueRequestsFromMapFunc(s3IngressToInstance)),
+				// cert-manager owns the server TLS Secret so watch by name so Status
+				// can leave Provisioning once mTLS material exists.
+				controller.WatchExternal(&corev1.Secret{},
+					handler.EnqueueRequestsFromMapFunc(tlsSecretToInstance)),
 			},
 		},
 	}
 }
 
-// s3ServiceToInstance maps the operator-owned S3 Service to its Instance; the
+// s3ServiceToInstance maps the operator-owned S3 Service to its Instance the
 // Seaweed CR shares the Instance name.
 func s3ServiceToInstance(_ context.Context, obj client.Object) []reconcile.Request {
 	owner := metav1.GetControllerOf(obj)
@@ -60,6 +69,20 @@ func s3ServiceToInstance(_ context.Context, obj client.Object) []reconcile.Reque
 		return nil
 	}
 	if obj.GetName() != s3ServiceName(owner.Name) {
+		return nil
+	}
+	return []reconcile.Request{{
+		NamespacedName: types.NamespacedName{Namespace: obj.GetNamespace(), Name: owner.Name},
+	}}
+}
+
+// s3IngressToInstance maps the operator-owned S3 Ingress to its Instance.
+func s3IngressToInstance(_ context.Context, obj client.Object) []reconcile.Request {
+	owner := metav1.GetControllerOf(obj)
+	if owner == nil || owner.Kind != "Seaweed" || owner.APIVersion != seaweedv1.GroupVersion.String() {
+		return nil
+	}
+	if obj.GetName() != s3IngressName(owner.Name) {
 		return nil
 	}
 	return []reconcile.Request{{
@@ -137,6 +160,9 @@ func validateTopologyParameters(topo standalone.StandaloneTopologyConfig) error 
 	if topo.VolumeServerDiskCount != nil && *topo.VolumeServerDiskCount < 1 {
 		return fmt.Errorf("volumeServerDiskCount must be at least 1")
 	}
+	if err := validateTLSParameters(topo); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -182,6 +208,8 @@ func (p *Provider) Sync(c *controller.Context) error {
 			Volume:                buildVolumeSpec(volume, volumeCustomSpec),
 			Filer:                 buildFilerSpec(filer, filerCustomSpec),
 			S3:                    buildS3Spec(s3, s3CustomSpec),
+			TLS:                   buildTLSSpec(topo),
+			SecurityConfig:        buildSecurityConfigSpec(topo),
 		},
 	}
 
@@ -252,6 +280,18 @@ func (p *Provider) Status(c *controller.Context) (controller.Status, error) {
 
 	if cond := meta.FindStatusCondition(sw.Status.Conditions, "Ready"); cond != nil {
 		if cond.Status == metav1.ConditionTrue {
+			// Inter-component mTLS: the operator has no TLSReady condition and
+			// silently no-ops when cert-manager is missing. Gate Ready on the
+			// server TLS Secret so a missing cert-manager surfaces clearly.
+			waiting, err := waitingForTLSSecret(c, sw)
+			if err != nil {
+				return controller.Status{}, err
+			}
+			if waiting {
+				return controller.Provisioning(
+					"Waiting for TLS certificate Secret (install cert-manager if TLS is enabled)"), nil
+			}
+
 			svc := &corev1.Service{}
 			if err := getS3Service(c, svc); err != nil {
 				if controller.IsNotFound(err) {
@@ -264,7 +304,19 @@ func (p *Provider) Status(c *controller.Context) (controller.Status, error) {
 			if svc.Spec.Type == corev1.ServiceTypeLoadBalancer && len(svc.Status.LoadBalancer.Ingress) == 0 {
 				return controller.Provisioning("Waiting for LoadBalancer ingress"), nil
 			}
-			details, err := buildConnectionDetailsFromService(c, svc)
+			waitingIng, err := waitingForS3Ingress(c, sw)
+			if err != nil {
+				return controller.Status{}, err
+			}
+			if waitingIng {
+				return controller.Provisioning("Waiting for S3 Ingress"), nil
+			}
+
+			var s3Params components.S3CustomSpec
+			if s3Comp, ok := c.Instance().Spec.Components[common.ComponentS3]; ok {
+				c.TryDecodeComponentParameters(s3Comp, &s3Params)
+			}
+			details, err := buildConnectionDetailsFromService(c, svc, sw, s3Params)
 			if err != nil {
 				return controller.Status{}, err
 			}

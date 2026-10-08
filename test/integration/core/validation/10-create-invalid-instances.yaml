@@ -261,3 +261,124 @@ spec:
     s3:
       type: seaweedfs
       replicas: 1
+---
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: invalid-s3-ingress-no-host
+spec:
+  providerRef:
+    name: provider-seaweedfs
+  components:
+    master:
+      type: seaweedfs
+      replicas: 1
+    volume:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 1Gi
+    filer:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 1Gi
+    s3:
+      type: seaweedfs
+      replicas: 1
+      parameters:
+        ingress:
+          enabled: true
+---
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: invalid-s3-ingress-host
+spec:
+  providerRef:
+    name: provider-seaweedfs
+  components:
+    master:
+      type: seaweedfs
+      replicas: 1
+    volume:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 1Gi
+    filer:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 1Gi
+    s3:
+      type: seaweedfs
+      replicas: 1
+      parameters:
+        ingress:
+          enabled: true
+          host: Not_A_Host
+---
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: invalid-s3-ingress-tls-no-secret
+spec:
+  providerRef:
+    name: provider-seaweedfs
+  components:
+    master:
+      type: seaweedfs
+      replicas: 1
+    volume:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 1Gi
+    filer:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 1Gi
+    s3:
+      type: seaweedfs
+      replicas: 1
+      parameters:
+        ingress:
+          enabled: true
+          host: s3.example.com
+          tls:
+            verifyTLS: false
+---
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: invalid-tls-issuer-kind
+spec:
+  providerRef:
+    name: provider-seaweedfs
+  topology:
+    type: standalone
+    parameters:
+      tls:
+        enabled: true
+        issuerRef:
+          name: my-issuer
+          kind: SomethingElse
+  components:
+    master:
+      type: seaweedfs
+      replicas: 1
+    volume:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 1Gi
+    filer:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 1Gi
+    s3:
+      type: seaweedfs
+      replicas: 1
