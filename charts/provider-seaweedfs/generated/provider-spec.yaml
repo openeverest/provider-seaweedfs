@@ -153,10 +153,25 @@ spec:
                 - disk
               groupType: line
               uiType: group
+            storageClass:
+              dataSource:
+                provider: storageClasses
+              fieldParams:
+                label: Storage class
+                modes:
+                  edit:
+                    disabled: true
+                  restore:
+                    disabled: true
+              path: spec.components.filer.storage.storageClass
+              uiType: select
+              validation:
+                required: true
           componentsOrder:
             - replicas
             - maxMB
             - resources
+            - storageClass
           description: Configure the filer that provides the filesystem namespace and metadata store.
           label: Filer
         master:
@@ -188,6 +203,19 @@ spec:
                     int: true
                     min: 1
                     required: true
+                disk:
+                  fieldParams:
+                    badge: Gi
+                    badgeToApi: true
+                    helperText: Optional. Enables master persistence when set. Leave empty to run without a PVC.
+                    label: Disk
+                  path: spec.components.master.storage.size
+                  uiType: number
+                  validation:
+                    int: true
+                    max: 100
+                    min: 1
+                    required: false
                 memory:
                   fieldParams:
                     badge: Gi
@@ -203,8 +231,24 @@ spec:
               componentsOrder:
                 - cpu
                 - memory
+                - disk
               groupType: line
               uiType: group
+            storageClass:
+              dataSource:
+                provider: storageClasses
+              fieldParams:
+                helperText: Used only when Disk is set. Leave unset to use the cluster default StorageClass.
+                label: Storage class
+                modes:
+                  edit:
+                    disabled: true
+                  restore:
+                    disabled: true
+              path: spec.components.master.storage.storageClass
+              uiType: select
+              validation:
+                required: false
             volumeSizeLimitMB:
               fieldParams:
                 defaultValue: 1024
@@ -219,6 +263,7 @@ spec:
             - replicas
             - volumeSizeLimitMB
             - resources
+            - storageClass
           description: Configure the SeaweedFS master servers that coordinate the cluster.
           label: Master
         s3:
@@ -390,11 +435,26 @@ spec:
                 - disk
               groupType: line
               uiType: group
+            storageClass:
+              dataSource:
+                provider: storageClasses
+              fieldParams:
+                label: Storage class
+                modes:
+                  edit:
+                    disabled: true
+                  restore:
+                    disabled: true
+              path: spec.components.volume.storage.storageClass
+              uiType: select
+              validation:
+                required: true
           componentsOrder:
             - replicas
             - diskCount
             - maxVolumeCounts
             - resources
+            - storageClass
           description: Configure the volume servers that store object data.
           label: Volume
       sectionsOrder:
