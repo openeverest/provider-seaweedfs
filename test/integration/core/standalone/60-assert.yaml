@@ -1,0 +1,31 @@
+apiVersion: seaweed.seaweedfs.com/v1
+kind: Seaweed
+metadata:
+  name: test-seaweedfs
+spec:
+  volumeServerDiskCount: 2
+  tls:
+    enabled: true
+    issuerRef:
+      name: test-ca-issuer
+      kind: ClusterIssuer
+  s3:
+    ingress:
+      enabled: true
+      host: s3.example.com
+      className: nginx
+      annotations:
+        nginx.ingress.kubernetes.io/proxy-body-size: "0"
+      tls:
+        - hosts:
+            - s3.example.com
+          secretName: test-seaweedfs-s3-tls
+---
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: test-seaweedfs
+status:
+  # cert-manager is not installed, so the server TLS Secret never appears.
+  phase: Provisioning
+  (contains(message, 'Waiting for TLS certificate Secret')): true
