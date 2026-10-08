@@ -19,7 +19,8 @@ package provider
 // Operator-managed S3 Service (read for connection details):
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 
-// S3 pods (hostIP for NodePort connection details):
+// Pods: S3 hostIP for NodePort connection details, and component pod counts
+// in status.components (provider-runtime lists/watches labelled pods):
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 
 // Connection details Secret written by provider-runtime on Ready:

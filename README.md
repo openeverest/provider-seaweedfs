@@ -69,10 +69,10 @@ an MVP: several capabilities are stubbed or not wired yet.
 | Custom configuration | ✅ | Master `masterVolumeSizeLimitMB`; volume `maxVolumeCounts` / `volumeServerDiskCount`; filer `maxMB`; S3 `port` / `domainName` / Ingress |
 | S3 service exposure | ✅ | `spec.components.s3.service.serviceType`: ClusterIP, NodePort, or LoadBalancer |
 | Monitoring | ❌ | Planned |
-| Pod scheduling (affinity) | ❌ | Planned |
 | TLS | ✅ | Inter-component gRPC mTLS via `topology.parameters.tls`. Client HTTPS via S3 Ingress TLS (`components.s3.parameters.ingress`) → `externalEndpointURL=https://…`. Native S3 HTTPS on the gateway is not supported by the operator yet ([seaweedfs-operator#411](https://github.com/seaweedfs/seaweedfs-operator/issues/411)) |
 | Status / readiness | ✅ | Maps Seaweed Ready condition; waits for TLS Secret / LoadBalancer / Ingress when configured |
 | Connection details | ✅ | Publishes in-cluster S3 endpoint on Ready; NodePort / LoadBalancer / Ingress add `externalEndpointURL` |
+| Pod scheduling | ✅ | `schedulingPolicy` affinity, nodeSelector, tolerations and schedulerName. Master and volume pods require separate nodes by default; `affinity: {}` opts out. `topologySpreadConstraints` is rejected (no seaweedfs-operator field) |
 
 Stateful workloads additionally report:
 
@@ -307,7 +307,17 @@ markers, watches, and code generation are documented once for all providers in
 ### Testing
 
 - **Unit tests** — `make test`.
-- **Integration tests** — Makefile target exists (`make test-integration`); suites are not checked in yet for MVP.
+- **Integration tests** — [chainsaw](https://kyverno.github.io/chainsaw/) suites in `test/integration/`. The seaweedfs-operator is scaled to 0 and the tests patch `Seaweed` status to simulate it, so they check the provider's mapping and status logic quickly. To run them locally:
+
+  ```bash
+  make k3d-cluster-up
+  make docker-build load-image install-crds deploy-provider-ci IMG=provider-seaweedfs:ci
+  # OpenEverest controller, built from an openeverest/openeverest checkout:
+  (cd ../openeverest && make build-controller docker-build-controller)
+  make load-openeverest-controller-image
+  (cd ../openeverest && make deploy-test-controller)
+  make test-integration            # or test-integration-core-standalone / -validation
+  ```
 
 ## Troubleshooting
 

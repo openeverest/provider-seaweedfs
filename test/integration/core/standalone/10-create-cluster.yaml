@@ -1,0 +1,54 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: test-seaweedfs
+spec:
+  providerRef:
+    name: provider-seaweedfs
+  topology:
+    type: standalone
+    parameters:
+      volumeServerDiskCount: 2
+  components:
+    master:
+      type: seaweedfs
+      replicas: 3
+      resources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+      storage:
+        size: 1Gi
+      parameters:
+        masterVolumeSizeLimitMB: 512
+    volume:
+      type: seaweedfs
+      replicas: 2
+      resources:
+        limits:
+          cpu: "1"
+          memory: 1Gi
+        requests:
+          cpu: 200m
+          memory: 256Mi
+      storage:
+        size: 10Gi
+        storageClass: local-path
+      parameters:
+        maxVolumeCounts: 16
+    filer:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 2Gi
+      parameters:
+        maxMB: 8
+    s3:
+      type: seaweedfs
+      replicas: 1
+      parameters:
+        port: 8333
+        domainName: s3.example.com
