@@ -418,41 +418,53 @@ spec:
           label: S3
         tls:
           components:
+            customIssuer:
+              components:
+                kind:
+                  fieldParams:
+                    defaultValue: Issuer
+                    helperText: Issuer is namespaced, ClusterIssuer is cluster-scoped.
+                    label: Issuer kind
+                    options:
+                      - label: Issuer
+                        value: Issuer
+                      - label: ClusterIssuer
+                        value: ClusterIssuer
+                  path: spec.topology.parameters.tls.issuerRef.kind
+                  uiType: select
+                  validation:
+                    required: true
+                name:
+                  fieldParams:
+                    label: Issuer name
+                  path: spec.topology.parameters.tls.issuerRef.name
+                  uiType: text
+                  validation:
+                    required: true
+              componentsOrder:
+                - name
+                - kind
+              description: Sign certificates with your own cert-manager Issuer or ClusterIssuer instead of the operator's self-signed CA.
+              groupType: toggleable
+              label: Custom issuer
+              uiType: group
             enabled:
               fieldParams:
                 defaultValue: false
-                helperText: Enables gRPC mTLS between master, volume, filer, and S3. Requires cert-manager.
+                helperText: Enables gRPC mTLS between master, volume, filer, and S3. Requires cert-manager. Cannot be changed after creation.
                 label: Inter-component TLS
+                modes:
+                  edit:
+                    disabled: true
+                  restore:
+                    disabled: true
               path: spec.topology.parameters.tls.enabled
               uiType: toggle
               validation:
                 required: false
-            issuerKind:
-              fieldParams:
-                defaultValue: Issuer
-                helperText: Issuer is namespaced, ClusterIssuer is cluster-scoped.
-                label: Issuer kind
-                options:
-                  - label: Issuer
-                    value: Issuer
-                  - label: ClusterIssuer
-                    value: ClusterIssuer
-              path: spec.topology.parameters.tls.issuerRef.kind
-              uiType: select
-              validation:
-                required: false
-            issuerName:
-              fieldParams:
-                helperText: Optional cert-manager Issuer or ClusterIssuer name. Leave empty for the operator's self-signed CA.
-                label: Issuer name
-              path: spec.topology.parameters.tls.issuerRef.name
-              uiType: text
-              validation:
-                required: false
           componentsOrder:
             - enabled
-            - issuerName
-            - issuerKind
+            - customIssuer
           description: Encrypt traffic between SeaweedFS components (gRPC mTLS). S3 clients still use HTTP unless you terminate TLS at an Ingress or LoadBalancer.
           label: TLS
         volume:

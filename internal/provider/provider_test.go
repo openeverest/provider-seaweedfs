@@ -218,9 +218,9 @@ func TestValidateTopologyParameters(t *testing.T) {
 	assert.Contains(t, err.Error(), "volumeServerDiskCount must be at least 1")
 
 	err = validateTopologyParameters(standalone.StandaloneTopologyConfig{
-		TLS: &seaweedv1.TLSSpec{
+		TLS: &standalone.TLSSpec{
 			Enabled:   true,
-			IssuerRef: &seaweedv1.TLSIssuerRef{Kind: "Issuer"},
+			IssuerRef: &standalone.TLSIssuerRef{Kind: "Issuer"},
 		},
 	})
 	require.Error(t, err)

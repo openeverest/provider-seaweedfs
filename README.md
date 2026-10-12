@@ -214,7 +214,13 @@ kubectl get seaweed -A
 > are enabled).
 >
 > Inter-component mTLS requires cert-manager; without it the Instance stays
-> Provisioning until the `<name>-server-tls` Secret appears.
+> Provisioning until the `<name>-server-tls` Secret appears. seaweedfs-operator
+> detects cert-manager CRDs once per process — restart it if cert-manager was
+> installed after the operator started. Do not toggle `tls.enabled` on a live
+> cluster: components roll one-by-one and TLS/non-TLS peers cannot talk mid-rollout.
+>
+> Optional JWT signing for volume/filer (`topology.parameters.securityConfig`) is
+> supported via YAML/API only there is no UI for it yet.
 >
 > For Postgres backups, point a `BackupStorage` at that endpoint. Without an
 > S3 identity config on the gateway, SeaweedFS accepts requests without auth —
@@ -331,7 +337,7 @@ kubectl logs -n everest-system deploy/provider-seaweedfs -f
 | No `Provider` resource in the cluster | Is the chart installed? Check the provider deployment logs |
 | `Instance` ignored entirely | `spec.providerRef.name` must be `provider-seaweedfs` |
 | `Seaweed` resource created but no pods | Inspect the `Seaweed` custom resource status — the failure is upstream in the operator |
-| TLS enabled but never Ready | Is [cert-manager](https://cert-manager.io) installed? Check for Certificate / Secret `<name>-server-tls` |
+| TLS enabled but never Ready | Is [cert-manager](https://cert-manager.io) installed? Check for Certificate / Secret `<name>-server-tls`. seaweedfs-operator checks for cert-manager CRDs once per process (`sync.Once`); if cert-manager was installed after the operator started, restart the operator |
 
 ## Contributing
 

@@ -8,7 +8,6 @@
 // +k8s:openapi-gen=true
 package components
 
-
 type MasterCustomSpec struct {
 	MasterVolumeSizeLimitMB *int32 `json:"masterVolumeSizeLimitMB,omitempty"`
 }
@@ -26,7 +25,7 @@ type S3CustomSpec struct {
 	DomainName *string `json:"domainName,omitempty"`
 
 	// Ingress exposes the S3 gateway via a Kubernetes Ingress. With TLS,
-	// clients reach the API at https://<host> the in-cluster Service stays HTTP.
+	// clients reach the API at https://<host>; the in-cluster Service stays HTTP.
 	// +optional
 	Ingress *S3IngressSpec `json:"ingress,omitempty"`
 }

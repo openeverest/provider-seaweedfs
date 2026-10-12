@@ -63,15 +63,21 @@ func buildSecurityConfigSpec(topo standalone.StandaloneTopologyConfig) *seaweedv
 	if !jwt.VolumeWrite && !jwt.VolumeRead && !jwt.FilerWrite && !jwt.FilerRead {
 		return nil
 	}
-	return &seaweedv1.SecurityConfigSpec{
-		JWTSigning: &seaweedv1.JWTSigningSpec{
-			VolumeWrite:          jwt.VolumeWrite,
-			VolumeRead:           jwt.VolumeRead,
-			FilerWrite:           jwt.FilerWrite,
-			FilerRead:            jwt.FilerRead,
-			ExpiresAfterSeconds:  jwt.ExpiresAfterSeconds,
-		},
+	out := &seaweedv1.JWTSigningSpec{
+		VolumeWrite: jwt.VolumeWrite,
+		VolumeRead:  jwt.VolumeRead,
+		FilerWrite:  jwt.FilerWrite,
+		FilerRead:   jwt.FilerRead,
 	}
+	if exp := jwt.ExpiresAfterSeconds; exp != nil {
+		out.ExpiresAfterSeconds = &seaweedv1.JWTExpiresAfterSecondsSpec{
+			VolumeWrite: exp.VolumeWrite,
+			VolumeRead:  exp.VolumeRead,
+			FilerWrite:  exp.FilerWrite,
+			FilerRead:   exp.FilerRead,
+		}
+	}
+	return &seaweedv1.SecurityConfigSpec{JWTSigning: out}
 }
 
 func validateTLSParameters(topo standalone.StandaloneTopologyConfig) error {

@@ -23,13 +23,13 @@ func TestBuildTLSSpec(t *testing.T) {
 
 	t.Run("nil when disabled", func(t *testing.T) {
 		assert.Nil(t, buildTLSSpec(standalone.StandaloneTopologyConfig{
-			TLS: &seaweedv1.TLSSpec{Enabled: false},
+			TLS: &standalone.TLSSpec{Enabled: false},
 		}))
 	})
 
 	t.Run("enabled without issuerRef", func(t *testing.T) {
 		spec := buildTLSSpec(standalone.StandaloneTopologyConfig{
-			TLS: &seaweedv1.TLSSpec{Enabled: true},
+			TLS: &standalone.TLSSpec{Enabled: true},
 		})
 		require.NotNil(t, spec)
 		assert.True(t, spec.Enabled)
@@ -38,9 +38,9 @@ func TestBuildTLSSpec(t *testing.T) {
 
 	t.Run("enabled with issuerRef", func(t *testing.T) {
 		spec := buildTLSSpec(standalone.StandaloneTopologyConfig{
-			TLS: &seaweedv1.TLSSpec{
+			TLS: &standalone.TLSSpec{
 				Enabled: true,
-				IssuerRef: &seaweedv1.TLSIssuerRef{
+				IssuerRef: &standalone.TLSIssuerRef{
 					Name:  "my-ca",
 					Kind:  "ClusterIssuer",
 					Group: "cert-manager.io",
@@ -56,9 +56,9 @@ func TestBuildTLSSpec(t *testing.T) {
 
 	t.Run("issuerRef without name is omitted", func(t *testing.T) {
 		spec := buildTLSSpec(standalone.StandaloneTopologyConfig{
-			TLS: &seaweedv1.TLSSpec{
+			TLS: &standalone.TLSSpec{
 				Enabled:   true,
-				IssuerRef: &seaweedv1.TLSIssuerRef{Kind: "Issuer"},
+				IssuerRef: &standalone.TLSIssuerRef{Kind: "Issuer"},
 			},
 		})
 		require.NotNil(t, spec)
@@ -73,16 +73,16 @@ func TestBuildSecurityConfigSpec(t *testing.T) {
 
 	t.Run("nil when all jwt flags false", func(t *testing.T) {
 		assert.Nil(t, buildSecurityConfigSpec(standalone.StandaloneTopologyConfig{
-			SecurityConfig: &seaweedv1.SecurityConfigSpec{
-				JWTSigning: &seaweedv1.JWTSigningSpec{},
+			SecurityConfig: &standalone.SecurityConfigSpec{
+				JWTSigning: &standalone.JWTSigningSpec{},
 			},
 		}))
 	})
 
 	t.Run("passes jwt flags", func(t *testing.T) {
 		spec := buildSecurityConfigSpec(standalone.StandaloneTopologyConfig{
-			SecurityConfig: &seaweedv1.SecurityConfigSpec{
-				JWTSigning: &seaweedv1.JWTSigningSpec{
+			SecurityConfig: &standalone.SecurityConfigSpec{
+				JWTSigning: &standalone.JWTSigningSpec{
 					VolumeWrite: true,
 					FilerWrite:  true,
 				},
@@ -100,19 +100,19 @@ func TestBuildSecurityConfigSpec(t *testing.T) {
 func TestValidateTLSParameters(t *testing.T) {
 	require.NoError(t, validateTLSParameters(standalone.StandaloneTopologyConfig{}))
 	require.NoError(t, validateTLSParameters(standalone.StandaloneTopologyConfig{
-		TLS: &seaweedv1.TLSSpec{Enabled: true},
+		TLS: &standalone.TLSSpec{Enabled: true},
 	}))
 	// Disabled TLS ignores a half-filled issuerRef left over from the UI.
 	require.NoError(t, validateTLSParameters(standalone.StandaloneTopologyConfig{
-		TLS: &seaweedv1.TLSSpec{
+		TLS: &standalone.TLSSpec{
 			Enabled:   false,
-			IssuerRef: &seaweedv1.TLSIssuerRef{Kind: "Issuer"},
+			IssuerRef: &standalone.TLSIssuerRef{Kind: "Issuer"},
 		},
 	}))
 	require.NoError(t, validateTLSParameters(standalone.StandaloneTopologyConfig{
-		TLS: &seaweedv1.TLSSpec{
+		TLS: &standalone.TLSSpec{
 			Enabled: true,
-			IssuerRef: &seaweedv1.TLSIssuerRef{
+			IssuerRef: &standalone.TLSIssuerRef{
 				Name: "my-issuer",
 				Kind: "ClusterIssuer",
 			},
@@ -120,18 +120,18 @@ func TestValidateTLSParameters(t *testing.T) {
 	}))
 
 	err := validateTLSParameters(standalone.StandaloneTopologyConfig{
-		TLS: &seaweedv1.TLSSpec{
+		TLS: &standalone.TLSSpec{
 			Enabled:   true,
-			IssuerRef: &seaweedv1.TLSIssuerRef{Kind: "Issuer"},
+			IssuerRef: &standalone.TLSIssuerRef{Kind: "Issuer"},
 		},
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tls.issuerRef.name is required")
 
 	err = validateTLSParameters(standalone.StandaloneTopologyConfig{
-		TLS: &seaweedv1.TLSSpec{
+		TLS: &standalone.TLSSpec{
 			Enabled: true,
-			IssuerRef: &seaweedv1.TLSIssuerRef{
+			IssuerRef: &standalone.TLSIssuerRef{
 				Name: "x",
 				Kind: "SomethingElse",
 			},

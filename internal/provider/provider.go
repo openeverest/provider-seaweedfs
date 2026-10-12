@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -13,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/AlekSi/pointer"
@@ -54,14 +56,19 @@ func New() *Provider {
 					handler.EnqueueRequestsFromMapFunc(s3IngressToInstance)),
 				// cert-manager owns the server TLS Secret so watch by name so Status
 				// can leave Provisioning once mTLS material exists.
+				// Note: the informer still caches all Secrets cluster-wide; the
+				// predicate only drops unrelated events before enqueue.
 				controller.WatchExternal(&corev1.Secret{},
-					handler.EnqueueRequestsFromMapFunc(tlsSecretToInstance)),
+					handler.EnqueueRequestsFromMapFunc(tlsSecretToInstance),
+					predicate.NewPredicateFuncs(func(o client.Object) bool {
+						return strings.HasSuffix(o.GetName(), tlsServerSecretSuffix)
+					})),
 			},
 		},
 	}
 }
 
-// s3ServiceToInstance maps the operator-owned S3 Service to its Instance the
+// s3ServiceToInstance maps the operator-owned S3 Service to its Instance; the
 // Seaweed CR shares the Instance name.
 func s3ServiceToInstance(_ context.Context, obj client.Object) []reconcile.Request {
 	owner := metav1.GetControllerOf(obj)
@@ -289,7 +296,7 @@ func (p *Provider) Status(c *controller.Context) (controller.Status, error) {
 			}
 			if waiting {
 				return controller.Provisioning(
-					"Waiting for TLS certificate Secret (install cert-manager if TLS is enabled)"), nil
+					"Waiting for TLS certificate Secret (requires cert-manager; restart seaweedfs-operator if cert-manager was installed after it)"), nil
 			}
 
 			svc := &corev1.Service{}
