@@ -48,3 +48,23 @@ apiVersion: seaweed.seaweedfs.com/v1
 kind: Seaweed
 metadata:
   name: invalid-topology-spread
+---
+apiVersion: seaweed.seaweedfs.com/v1
+kind: Seaweed
+metadata:
+  name: invalid-s3-ingress-no-host
+---
+apiVersion: seaweed.seaweedfs.com/v1
+kind: Seaweed
+metadata:
+  name: invalid-s3-ingress-host
+---
+apiVersion: seaweed.seaweedfs.com/v1
+kind: Seaweed
+metadata:
+  name: invalid-s3-ingress-tls-no-secret
+---
+apiVersion: seaweed.seaweedfs.com/v1
+kind: Seaweed
+metadata:
+  name: invalid-tls-issuer-kind

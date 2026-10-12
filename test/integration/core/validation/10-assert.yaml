@@ -67,3 +67,31 @@ metadata:
   name: invalid-topology-spread
 status:
   phase: Failed
+---
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: invalid-s3-ingress-no-host
+status:
+  phase: Failed
+---
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: invalid-s3-ingress-host
+status:
+  phase: Failed
+---
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: invalid-s3-ingress-tls-no-secret
+status:
+  phase: Failed
+---
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: invalid-tls-issuer-kind
+status:
+  phase: Failed

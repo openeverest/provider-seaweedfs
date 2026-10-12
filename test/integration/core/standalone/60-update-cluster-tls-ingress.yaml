@@ -1,0 +1,23 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: test-seaweedfs
+spec:
+  topology:
+    parameters:
+      tls:
+        enabled: true
+        issuerRef:
+          name: test-ca-issuer
+          kind: ClusterIssuer
+  components:
+    s3:
+      parameters:
+        ingress:
+          enabled: true
+          host: s3.example.com
+          className: nginx
+          annotations:
+            nginx.ingress.kubernetes.io/proxy-body-size: "0"
+          tls:
+            secretName: test-seaweedfs-s3-tls

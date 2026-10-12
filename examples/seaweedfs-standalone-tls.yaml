@@ -1,0 +1,39 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: seaweedfs-standalone-tls
+spec:
+  providerRef:
+    name: provider-seaweedfs
+  topology:
+    type: standalone
+    parameters:
+      # Inter-component gRPC mTLS via cert-manager. Omit issuerRef to let the
+      # seaweedfs-operator provision a self-signed CA chain owned by the Seaweed CR.
+      # Requires cert-manager in the cluster.
+      tls:
+        enabled: true
+      # Optional: JWT signing keys in security.toml (independent of TLS).
+      # securityConfig:
+      #   jwtSigning:
+      #     volumeWrite: true
+      #     filerWrite: true
+  components:
+    master:
+      type: seaweedfs
+      version: "4.47"
+      image: chrislusf/seaweedfs:4.47
+      replicas: 1
+    volume:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 10Gi
+    filer:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 1Gi
+    s3:
+      type: seaweedfs
+      replicas: 1

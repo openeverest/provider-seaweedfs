@@ -1,0 +1,17 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: test-seaweedfs
+status:
+  phase: Ready
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: test-seaweedfs-conn
+data:
+  # The in-cluster endpoint stays plain HTTP; only the Ingress terminates TLS.
+  (base64_decode(endpointURL) == join('', ['http://test-seaweedfs-s3.', $namespace, '.svc:8333'])): true
+  (base64_decode(verifyTLS)): "false"
+  (base64_decode(externalEndpointURL)): https://s3.example.com
+  (base64_decode(externalVerifyTLS)): "true"
