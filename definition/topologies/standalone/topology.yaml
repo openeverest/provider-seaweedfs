@@ -100,8 +100,13 @@ ui:
                             fieldParams:
                                 badge: Gi
                                 badgeToApi: true
-                                helperText: Optional. Enables master persistence when set. Leave empty to run without a PVC.
+                                helperText: Optional. Enables master persistence when set. Leave empty to run without a PVC. Cannot be changed after creation.
                                 label: Disk
+                                modes:
+                                    edit:
+                                        disabled: true
+                                    restore:
+                                        disabled: true
                             path: spec.components.master.storage.size
                             uiType: number
                             validation:
@@ -119,7 +124,7 @@ ui:
                     dataSource:
                         provider: storageClasses
                     fieldParams:
-                        helperText: Used only when Disk is set. Leave unset to use the cluster default StorageClass.
+                        helperText: Applies only when Disk is set.
                         label: Storage class
                         modes:
                             edit:
