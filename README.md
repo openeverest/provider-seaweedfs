@@ -78,7 +78,7 @@ Stateful workloads additionally report:
 
 | Capability | Status | Notes |
 |---|---|---|
-| Persistent storage | ✅ | `spec.components.volume.storage.size` and `spec.components.filer.storage.size` (both required) |
+| Persistent storage | ✅ | Volume/filer `storage.size` required; optional master `storage.size`. Optional per-component `storage.storageClass` (UI picker for master/volume/filer) |
 | Storage expansion | ❌ | Planned |
 | Backups | ❌ | Not in scope for MVP |
 | Restore | ❌ | Not in scope for MVP |
