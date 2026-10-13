@@ -71,6 +71,15 @@ ui:
                         int: true
                         min: 1
                         required: false
+                replication:
+                    fieldParams:
+                        defaultValue: "001"
+                        helperText: Three-digit SeaweedFS placement, for example 001. Empty uses 001 when volume replicas are at least 2, otherwise 000.
+                        label: Replication
+                    path: spec.topology.parameters.replication
+                    uiType: text
+                    validation:
+                        required: false
                 resources:
                     components:
                         cpu:
@@ -139,6 +148,7 @@ ui:
             componentsOrder:
                 - replicas
                 - volumeSizeLimitMB
+                - replication
                 - resources
                 - storageClass
             description: Configure the SeaweedFS master servers that coordinate the cluster.

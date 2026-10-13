@@ -12,6 +12,14 @@ package standalone
 type StandaloneTopologyConfig struct {
 	VolumeServerDiskCount *int32 `json:"volumeServerDiskCount,omitempty"`
 
+	// Replication is SeaweedFS master.defaultReplication: three digits XYZ.
+	// X is extra copies in other data centers, Y extra copies on other racks
+	// in the same data center, Z extra copies on other volume servers in the
+	// same rack (000, 001, 010, 100, …).
+	// Empty uses 001 when volume replicas are at least 2, and 000 otherwise.
+	// +optional
+	Replication *string `json:"replication,omitempty"`
+
 	// TLS enables inter-component gRPC mTLS via the seaweedfs-operator.
 	// This does not terminate HTTPS on the S3 gateway — see README.
 	// +optional

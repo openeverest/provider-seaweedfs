@@ -41,10 +41,34 @@ func validateMasterParameters(spec components.MasterCustomSpec) error {
 	return nil
 }
 
-func buildMasterSpec(comp corev1alpha1.ComponentSpec, masterCustomSpec components.MasterCustomSpec) *seaweedv1.MasterSpec {
+// effectiveReplication returns the placement written to master.defaultReplication.
+// An empty value uses 001 when at least two volume servers are requested, and 000 otherwise.
+func effectiveReplication(replication *string, volumeServers int32) string {
+	if replication != nil && *replication != "" {
+		return *replication
+	}
+	if volumeServers >= 2 {
+		return DefaultReplication
+	}
+	return "000"
+}
+
+// validateReplication matches the operator's bucket placement pattern
+// (^[0-9]{3}$). master.defaultReplication on the Seaweed CR is an unvalidated
+// string; the operator only forwards it as -defaultReplication.
+func validateReplication(replication string) error {
+	if len(replication) != 3 || replication[0] < '0' || replication[0] > '9' ||
+		replication[1] < '0' || replication[1] > '9' || replication[2] < '0' || replication[2] > '9' {
+		return fmt.Errorf("replication %q must be three digits such as 000, 001, or 010", replication)
+	}
+	return nil
+}
+
+func buildMasterSpec(comp corev1alpha1.ComponentSpec, masterCustomSpec components.MasterCustomSpec, replication string) *seaweedv1.MasterSpec {
 	spec := &seaweedv1.MasterSpec{
-		Replicas:          *comp.Replicas,
-		VolumeSizeLimitMB: pointer.ToInt32(DefaultMasterVolumeSizeLimitMB),
+		Replicas:           *comp.Replicas,
+		VolumeSizeLimitMB:  pointer.ToInt32(DefaultMasterVolumeSizeLimitMB),
+		DefaultReplication: pointer.ToString(replication),
 	}
 
 	if masterCustomSpec.MasterVolumeSizeLimitMB != nil {

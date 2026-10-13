@@ -159,6 +159,9 @@ func (p *Provider) Validate(c *controller.Context) error {
 			return err
 		}
 	}
+	if err := validateReplication(effectiveReplication(topo.Replication, *volume.Replicas)); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -211,7 +214,7 @@ func (p *Provider) Sync(c *controller.Context) error {
 		Spec: seaweedv1.SeaweedSpec{
 			Image:                 image,
 			VolumeServerDiskCount: pointer.ToInt32(DefaultVolumeServerDiskCount),
-			Master:                buildMasterSpec(master, masterCustomSpec),
+			Master:                buildMasterSpec(master, masterCustomSpec, effectiveReplication(topo.Replication, *volume.Replicas)),
 			Volume:                buildVolumeSpec(volume, volumeCustomSpec),
 			Filer:                 buildFilerSpec(filer, filerCustomSpec),
 			S3:                    buildS3Spec(s3, s3CustomSpec),

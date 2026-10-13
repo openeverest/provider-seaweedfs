@@ -348,12 +348,37 @@ func TestBuildServiceSpec(t *testing.T) {
 	})
 }
 
+func TestEffectiveReplication(t *testing.T) {
+	assert.Equal(t, DefaultReplication, effectiveReplication(nil, 2))
+	assert.Equal(t, "000", effectiveReplication(nil, 1))
+	assert.Equal(t, DefaultReplication, effectiveReplication(pointer.ToString(""), 2))
+	assert.Equal(t, "010", effectiveReplication(pointer.ToString("010"), 2))
+	assert.Equal(t, "000", effectiveReplication(pointer.ToString("000"), 2))
+}
+
+func TestValidateReplication(t *testing.T) {
+	require.NoError(t, validateReplication("000"))
+	require.NoError(t, validateReplication("001"))
+	require.NoError(t, validateReplication("010"))
+	require.NoError(t, validateReplication("210"))
+
+	err := validateReplication("01")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be three digits")
+
+	err = validateReplication("00a")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be three digits")
+}
+
 func TestBuildMasterSpec(t *testing.T) {
 	t.Run("defaults when no custom spec", func(t *testing.T) {
-		spec := buildMasterSpec(corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(3)}, components.MasterCustomSpec{})
+		spec := buildMasterSpec(corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(3)}, components.MasterCustomSpec{}, DefaultReplication)
 		require.NotNil(t, spec.VolumeSizeLimitMB)
 		assert.Equal(t, DefaultMasterVolumeSizeLimitMB, *spec.VolumeSizeLimitMB)
 		assert.Equal(t, int32(3), spec.Replicas)
+		require.NotNil(t, spec.DefaultReplication)
+		assert.Equal(t, DefaultReplication, *spec.DefaultReplication)
 		assert.Nil(t, spec.Persistence)
 		assert.Nil(t, spec.Service)
 	})
@@ -362,9 +387,12 @@ func TestBuildMasterSpec(t *testing.T) {
 		spec := buildMasterSpec(
 			corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(1)},
 			components.MasterCustomSpec{MasterVolumeSizeLimitMB: pointer.ToInt32(2048)},
+			"000",
 		)
 		require.NotNil(t, spec.VolumeSizeLimitMB)
 		assert.Equal(t, int32(2048), *spec.VolumeSizeLimitMB)
+		require.NotNil(t, spec.DefaultReplication)
+		assert.Equal(t, "000", *spec.DefaultReplication)
 	})
 
 	t.Run("storage enables persistence", func(t *testing.T) {
@@ -375,7 +403,7 @@ func TestBuildMasterSpec(t *testing.T) {
 				Size:         resource.MustParse("5Gi"),
 				StorageClass: &storageClass,
 			},
-		}, components.MasterCustomSpec{})
+		}, components.MasterCustomSpec{}, "000")
 		require.NotNil(t, spec.Persistence)
 		assert.True(t, spec.Persistence.Enabled)
 		require.NotNil(t, spec.Persistence.StorageClassName)
@@ -867,6 +895,47 @@ func TestValidate(t *testing.T) {
 			},
 			expectErr: "tls.issuerRef.name is required",
 		},
+		{
+			name: "single volume server without replication uses 000",
+			components: func() map[string]corev1alpha1.ComponentSpec {
+				c := validComponents()
+				volume := c[common.ComponentVolume]
+				volume.Replicas = pointer.ToInt32(1)
+				c[common.ComponentVolume] = volume
+				return c
+			}(),
+		},
+		{
+			name: "explicit 000 is allowed on one volume server",
+			components: func() map[string]corev1alpha1.ComponentSpec {
+				c := validComponents()
+				volume := c[common.ComponentVolume]
+				volume.Replicas = pointer.ToInt32(1)
+				c[common.ComponentVolume] = volume
+				return c
+			}(),
+			topology: &corev1alpha1.TopologySpec{
+				Type:       "standalone",
+				Parameters: &runtime.RawExtension{Raw: []byte(`{"replication":"000"}`)},
+			},
+		},
+		{
+			name:       "010 is a valid placement",
+			components: validComponents(),
+			topology: &corev1alpha1.TopologySpec{
+				Type:       "standalone",
+				Parameters: &runtime.RawExtension{Raw: []byte(`{"replication":"010"}`)},
+			},
+		},
+		{
+			name:       "replication must be three digits",
+			components: validComponents(),
+			topology: &corev1alpha1.TopologySpec{
+				Type:       "standalone",
+				Parameters: &runtime.RawExtension{Raw: []byte(`{"replication":"nope"}`)},
+			},
+			expectErr: "must be three digits",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1234,6 +1303,8 @@ func TestSync(t *testing.T) {
 		instance := newSyncInstance(validComponents())
 		ctx, sw := syncSeaweed(t, newSyncClient(t, instance), instance)
 
+		require.NotNil(t, sw.Spec.Master.DefaultReplication)
+		assert.Equal(t, DefaultReplication, *sw.Spec.Master.DefaultReplication)
 		assert.Equal(t, podLabels(instance.Name, common.ComponentMaster), sw.Spec.Master.Labels)
 		assert.Equal(t, podLabels(instance.Name, common.ComponentVolume), sw.Spec.Volume.Labels)
 		assert.Equal(t, podLabels(instance.Name, common.ComponentFiler), sw.Spec.Filer.Labels)
@@ -1255,5 +1326,27 @@ func TestSync(t *testing.T) {
 		instance.Spec.Components = newSyncInstance(withS3Service(nil)).Spec.Components
 		_, sw = syncSeaweed(t, cl, instance)
 		assert.Nil(t, sw.Spec.S3.Service)
+	})
+
+	t.Run("explicit replication is written to the master", func(t *testing.T) {
+		instance := newSyncInstance(validComponents())
+		instance.Spec.Topology = &corev1alpha1.TopologySpec{
+			Type:       "standalone",
+			Parameters: &runtime.RawExtension{Raw: []byte(`{"replication":"000"}`)},
+		}
+		_, sw := syncSeaweed(t, newSyncClient(t, instance), instance)
+		require.NotNil(t, sw.Spec.Master.DefaultReplication)
+		assert.Equal(t, "000", *sw.Spec.Master.DefaultReplication)
+	})
+
+	t.Run("one volume server defaults replication to 000", func(t *testing.T) {
+		comps := validComponents()
+		volume := comps[common.ComponentVolume]
+		volume.Replicas = pointer.ToInt32(1)
+		comps[common.ComponentVolume] = volume
+		instance := newSyncInstance(comps)
+		_, sw := syncSeaweed(t, newSyncClient(t, instance), instance)
+		require.NotNil(t, sw.Spec.Master.DefaultReplication)
+		assert.Equal(t, "000", *sw.Spec.Master.DefaultReplication)
 	})
 }

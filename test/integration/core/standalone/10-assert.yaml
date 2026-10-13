@@ -19,6 +19,7 @@ spec:
   master:
     replicas: 3
     volumeSizeLimitMB: 512
+    defaultReplication: "001"
     labels:
       core.openeverest.io/component: master
       core.openeverest.io/instance: test-seaweedfs

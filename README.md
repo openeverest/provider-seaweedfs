@@ -65,8 +65,8 @@ an MVP: several capabilities are stubbed or not wired yet.
 | Horizontal scaling | ✅ | Per-component `spec.components.*.replicas` (master must be odd) |
 | Vertical scaling (CPU / memory) | ✅ | `spec.components.*.resources` |
 | Version selection | ✅ | `spec.version` / component image from [definition/versions.yaml](definition/versions.yaml) |
-| High availability | ⚠️ | Replica counts are passed through; HA semantics are operator-dependent |
-| Custom configuration | ✅ | Master `masterVolumeSizeLimitMB`; volume `maxVolumeCounts` / `volumeServerDiskCount`; filer `maxMB`; S3 `port` / `domainName` / Ingress |
+| High availability | ⚠️ | Replica counts are passed through. Data copies follow `topology.parameters.replication` (`master.defaultReplication`); empty uses `001` with at least 2 volume servers, otherwise `000` |
+| Custom configuration | ✅ | Master `masterVolumeSizeLimitMB`; topology `replication`; volume `maxVolumeCounts` / `volumeServerDiskCount`; filer `maxMB`; S3 `port` / `domainName` / Ingress |
 | S3 service exposure | ✅ | `spec.components.s3.service.serviceType`: ClusterIP, NodePort, or LoadBalancer |
 | Monitoring | ❌ | Planned |
 | TLS | ✅ | Inter-component gRPC mTLS via `topology.parameters.tls`. Client HTTPS via S3 Ingress TLS (`components.s3.parameters.ingress`) → `externalEndpointURL=https://…`. Native S3 HTTPS on the gateway is not supported by the operator yet ([seaweedfs-operator#411](https://github.com/seaweedfs/seaweedfs-operator/issues/411)) |
