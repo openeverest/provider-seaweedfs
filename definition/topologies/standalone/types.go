@@ -15,7 +15,9 @@ type StandaloneTopologyConfig struct {
 	// Replication is SeaweedFS master.defaultReplication: three digits XYZ.
 	// X is extra copies in other data centers, Y extra copies on other racks
 	// in the same data center, Z extra copies on other volume servers in the
-	// same rack (000, 001, 010, 100, …).
+	// same rack.
+	// Volume servers are not assigned a rack or data center, so X and Y must
+	// be 0, and Z+1 must not exceed the volume server count (000, 001, 002, …).
 	// Empty uses 001 when volume replicas are at least 2, and 000 otherwise.
 	// +optional
 	Replication *string `json:"replication,omitempty"`

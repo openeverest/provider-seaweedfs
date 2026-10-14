@@ -2,6 +2,7 @@ package provider
 
 import (
 	"fmt"
+	"regexp"
 
 	"github.com/AlekSi/pointer"
 	corev1alpha1 "github.com/openeverest/openeverest/v2/api/core/v1alpha1"
@@ -53,13 +54,18 @@ func effectiveReplication(replication *string, volumeServers int32) string {
 	return "000"
 }
 
-// validateReplication matches the operator's bucket placement pattern
-// (^[0-9]{3}$). master.defaultReplication on the Seaweed CR is an unvalidated
-// string; the operator only forwards it as -defaultReplication.
-func validateReplication(replication string) error {
-	if len(replication) != 3 || replication[0] < '0' || replication[0] > '9' ||
-		replication[1] < '0' || replication[1] > '9' || replication[2] < '0' || replication[2] > '9' {
-		return fmt.Errorf("replication %q must be three digits such as 000, 001, or 010", replication)
+var replicationPattern = regexp.MustCompile(`^[0-9]{3}$`)
+
+// validateReplication rejects placements the cluster cannot satisfy, volume servers have no rack/DC set.
+func validateReplication(replication string, volumeServers int32) error {
+	if !replicationPattern.MatchString(replication) {
+		return fmt.Errorf("replication %q must be three digits such as 000, 001, or 002", replication)
+	}
+	if replication[0] != '0' || replication[1] != '0' {
+		return fmt.Errorf("replication %q requires multiple data centers or racks, which are not supported", replication)
+	}
+	if copies := int32(replication[2]-'0') + 1; copies > volumeServers {
+		return fmt.Errorf("replication %q needs at least %d volume servers, got %d", replication, copies, volumeServers)
 	}
 	return nil
 }

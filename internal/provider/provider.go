@@ -159,7 +159,7 @@ func (p *Provider) Validate(c *controller.Context) error {
 			return err
 		}
 	}
-	if err := validateReplication(effectiveReplication(topo.Replication, *volume.Replicas)); err != nil {
+	if err := validateReplication(effectiveReplication(topo.Replication, *volume.Replicas), *volume.Replicas); err != nil {
 		return err
 	}
 

@@ -357,16 +357,31 @@ func TestEffectiveReplication(t *testing.T) {
 }
 
 func TestValidateReplication(t *testing.T) {
-	require.NoError(t, validateReplication("000"))
-	require.NoError(t, validateReplication("001"))
-	require.NoError(t, validateReplication("010"))
-	require.NoError(t, validateReplication("210"))
+	require.NoError(t, validateReplication("000", 1))
+	require.NoError(t, validateReplication("001", 2))
+	require.NoError(t, validateReplication("002", 3))
 
-	err := validateReplication("01")
+	err := validateReplication("010", 2)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not supported")
+
+	err = validateReplication("100", 3)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not supported")
+
+	err = validateReplication("001", 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "needs at least 2 volume servers")
+
+	err = validateReplication("002", 2)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "needs at least 3 volume servers")
+
+	err = validateReplication("01", 1)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must be three digits")
 
-	err = validateReplication("00a")
+	err = validateReplication("00a", 1)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must be three digits")
 }
@@ -920,11 +935,41 @@ func TestValidate(t *testing.T) {
 			},
 		},
 		{
-			name:       "010 is a valid placement",
+			name:       "010 is rejected without rack support",
 			components: validComponents(),
 			topology: &corev1alpha1.TopologySpec{
 				Type:       "standalone",
 				Parameters: &runtime.RawExtension{Raw: []byte(`{"replication":"010"}`)},
+			},
+			expectErr: "not supported",
+		},
+		{
+			name: "001 is rejected with one volume server",
+			components: func() map[string]corev1alpha1.ComponentSpec {
+				c := validComponents()
+				volume := c[common.ComponentVolume]
+				volume.Replicas = pointer.ToInt32(1)
+				c[common.ComponentVolume] = volume
+				return c
+			}(),
+			topology: &corev1alpha1.TopologySpec{
+				Type:       "standalone",
+				Parameters: &runtime.RawExtension{Raw: []byte(`{"replication":"001"}`)},
+			},
+			expectErr: "needs at least 2 volume servers",
+		},
+		{
+			name: "002 is allowed with three volume servers",
+			components: func() map[string]corev1alpha1.ComponentSpec {
+				c := validComponents()
+				volume := c[common.ComponentVolume]
+				volume.Replicas = pointer.ToInt32(3)
+				c[common.ComponentVolume] = volume
+				return c
+			}(),
+			topology: &corev1alpha1.TopologySpec{
+				Type:       "standalone",
+				Parameters: &runtime.RawExtension{Raw: []byte(`{"replication":"002"}`)},
 			},
 		},
 		{
