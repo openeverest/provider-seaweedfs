@@ -95,3 +95,10 @@ metadata:
   name: invalid-tls-issuer-kind
 status:
   phase: Failed
+---
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: invalid-replication-format
+status:
+  phase: Failed

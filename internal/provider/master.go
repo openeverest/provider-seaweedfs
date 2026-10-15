@@ -2,6 +2,7 @@ package provider
 
 import (
 	"fmt"
+	"regexp"
 
 	"github.com/AlekSi/pointer"
 	corev1alpha1 "github.com/openeverest/openeverest/v2/api/core/v1alpha1"
@@ -41,10 +42,39 @@ func validateMasterParameters(spec components.MasterCustomSpec) error {
 	return nil
 }
 
-func buildMasterSpec(comp corev1alpha1.ComponentSpec, masterCustomSpec components.MasterCustomSpec) *seaweedv1.MasterSpec {
+// effectiveReplication returns the placement written to master.defaultReplication.
+// An empty value uses 001 when at least two volume servers are requested, and 000 otherwise.
+func effectiveReplication(replication *string, volumeServers int32) string {
+	if replication != nil && *replication != "" {
+		return *replication
+	}
+	if volumeServers >= 2 {
+		return DefaultReplication
+	}
+	return "000"
+}
+
+var replicationPattern = regexp.MustCompile(`^[0-9]{3}$`)
+
+// validateReplication rejects placements the cluster cannot satisfy, volume servers have no rack/DC set.
+func validateReplication(replication string, volumeServers int32) error {
+	if !replicationPattern.MatchString(replication) {
+		return fmt.Errorf("replication %q must be three digits such as 000, 001, or 002", replication)
+	}
+	if replication[0] != '0' || replication[1] != '0' {
+		return fmt.Errorf("replication %q requires multiple data centers or racks, which are not supported", replication)
+	}
+	if copies := int32(replication[2]-'0') + 1; copies > volumeServers {
+		return fmt.Errorf("replication %q needs at least %d volume servers, got %d", replication, copies, volumeServers)
+	}
+	return nil
+}
+
+func buildMasterSpec(comp corev1alpha1.ComponentSpec, masterCustomSpec components.MasterCustomSpec, replication string) *seaweedv1.MasterSpec {
 	spec := &seaweedv1.MasterSpec{
-		Replicas:          *comp.Replicas,
-		VolumeSizeLimitMB: pointer.ToInt32(DefaultMasterVolumeSizeLimitMB),
+		Replicas:           *comp.Replicas,
+		VolumeSizeLimitMB:  pointer.ToInt32(DefaultMasterVolumeSizeLimitMB),
+		DefaultReplication: pointer.ToString(replication),
 	}
 
 	if masterCustomSpec.MasterVolumeSizeLimitMB != nil {
