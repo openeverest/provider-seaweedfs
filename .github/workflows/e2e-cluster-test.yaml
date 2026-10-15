@@ -1,0 +1,28 @@
+---
+# Real seaweedfs-operator e2e. Heavier than the status-patched integration
+# suites, so it stays off pull requests.
+name: E2E cluster test
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Nightly at 02:00 UTC.
+    - cron: "0 2 * * *"
+
+# Queue rather than cancel: a push and the nightly run share one cluster budget.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test-e2e-cluster:
+    name: e2e cluster
+    uses: ./.github/workflows/integration-test.yaml
+    with:
+      make_target: test-e2e-cluster
+      suite: e2e-cluster
+      deploy_target: deploy-provider-e2e

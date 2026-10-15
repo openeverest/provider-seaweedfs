@@ -1,0 +1,102 @@
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: s3-smoke
+spec:
+  description: |
+    Create a standalone Instance on a real seaweedfs-operator, put and get an
+    S3 object, scale the volume servers from 2 to 1, and read the object again.
+  catch:
+    # kubectl aborts the whole request when one type is unknown, which hid
+    # the Instance dump when the Seaweed CRD was not installed.
+    - script:
+        content: |
+          set +e
+          echo '--- test namespace ---'
+          kubectl -n "$NAMESPACE" get instance,sts,pod,secret,job,svc -o yaml
+          echo '--- seaweed ---'
+          kubectl -n "$NAMESPACE" get seaweed -o yaml
+          echo '--- provider-system ---'
+          kubectl -n provider-system get deploy,pod,job -o wide
+          echo '--- crds ---'
+          kubectl get crd | grep -E 'seaweed|openeverest' || true
+    - podLogs:
+        namespace: provider-system
+        selector: app.kubernetes.io/name=provider-seaweedfs
+        tail: 100
+    - podLogs:
+        namespace: provider-system
+        selector: app.kubernetes.io/name=seaweedfs-operator
+        tail: 100
+  steps:
+    - name: provider-operator-installed
+      timeouts:
+        assert: 30s
+      try:
+        - assert:
+            file: 00-assert.yaml
+
+    - name: create-instance
+      try:
+        - apply:
+            file: 10-create-instance.yaml
+        - assert:
+            file: 10-assert.yaml
+
+    - name: s3-put-get
+      try:
+        - apply:
+            file: 20-s3-put-job.yaml
+        - wait:
+            apiVersion: batch/v1
+            kind: Job
+            name: s3-put
+            timeout: 10m
+            for:
+              condition:
+                name: Complete
+                value: "true"
+
+    - name: scale-volume-down
+      try:
+        - apply:
+            file: 30-scale-volume.yaml
+        - assert:
+            file: 30-assert.yaml
+
+    - name: s3-get-after-scale-down
+      try:
+        - apply:
+            file: 40-s3-get-job.yaml
+        - wait:
+            apiVersion: batch/v1
+            kind: Job
+            name: s3-get
+            timeout: 10m
+            for:
+              condition:
+                name: Complete
+                value: "true"
+
+    - name: delete-instance
+      try:
+        - delete:
+            ref:
+              apiVersion: core.openeverest.io/v1alpha1
+              kind: Instance
+              name: e2e-seaweedfs
+        - wait:
+            apiVersion: seaweed.seaweedfs.com/v1
+            kind: Seaweed
+            name: e2e-seaweedfs
+            timeout: 10m
+            for:
+              deletion: {}
+        - wait:
+            apiVersion: v1
+            kind: Secret
+            name: e2e-seaweedfs-conn
+            timeout: 10m
+            for:
+              deletion: {}

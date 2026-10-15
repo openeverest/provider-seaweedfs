@@ -1,0 +1,16 @@
+# The operator removes the volume pod only after evacuation finishes.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: e2e-seaweedfs-volume
+spec:
+  replicas: 1
+status:
+  replicas: 1
+---
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: e2e-seaweedfs
+status:
+  phase: Ready

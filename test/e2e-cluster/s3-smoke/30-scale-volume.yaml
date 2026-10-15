@@ -1,0 +1,13 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: e2e-seaweedfs
+spec:
+  components:
+    volume:
+      type: seaweedfs
+      replicas: 1
+      parameters:
+        maxVolumeCounts: 32
+      storage:
+        size: 1Gi
