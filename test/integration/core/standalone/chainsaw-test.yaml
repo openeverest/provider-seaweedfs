@@ -6,9 +6,9 @@ metadata:
 spec:
   description: |
     Lifecycle of a standalone Instance: create, provisioning progress, ready
-    with S3 connection details, scale and resize, S3 exposure through
-    LoadBalancer, NodePort and ClusterIP, inter-component TLS with an HTTPS
-    S3 Ingress, and deletion.
+    with S3 connection details, scale and resize, affinity update, S3
+    exposure through LoadBalancer, NodePort and ClusterIP, inter-component
+    TLS with an HTTPS S3 Ingress, and deletion.
   catch:
     - script:
         content: kubectl -n $NAMESPACE get instance,seaweed,service,ingress,pod,secret -o yaml
@@ -88,6 +88,13 @@ spec:
             file: 20-update-cluster.yaml
         - assert:
             file: 20-assert.yaml
+
+    - name: update-affinity
+      try:
+        - apply:
+            file: 21-update-cluster-affinity.yaml
+        - assert:
+            file: 21-assert.yaml
 
     - name: expose-load-balancer
       try:
