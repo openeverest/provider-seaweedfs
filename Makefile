@@ -35,6 +35,10 @@ GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint-$(GOLANGCI_LINT_VERSION)
 CHART_DIR ?= charts/provider-seaweedfs
 SEAWEEDFS_OPERATOR_HELM_REPO ?= https://seaweedfs.github.io/seaweedfs-operator/
 
+# Ref used to find committed changes that still need a copyright header.
+# Matches the CI check (origin/<base>...HEAD) and also includes the local diff.
+COPYRIGHT_BASE ?= origin/main
+
 .PHONY: help
 help: ## Display this help.
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
@@ -48,6 +52,41 @@ run: generate ## Run the provider locally.
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint.
 	$(GOLANGCI_LINT) run
+
+.PHONY: add-copyright
+add-copyright: ## Add copyright headers to changed Go files.
+	@tmp=$$(mktemp); \
+	{ \
+		git diff --name-only --diff-filter=ACM; \
+		git diff --name-only --diff-filter=ACM --cached; \
+		if git rev-parse --verify --quiet $(COPYRIGHT_BASE) >/dev/null; then \
+			git diff --name-only --diff-filter=ACM $(COPYRIGHT_BASE)...HEAD; \
+		else \
+			echo "warning: $(COPYRIGHT_BASE) not found; checking the local diff only" >&2; \
+		fi; \
+	} | grep -E '\.go$$' | sort -u > "$$tmp" || true; \
+	if [ ! -s "$$tmp" ]; then \
+		echo "No changed Go files."; \
+		rm -f "$$tmp"; \
+		exit 0; \
+	fi; \
+	echo "Checking:"; \
+	cat "$$tmp"; \
+	set --; \
+	while IFS= read -r f; do \
+		set -- "$$@" "$$f"; \
+	done < "$$tmp"; \
+	rm -f "$$tmp"; \
+	python3 hack/add_copyright.py "$$@"; \
+	status=$$?; \
+	if [ "$$status" -eq 1 ]; then \
+		echo "Copyright headers updated."; \
+		exit 0; \
+	fi; \
+	if [ "$$status" -eq 0 ]; then \
+		echo "Copyright headers already present."; \
+	fi; \
+	exit "$$status"
 
 .PHONY: test
 test: ## Run unit tests.

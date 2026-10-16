@@ -15,6 +15,6 @@ maintainers:
   - name: OpenEverest Contributors
 dependencies:
   - name: seaweedfs-operator
-    version: "0.1.41"
+    version: "0.1.43"
     repository: https://seaweedfs.github.io/seaweedfs-operator/
     condition: seaweedfs-operator.enabled

@@ -52,7 +52,58 @@ It never manages pods directly — all lifecycle work is delegated to the operat
 
 | provider-seaweedfs | OpenEverest | seaweedfs-operator | Kubernetes |
 |---|---|---|---|
-| `0.1.x` (MVP) | `2.0.0-dev.x` | `0.1.41` | `1.30` – `1.34` |
+| `0.1.x` (MVP) | `2.0.0-dev.x` | chart `0.1.43` (image `1.0.40`) | `1.30` – `1.34` |
+
+The chart dependency installs `chrislusf/seaweedfs-operator:1.0.40`.
+The provider binary still compiles against the Go module pin in
+[go.mod](go.mod) (`v0.0.0-20260904022014-736537efa750`, commit time
+2026-09-04). That pin was not moved with the chart. The fields this provider
+writes on `Seaweed` are already in that module.
+
+Chart `0.1.42` (image `1.0.39`) changes admin startup and ServiceMonitor
+scraping, plus dependencies. This provider does not set `spec.admin` and does
+not enable the operator ServiceMonitor, so that release does not change
+Instance behavior.
+
+Chart `0.1.43` (image `1.0.40`) does. The GitHub release notes for `1.0.40`
+only mention a SeaweedFS library bump. The tag also contains
+[seaweedfs-operator#394](https://github.com/seaweedfs/seaweedfs-operator/pull/394)
+(in-place PVC growth) and
+[#391](https://github.com/seaweedfs/seaweedfs-operator/pull/391)
+(`[grpc.s3]` in `security.toml`, and the S3 Service DNS name on the server
+certificate). It also changes how `S3Credentials` adopts Secrets; this
+provider does not reconcile that CRD.
+
+### Minimum operator version for IAM, bucket, and backup CRDs
+
+`S3Identity`, `S3Credentials`, `S3Policy`, `S3PolicyBinding`, `Bucket`,
+`BucketLifecyclePolicy`, `SeaweedBackup`, and `SeaweedRestore` are installed by
+the seaweedfs-operator chart. This provider does not reconcile any of them.
+The versions below are the first published chart whose CRD manifest contains
+the kind, and the operator image (`appVersion`) that chart installs. Checked
+against the Helm index at <https://seaweedfs.github.io/seaweedfs-operator/>
+on 2026-10-16.
+
+| CRDs | First chart | Operator image |
+|---|---|---|
+| `Bucket` | `0.1.17` | `1.0.14` |
+| `S3Identity`, `S3Credentials`, `S3Policy`, `S3PolicyBinding` | `0.1.24` | `1.0.21` |
+| `BucketLifecyclePolicy`, `SeaweedBackup`, `SeaweedRestore` | `0.1.30` | `1.0.27` |
+
+`Bucket` is absent from chart `0.1.16` (image `1.0.13`). The IAM kinds landed in
+[seaweedfs-operator#255](https://github.com/seaweedfs/seaweedfs-operator/pull/255),
+which is in image `1.0.21` and chart `0.1.24` (chart `0.1.23` / image `1.0.20`
+does not have them). `SeaweedBackup` / `SeaweedRestore`
+([#302](https://github.com/seaweedfs/seaweedfs-operator/pull/302), merged
+2026-06-17) and `BucketLifecyclePolicy`
+([#304](https://github.com/seaweedfs/seaweedfs-operator/pull/304), merged
+2026-06-21) both landed after image `1.0.26` (published 2026-06-15, chart
+`0.1.29`) and are in chart `0.1.30` / image `1.0.27` (published 2026-06-22).
+The `1.0.27` GitHub release notes only mention a SeaweedFS library bump; the
+CRDs are in that chart's manifest anyway.
+
+**Minimum for the full set is chart `0.1.30` / operator image `1.0.27`.**
+The dependency above (`0.1.43` / `1.0.40`) is past that floor.
 
 ## Capabilities
 
@@ -63,12 +114,12 @@ an MVP: several capabilities are stubbed or not wired yet.
 |---|---|---|
 | Provisioning | ✅ | Creates a `Seaweed` CR with master, volume, filer, and S3 components |
 | Horizontal scaling | ✅ | Per-component `spec.components.*.replicas` (master must be odd) |
-| Vertical scaling (CPU / memory) | ✅ | `spec.components.*.resources` |
+| Vertical scaling (CPU / memory) | ✅ | `spec.components.*.resources` (requests and limits) is copied onto master, volume, filer, and S3 |
 | Version selection | ✅ | `spec.version` / component image from [definition/versions.yaml](definition/versions.yaml) |
-| High availability | ⚠️ | Replica counts are passed through. Data copies follow `topology.parameters.replication` (`master.defaultReplication`); empty uses `001` with at least 2 volume servers, otherwise `000` |
-| Custom configuration | ✅ | Master `masterVolumeSizeLimitMB`; topology `replication`; volume `maxVolumeCounts` / `volumeServerDiskCount`; filer `maxMB`; S3 `port` / `domainName` / Ingress |
-| S3 service exposure | ✅ | `spec.components.s3.service.serviceType`: ClusterIP, NodePort, or LoadBalancer |
-| Monitoring | ❌ | Planned |
+| High availability | ⚠️ | Replica counts are passed through. Data copies follow `topology.parameters.replication` (`master.defaultReplication`); empty uses `001` with at least 2 volume servers, otherwise `000`. Placements that need another data center or rack are rejected |
+| Custom configuration | ✅ | Master `masterVolumeSizeLimitMB`; topology `replication` and `volumeServerDiskCount`; volume `maxVolumeCounts`; filer `maxMB`; S3 `port` / `domainName` / Ingress; JWT signing via `topology.parameters.securityConfig` |
+| S3 service exposure | ✅ | `spec.components.s3.service.serviceType`: ClusterIP, NodePort, or LoadBalancer. `loadBalancerService.sourceRanges` is rejected. Only S3 can be exposed |
+| Monitoring | ❌ | Not wired through the Instance API. The operator chart can enable `serviceMonitor` on its own (`enabled: false` by default); this provider does not set it |
 | TLS | ✅ | Inter-component gRPC mTLS via `topology.parameters.tls`. Client HTTPS via S3 Ingress TLS (`components.s3.parameters.ingress`) → `externalEndpointURL=https://…`. Native S3 HTTPS on the gateway is not supported by the operator yet ([seaweedfs-operator#411](https://github.com/seaweedfs/seaweedfs-operator/issues/411)) |
 | Status / readiness | ✅ | Maps Seaweed Ready condition; waits for TLS Secret / LoadBalancer / Ingress when configured |
 | Connection details | ✅ | Publishes in-cluster S3 endpoint on Ready; NodePort / LoadBalancer / Ingress add `externalEndpointURL` |
@@ -79,9 +130,9 @@ Stateful workloads additionally report:
 | Capability | Status | Notes |
 |---|---|---|
 | Persistent storage | ✅ | Volume/filer `storage.size` required; optional master `storage.size`. Optional per-component `storage.storageClass` (UI picker for master/volume/filer) |
-| Storage expansion | ❌ | Planned |
-| Backups | ❌ | Not in scope for MVP |
-| Restore | ❌ | Not in scope for MVP |
+| Storage expansion | ⚠️ | Increasing `storage.size` is written onto the Seaweed spec. Image `1.0.40` grows existing master, volume, and filer PVCs in place when the StorageClass has `allowVolumeExpansion: true` and only the size changed ([seaweedfs-operator#394](https://github.com/seaweedfs/seaweedfs-operator/pull/394)). Shrinks are ignored. A class that disallows expansion leaves the PVC unchanged and emits `VolumeExpansionNotSupported`; this provider does not surface that event |
+| Backups | ❌ | Not implemented. Operator chart `0.1.30` and later install a `SeaweedBackup` CRD; this provider does not create it |
+| Restore | ❌ | Not implemented. `SeaweedRestore` ships in the same chart; this provider does not create it |
 
 ## Installation
 
@@ -267,12 +318,17 @@ Source of truth: [definition/versions.yaml](definition/versions.yaml).
   (`kubectl get provider provider-seaweedfs -o yaml`). The API server and the UI
   validate user input against these schemas.
 
-MVP sync maps replica counts, resources, volume/filer/master persistence, S3
-service exposure and Ingress, component parameters (`masterVolumeSizeLimitMB`,
-`maxVolumeCounts`, `maxMB`, `port`, `domainName`), and optional TLS
-(`topology.parameters.tls`) / JWT signing (`topology.parameters.securityConfig`)
-onto the upstream `Seaweed` CR. Affinity and further SeaweedFS options are not
-applied yet.
+Sync writes replica counts, CPU and memory resources, volume/filer/master
+persistence (including storage class), S3 service type and Ingress, component
+parameters (`masterVolumeSizeLimitMB`, `maxVolumeCounts`, `maxMB`, `port`,
+`domainName`), topology `replication` and `volumeServerDiskCount`, optional
+inter-component TLS (`topology.parameters.tls`), JWT signing
+(`topology.parameters.securityConfig`), and pod scheduling (affinity,
+nodeSelector, tolerations, schedulerName) onto the upstream `Seaweed` CR.
+`topologySpreadConstraints` and load-balancer source ranges are rejected.
+A larger `storage.size` is written through and operator image `1.0.40` may
+grow the PVCs (see the capabilities table). Shrinks, monitoring, backups, and
+restores are not applied.
 
 ## Development
 
