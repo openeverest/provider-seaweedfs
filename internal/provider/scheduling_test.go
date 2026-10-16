@@ -37,14 +37,18 @@ func withSchedulingPolicy(component string, policy *commonv1alpha1.SchedulingPol
 }
 
 func TestSyncScheduling(t *testing.T) {
-	t.Run("master and volume require separate nodes by default", func(t *testing.T) {
+	t.Run("master, volume and filer prefer separate nodes by default", func(t *testing.T) {
 		instance := newSyncInstance(validComponents())
 		_, sw := syncSeaweed(t, newSyncClient(t, instance), instance)
 
-		assert.Equal(t, requiredHostnameAntiAffinity(podLabels(instance.Name, common.ComponentMaster)), sw.Spec.Master.Affinity)
-		assert.Equal(t, requiredHostnameAntiAffinity(podLabels(instance.Name, common.ComponentVolume)), sw.Spec.Volume.Affinity)
-		assert.Nil(t, sw.Spec.Filer.Affinity)
+		assert.Equal(t, preferredHostnameAntiAffinity(podLabels(instance.Name, common.ComponentMaster)), sw.Spec.Master.Affinity)
+		assert.Equal(t, preferredHostnameAntiAffinity(podLabels(instance.Name, common.ComponentVolume)), sw.Spec.Volume.Affinity)
+		assert.Equal(t, preferredHostnameAntiAffinity(podLabels(instance.Name, common.ComponentFiler)), sw.Spec.Filer.Affinity)
 		assert.Nil(t, sw.Spec.S3.Affinity)
+		assert.Nil(t, sw.Spec.Affinity)
+		assert.Nil(t, sw.Spec.NodeSelector)
+		assert.Empty(t, sw.Spec.Tolerations)
+		assert.Empty(t, sw.Spec.SchedulerName)
 	})
 
 	t.Run("policy is passed through", func(t *testing.T) {
