@@ -1,0 +1,36 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: e2e-seaweedfs
+spec:
+  providerRef:
+    name: provider-seaweedfs
+  topology:
+    type: standalone
+    # 000 keeps each volume on one server, so a 2 -> 1 scale-down has a
+    # place to move it. The default 001 needs two volume servers and the
+    # operator will not remove a server that still holds such a volume.
+    parameters:
+      replication: "000"
+  components:
+    master:
+      type: seaweedfs
+      replicas: 1
+    volume:
+      type: seaweedfs
+      replicas: 2
+      # The master grows about seven volumes per collection. The default
+      # collection plus the S3 bucket fill a server whose max is 8, and
+      # evacuation then has no free slot to move into.
+      parameters:
+        maxVolumeCounts: 32
+      storage:
+        size: 1Gi
+    filer:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 1Gi
+    s3:
+      type: seaweedfs
+      replicas: 1

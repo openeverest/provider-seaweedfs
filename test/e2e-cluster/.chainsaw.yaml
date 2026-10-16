@@ -1,0 +1,22 @@
+---
+apiVersion: chainsaw.kyverno.io/v1alpha2
+kind: Configuration
+metadata:
+  name: e2e-cluster
+spec:
+  # A real SeaweedFS cluster is slower than the status-patched integration
+  # suite. The operator's own evacuation e2e waits 7m for Ready and 6m for
+  # the volume StatefulSet to shrink.
+  timeouts:
+    apply: 30s
+    assert: 10m
+    delete: 10m
+    error: 30s
+    exec: 10m
+    cleanup: 10m
+  cleanup:
+    skipDelete: false
+  report:
+    format: XML
+    name: chainsaw-report
+    path: /tmp

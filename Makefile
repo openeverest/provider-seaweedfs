@@ -141,6 +141,20 @@ test-integration-core-standalone: ## Run core standalone integration tests.
 test-integration-core-validation: ## Run core validation integration tests.
 	. ./test/vars.sh && chainsaw test --config ./test/integration/.chainsaw.yaml ./test/integration/core/validation
 
+.PHONY: test-e2e-cluster
+test-e2e-cluster: ## Run the e2e suite against a real seaweedfs-operator.
+	@kubectl get crd seaweeds.seaweed.seaweedfs.com >/dev/null 2>&1 || { \
+		echo "Seaweed CRD is missing in context '$$(kubectl config current-context)'."; \
+		echo "Install the provider first: make deploy-provider-e2e"; \
+		exit 1; \
+	}
+	@kubectl -n provider-system get deploy/provider-seaweedfs deploy/seaweedfs-operator >/dev/null 2>&1 || { \
+		echo "provider-seaweedfs is not installed in provider-system (context '$$(kubectl config current-context)')."; \
+		echo "Install the provider first: make deploy-provider-e2e"; \
+		exit 1; \
+	}
+	. ./test/vars.sh && chainsaw test --config ./test/e2e-cluster/.chainsaw.yaml ./test/e2e-cluster
+
 .PHONY: load-image
 load-image: ## Import the provider image (IMG) into the k3d cluster.
 	k3d image import ${IMG} -c ${K3D_CLUSTER_NAME}
@@ -173,6 +187,19 @@ deploy-provider-ci: helm-deps ## Deploy the provider via Helm for CI (IMG must a
 		--set image.pullPolicy=Never \
 		--set seaweedfs-operator.replicaCount=0 \
 		--set seaweedfs-operator.webhook.enabled=false \
+		--wait --timeout 2m
+
+# Real operator: one replica, webhook left at the chart default. The CI target
+# disables the webhook only because a scaled-to-zero operator has no endpoints.
+.PHONY: deploy-provider-e2e
+deploy-provider-e2e: helm-deps ## Deploy the provider via Helm with seaweedfs-operator replicaCount=1.
+	helm upgrade --install provider-seaweedfs $(CHART_DIR) \
+		--create-namespace \
+		--namespace provider-system \
+		--set image.repository=$(_IMG_REPO) \
+		--set image.tag=$(_IMG_TAG) \
+		--set image.pullPolicy=Never \
+		--set seaweedfs-operator.replicaCount=1 \
 		--wait --timeout 2m
 
 ##@ Local Development Cluster

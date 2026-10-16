@@ -1,0 +1,44 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: s3-get
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: aws
+          image: amazon/aws-cli:2.38.0
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              mkdir -p "$HOME/.aws"
+              cat > "$HOME/.aws/config" <<'EOF'
+              [default]
+              s3 =
+                  addressing_style = path
+              EOF
+              printf '%s' 'e2e-smoke' > /tmp/payload
+              aws s3 cp s3://e2e-smoke/obj /tmp/downloaded --endpoint-url "$ENDPOINT" --no-sign-request
+              expected=$(sha256sum /tmp/payload | awk '{print $1}')
+              actual=$(sha256sum /tmp/downloaded | awk '{print $1}')
+              test "$expected" = "$actual"
+          env:
+            - name: HOME
+              value: /tmp
+            - name: AWS_EC2_METADATA_DISABLED
+              value: "true"
+            - name: AWS_DEFAULT_REGION
+              valueFrom:
+                secretKeyRef:
+                  name: e2e-seaweedfs-conn
+                  key: region
+            - name: ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: e2e-seaweedfs-conn
+                  key: endpointURL
