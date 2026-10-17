@@ -1,3 +1,17 @@
+// Copyright (C) 2026 The OpenEverest Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package provider
 
 import (
@@ -47,6 +61,11 @@ func New() *Provider {
 			},
 			WatchConfigs: []controller.WatchConfig{
 				controller.WatchOwned(&seaweedv1.Seaweed{}),
+				// Re-apply the S3 identities Secret if it is edited or deleted.
+				controller.WatchOwned(&corev1.Secret{},
+					predicate.NewPredicateFuncs(func(o client.Object) bool {
+						return strings.HasSuffix(o.GetName(), s3ConfigSecretSuffix)
+					})),
 				// The operator does not touch the Seaweed CR when LB ingress or NodePort
 				// changes, so watch the S3 Service directly to refresh status.
 				controller.WatchExternal(&corev1.Service{},
@@ -209,6 +228,11 @@ func (p *Provider) Sync(c *controller.Context) error {
 		return err
 	}
 
+	s3ConfigChecksum, err := syncS3ConfigSecret(c)
+	if err != nil {
+		return err
+	}
+
 	sw := &seaweedv1.Seaweed{
 		ObjectMeta: c.ObjectMeta(c.Name()),
 		Spec: seaweedv1.SeaweedSpec{
@@ -226,6 +250,7 @@ func (p *Provider) Sync(c *controller.Context) error {
 	if topo.VolumeServerDiskCount != nil {
 		sw.Spec.VolumeServerDiskCount = topo.VolumeServerDiskCount
 	}
+	applyS3Auth(sw.Spec.S3, c.Name(), s3ConfigChecksum)
 	labelPods(c, sw)
 	applyScheduling(c, sw)
 
@@ -322,6 +347,14 @@ func (p *Provider) Status(c *controller.Context) (controller.Status, error) {
 				return controller.Provisioning("Waiting for S3 Ingress"), nil
 			}
 
+			creds, err := readS3Credentials(c)
+			if err != nil {
+				return controller.Status{}, err
+			}
+			if !creds.complete() {
+				return controller.Provisioning("Waiting for S3 credentials Secret " + s3ConfigSecretName(c.Name())), nil
+			}
+
 			var s3Params components.S3CustomSpec
 			if s3Comp, ok := c.Instance().Spec.Components[common.ComponentS3]; ok {
 				c.TryDecodeComponentParameters(s3Comp, &s3Params)
@@ -330,7 +363,7 @@ func (p *Provider) Status(c *controller.Context) (controller.Status, error) {
 			if err != nil {
 				return controller.Status{}, err
 			}
-			return controller.ReadyWithConnectionDetails(details), nil
+			return controller.ReadyWithConnectionDetails(withS3Credentials(details, creds)), nil
 		}
 		return controller.Provisioning(cond.Message), nil
 	}
