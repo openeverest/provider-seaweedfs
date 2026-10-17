@@ -1,3 +1,17 @@
+// Copyright (C) 2026 The OpenEverest Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package provider
 
 import (
@@ -7,6 +21,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -44,9 +59,11 @@ func New() *Provider {
 			SchemeFuncs: []func(*runtime.Scheme) error{
 				seaweedv1.AddToScheme,
 				networkingv1.AddToScheme,
+				policyv1.AddToScheme,
 			},
 			WatchConfigs: []controller.WatchConfig{
 				controller.WatchOwned(&seaweedv1.Seaweed{}),
+				controller.WatchOwned(&policyv1.PodDisruptionBudget{}),
 				// The operator does not touch the Seaweed CR when LB ingress or NodePort
 				// changes, so watch the S3 Service directly to refresh status.
 				controller.WatchExternal(&corev1.Service{},
@@ -229,7 +246,10 @@ func (p *Provider) Sync(c *controller.Context) error {
 	labelPods(c, sw)
 	applyScheduling(c, sw)
 
-	return c.Apply(sw)
+	if err := c.Apply(sw); err != nil {
+		return err
+	}
+	return syncPodDisruptionBudgets(c)
 }
 
 // labelPods labels every component's pods so the runtime counts them into
