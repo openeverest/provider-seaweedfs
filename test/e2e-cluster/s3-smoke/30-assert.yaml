@@ -14,3 +14,20 @@ metadata:
   name: e2e-seaweedfs
 status:
   phase: Ready
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: e2e-seaweedfs-volume-pdb
+  (ownerReferences[?kind == 'Instance' && name == 'e2e-seaweedfs'] | length(@)): 1
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      core.openeverest.io/component: volume
+      core.openeverest.io/instance: e2e-seaweedfs
+      core.openeverest.io/provider: provider-seaweedfs
+status:
+  expectedPods: 1
+  currentHealthy: 1
+  disruptionsAllowed: 1

@@ -219,3 +219,9 @@ spec:
             name: test-seaweedfs-conn
             for:
               deletion: {}
+        - wait:
+            apiVersion: policy/v1
+            kind: PodDisruptionBudget
+            name: test-seaweedfs-master-pdb
+            for:
+              deletion: {}
