@@ -136,8 +136,22 @@ Stateful workloads additionally report:
 
 ## Installation
 
-Install from the chart in this repository (OCI chart publish is not set up for MVP yet;
-container images are published to GHCR on tagged releases):
+The Helm chart and container image are published to GHCR on every tagged
+[release](https://github.com/openeverest/provider-seaweedfs/releases). Pick a version
+from the releases page:
+
+```bash
+helm install provider-seaweedfs \
+  oci://ghcr.io/openeverest/charts/provider-seaweedfs \
+  --version <version> \
+  --namespace everest-system \
+  --create-namespace
+```
+
+- The `seaweedfs-operator` (and its CRDs) is bundled as a chart dependency and is
+  installed automatically when `seaweedfs-operator.enabled` is `true` (the default).
+
+To run unreleased changes from `main`, install from the chart in this repository instead:
 
 ```bash
 make helm-deps
@@ -146,13 +160,13 @@ helm install provider-seaweedfs charts/provider-seaweedfs \
   --create-namespace
 ```
 
-- The `seaweedfs-operator` (and its CRDs) is bundled as a chart dependency and is
-  installed automatically when `seaweedfs-operator.enabled` is `true` (the default).
-
 Upgrade and uninstall:
 
 ```bash
-helm upgrade provider-seaweedfs charts/provider-seaweedfs --namespace everest-system
+helm upgrade provider-seaweedfs \
+  oci://ghcr.io/openeverest/charts/provider-seaweedfs \
+  --version <version> \
+  --namespace everest-system
 helm uninstall provider-seaweedfs --namespace everest-system
 ```
 
