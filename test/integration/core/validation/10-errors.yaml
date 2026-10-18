@@ -73,3 +73,8 @@ apiVersion: seaweed.seaweedfs.com/v1
 kind: Seaweed
 metadata:
   name: invalid-replication-format
+---
+apiVersion: seaweed.seaweedfs.com/v1
+kind: Seaweed
+metadata:
+  name: invalid-filers-on-4-47

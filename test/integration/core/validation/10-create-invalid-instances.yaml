@@ -411,3 +411,30 @@ spec:
     s3:
       type: seaweedfs
       replicas: 1
+---
+# More than one filer needs SeaweedFS 4.48 or newer.
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: invalid-filers-on-4-47
+spec:
+  providerRef:
+    name: provider-seaweedfs
+  components:
+    master:
+      type: seaweedfs
+      image: chrislusf/seaweedfs:4.47
+      replicas: 1
+    volume:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 1Gi
+    filer:
+      type: seaweedfs
+      replicas: 2
+      storage:
+        size: 1Gi
+    s3:
+      type: seaweedfs
+      replicas: 1

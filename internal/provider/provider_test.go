@@ -1,3 +1,17 @@
+// Copyright (C) 2026 The OpenEverest Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package provider
 
 import (
@@ -750,6 +764,17 @@ func validComponents() map[string]corev1alpha1.ComponentSpec {
 	}
 }
 
+func withFilers(image string, filers int32) map[string]corev1alpha1.ComponentSpec {
+	c := validComponents()
+	master := c[common.ComponentMaster]
+	master.Image = image
+	c[common.ComponentMaster] = master
+	filer := c[common.ComponentFiler]
+	filer.Replicas = pointer.ToInt32(filers)
+	c[common.ComponentFiler] = filer
+	return c
+}
+
 func TestValidate(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -760,6 +785,23 @@ func TestValidate(t *testing.T) {
 		{
 			name:       "valid",
 			components: validComponents(),
+		},
+		{
+			name:       "two filers on 4.47 are rejected",
+			components: withFilers("chrislusf/seaweedfs:4.47", 2),
+			expectErr:  `"filer" component: 2 replicas require SeaweedFS 4.48 or newer, got 4.47`,
+		},
+		{
+			name:       "one filer on 4.47 is allowed",
+			components: withFilers("chrislusf/seaweedfs:4.47", 1),
+		},
+		{
+			name:       "two filers on 4.48 are allowed",
+			components: withFilers("chrislusf/seaweedfs:4.48", 2),
+		},
+		{
+			name:       "two filers on an image without a release tag are allowed",
+			components: withFilers("chrislusf/seaweedfs:latest", 2),
 		},
 		{
 			name: "missing master",
