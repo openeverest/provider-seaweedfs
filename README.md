@@ -117,6 +117,7 @@ an MVP: several capabilities are stubbed or not wired yet.
 | Vertical scaling (CPU / memory) | ✅ | `spec.components.*.resources` (requests and limits) is copied onto master, volume, filer, and S3 |
 | Version selection | ✅ | `spec.version` / component image from [definition/versions.yaml](definition/versions.yaml) |
 | High availability | ⚠️ | Replica counts are passed through. Data copies follow `topology.parameters.replication` (`master.defaultReplication`); empty uses `001` with at least 2 volume servers, otherwise `000`. Placements that need another data center or rack are rejected |
+| Disruption budgets | ✅ | One `PodDisruptionBudget` per component (`<name>-<component>-pdb`) with `maxUnavailable: 1`, so node drains and cluster upgrades evict one master, volume, filer or S3 pod at a time. This keeps master quorum and never blocks a drain outright, even for single-replica components |
 | Custom configuration | ✅ | Master `masterVolumeSizeLimitMB`; topology `replication` and `volumeServerDiskCount`; volume `maxVolumeCounts`; filer `maxMB`; S3 `port` / `domainName` / Ingress; JWT signing via `topology.parameters.securityConfig` |
 | S3 service exposure | ✅ | `spec.components.s3.service.serviceType`: ClusterIP, NodePort, or LoadBalancer. `loadBalancerService.sourceRanges` is rejected. Only S3 can be exposed |
 | Monitoring | ❌ | Not wired through the Instance API. The operator chart can enable `serviceMonitor` on its own (`enabled: false` by default); this provider does not set it |
