@@ -1,0 +1,102 @@
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: filer-ha
+spec:
+  description: |
+    Two filers must converge after the sequence that lost metadata before
+    SeaweedFS 4.48: with one filer scaled away, the remaining filer restarts
+    gracefully while S3 writes are flowing, then the second filer returns.
+    Both filers must list the same objects.
+  catch:
+    - script:
+        content: |
+          set +e
+          kubectl -n "$NAMESPACE" get instance,sts,pod,job -o wide
+          echo '--- writer ---'; kubectl -n "$NAMESPACE" logs job/writer --tail=20
+          echo '--- compare ---'; kubectl -n "$NAMESPACE" logs job/compare --tail=60
+    - podLogs:
+        namespace: provider-system
+        selector: app.kubernetes.io/name=provider-seaweedfs
+        tail: 50
+  steps:
+    - name: provider-operator-installed
+      timeouts:
+        assert: 30s
+      try:
+        - assert:
+            file: 00-assert.yaml
+
+    - name: create-instance-with-two-filers
+      try:
+        - apply:
+            file: 10-create-instance.yaml
+        - assert:
+            file: 10-assert.yaml
+
+    - name: scale-filers-to-one
+      try:
+        - apply:
+            file: 20-scale-filer-1.yaml
+        - assert:
+            file: 20-assert.yaml
+
+    - name: restart-filer-during-writes
+      try:
+        - apply:
+            file: 30-writer-job.yaml
+        # Let writes flow, then restart the only filer the way a node drain
+        # or rollout does (SIGTERM, graceful shutdown).
+        - script:
+            timeout: 5m
+            content: |
+              set -e
+              sleep 20
+              kubectl -n "$NAMESPACE" delete pod e2e-filer-ha-filer-0
+              kubectl -n "$NAMESPACE" wait pod/e2e-filer-ha-filer-0 --for=condition=Ready --timeout=4m
+        - wait:
+            apiVersion: batch/v1
+            kind: Job
+            name: writer
+            timeout: 5m
+            for:
+              condition:
+                name: Complete
+                value: "true"
+
+    - name: scale-filers-back-to-two
+      try:
+        - apply:
+            file: 40-scale-filer-2.yaml
+        - assert:
+            file: 40-assert.yaml
+
+    - name: filers-converge
+      try:
+        - apply:
+            file: 50-compare-job.yaml
+        - wait:
+            apiVersion: batch/v1
+            kind: Job
+            name: compare
+            timeout: 6m
+            for:
+              condition:
+                name: Complete
+                value: "true"
+
+    - name: delete-instance
+      try:
+        - delete:
+            ref:
+              apiVersion: core.openeverest.io/v1alpha1
+              kind: Instance
+              name: e2e-filer-ha
+        - wait:
+            apiVersion: seaweed.seaweedfs.com/v1
+            kind: Seaweed
+            name: e2e-filer-ha
+            timeout: 10m
+            for:
+              deletion: {}

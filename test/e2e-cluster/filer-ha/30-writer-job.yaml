@@ -1,0 +1,64 @@
+# Writes a new object every ~0.1s for 60s. Some writes fail while the only
+# filer restarts; that is expected, the test checks the acknowledged ones.
+# The writes acknowledged during the filer's graceful shutdown are the ones
+# SeaweedFS < 4.48 lost, so the rate must be high enough to land several there.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: writer
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: curl
+          image: curlimages/curl:8.11.1
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -u
+              # Sign requests when the connection Secret carries credentials.
+              s3() {
+                if [ -n "${AWS_ACCESS_KEY_ID:-}" ]; then
+                  curl -s -o /dev/null -m 5 -w '%{http_code}' \
+                    --aws-sigv4 "aws:amz:${AWS_DEFAULT_REGION}:s3" \
+                    --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" "$@"
+                else
+                  curl -s -o /dev/null -m 5 -w '%{http_code}' "$@"
+                fi
+              }
+              until [ "$(s3 -X PUT "$ENDPOINT/filer-ha")" = 200 ] || [ "$(s3 "$ENDPOINT/filer-ha")" = 200 ]; do sleep 2; done
+              i=0; ok=0; end=$(($(date +%s) + 60))
+              while [ "$(date +%s)" -lt "$end" ]; do
+                i=$((i + 1))
+                [ "$(s3 -X PUT --data "v$i" "$ENDPOINT/filer-ha/k$i")" = 200 ] && ok=$((ok + 1))
+                sleep 0.1
+              done
+              echo "attempted=$i acknowledged=$ok"
+              test "$ok" -gt 0
+          env:
+            - name: AWS_DEFAULT_REGION
+              valueFrom:
+                secretKeyRef:
+                  name: e2e-filer-ha-conn
+                  key: region
+            - name: ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: e2e-filer-ha-conn
+                  key: endpointURL
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: e2e-filer-ha-conn
+                  key: AWS_ACCESS_KEY_ID
+                  optional: true
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: e2e-filer-ha-conn
+                  key: AWS_SECRET_ACCESS_KEY
+                  optional: true

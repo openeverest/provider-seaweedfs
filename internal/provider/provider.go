@@ -1,3 +1,17 @@
+// Copyright (C) 2026 The OpenEverest Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package provider
 
 import (
@@ -118,6 +132,12 @@ func (p *Provider) Validate(c *controller.Context) error {
 	filer, isFilerPresent := c.Instance().Spec.Components[common.ComponentFiler]
 	if err := validateFiler(filer, isFilerPresent); err != nil {
 		return err
+	}
+	// An unresolvable image is reported by Sync; only a known release is checked.
+	if image, err := resolveImage(c, common.ComponentMaster, master); err == nil {
+		if err := validateFilerVersion(image, *filer.Replicas); err != nil {
+			return err
+		}
 	}
 
 	s3, isS3Present := c.Instance().Spec.Components[common.ComponentS3]

@@ -116,7 +116,7 @@ an MVP: several capabilities are stubbed or not wired yet.
 | Horizontal scaling | ✅ | Per-component `spec.components.*.replicas` (master must be odd) |
 | Vertical scaling (CPU / memory) | ✅ | `spec.components.*.resources` (requests and limits) is copied onto master, volume, filer, and S3 |
 | Version selection | ✅ | `spec.version` / component image from [definition/versions.yaml](definition/versions.yaml) |
-| High availability | ⚠️ | Replica counts are passed through. Data copies follow `topology.parameters.replication` (`master.defaultReplication`); empty uses `001` with at least 2 volume servers, otherwise `000`. Placements that need another data center or rack are rejected |
+| High availability | ⚠️ | Replica counts are passed through. Data copies follow `topology.parameters.replication` (`master.defaultReplication`); empty uses `001` with at least 2 volume servers, otherwise `000`. Placements that need another data center or rack are rejected. Two filers by default so S3 survives a filer restart or node failure, see [Filer high availability](#filer-high-availability) |
 | Custom configuration | ✅ | Master `masterVolumeSizeLimitMB`; topology `replication` and `volumeServerDiskCount`; volume `maxVolumeCounts`; filer `maxMB`; S3 `port` / `domainName` / Ingress; JWT signing via `topology.parameters.securityConfig` |
 | S3 service exposure | ✅ | `spec.components.s3.service.serviceType`: ClusterIP, NodePort, or LoadBalancer. `loadBalancerService.sourceRanges` is rejected. Only S3 can be exposed |
 | Monitoring | ❌ | Not wired through the Instance API. The operator chart can enable `serviceMonitor` on its own (`enabled: false` by default); this provider does not set it |
@@ -193,8 +193,8 @@ spec:
   components:
     master:
       type: seaweedfs
-      version: "4.47"
-      image: chrislusf/seaweedfs:4.47
+      version: "4.48"
+      image: chrislusf/seaweedfs:4.48
       replicas: 1
     volume:
       type: seaweedfs
@@ -320,9 +320,43 @@ kubectl get seaweed -A
 
 | Version bundle | Default | seaweedfs |
 |---|---|---|
-| `4.47` | ✅ | `4.47` (`chrislusf/seaweedfs:4.47`) |
+| `4.48` | ✅ | `4.48` (`chrislusf/seaweedfs:4.48`) |
+| `4.47` | | `4.47` (`chrislusf/seaweedfs:4.47`). One filer only, see [Filer high availability](#filer-high-availability) |
 
 Source of truth: [definition/versions.yaml](definition/versions.yaml).
+
+## Filer high availability
+
+The filer holds the metadata for every object, and the S3 gateway cannot serve
+any request without it, so the standalone topology runs **two filers by
+default**. Each filer keeps the full metadata in its own embedded store (leveldb
+on its own volume) and they replicate every change to each other:
+
+- Filers find each other through the master. A new or returning filer copies
+  the existing metadata from its peers, then follows their changes.
+- S3 gateways discover all filers from the master and route each key to the
+  same owner filer, so a write is visible to the next read and listing through
+  any gateway.
+- One `PodDisruptionBudget` per component lets drains take down one filer at a
+  time.
+
+Measured on a 4-node k3d cluster under continuous S3 traffic (PUT, GET and LIST
+of a new object every 0.25s):
+
+| Event | 1 filer | 2 filers |
+|---|---|---|
+| Filer pod restarted (drain, rollout) | All S3 requests fail for ~20s | Reads keep working; some writes stall for up to ~15s |
+| Node hosting a filer stops | S3 down until the node returns or the stuck pod is force-deleted (expected: Kubernetes does not replace StatefulSet pods from an unreachable node; not timed) | One request timed out; the other filer took over in ~10s |
+| Write through one gateway, read through another | — | 500 of 500 consistent |
+
+More than one filer requires SeaweedFS **4.48 or newer**, and the provider
+rejects it on older releases. Before 4.48 a restarting filer dropped up to a
+minute of changes from its metadata change log
+([seaweedfs/seaweedfs#11359](https://github.com/seaweedfs/seaweedfs/pull/11359)).
+A peer filer that was offline at that moment never received them, and S3
+returned 404 for objects it had acknowledged.
+
+Not supported yet: a shared external metadata store (PostgreSQL, Redis, etc.).
 
 ## Configuration
 
