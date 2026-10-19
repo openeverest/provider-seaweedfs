@@ -122,7 +122,8 @@ an MVP: several capabilities are stubbed or not wired yet.
 | Monitoring | ❌ | Not wired through the Instance API. The operator chart can enable `serviceMonitor` on its own (`enabled: false` by default); this provider does not set it |
 | TLS | ✅ | Inter-component gRPC mTLS via `topology.parameters.tls`. Client HTTPS via S3 Ingress TLS (`components.s3.parameters.ingress`) → `externalEndpointURL=https://…`. Native S3 HTTPS on the gateway is not supported by the operator yet ([seaweedfs-operator#411](https://github.com/seaweedfs/seaweedfs-operator/issues/411)) |
 | Status / readiness | ✅ | Maps Seaweed Ready condition; waits for TLS Secret / LoadBalancer / Ingress when configured |
-| Connection details | ✅ | Publishes in-cluster S3 endpoint on Ready; NodePort / LoadBalancer / Ingress add `externalEndpointURL` |
+| Connection details | ✅ | Publishes in-cluster S3 endpoint and admin S3 credentials on Ready; NodePort / LoadBalancer / Ingress add `externalEndpointURL` |
+| S3 authentication | ✅ | Always on. The provider generates an admin access key pair in Secret `<name>-s3-config` and starts the gateway with it, so anonymous requests are denied from the first boot. See [S3 credentials](#s3-credentials) |
 | Pod scheduling | ✅ | `schedulingPolicy` affinity, nodeSelector, tolerations and schedulerName. Master and volume pods require separate nodes by default; `affinity: {}` opts out. `topologySpreadConstraints` is rejected (no seaweedfs-operator field) |
 
 Stateful workloads additionally report:
@@ -261,7 +262,7 @@ kubectl get seaweed -A
 > [!NOTE]
 > When the Instance is Ready, connection details are published to Secret
 > `<instance-name>-conn` from the operator-managed S3 Service
-> (`<name>-s3`). They include host, port, URI, and
+> (`<name>-s3`). They include host, port, URI, the admin S3 credentials, and
 > `forcePathStyle=true` / `verifyTLS=false` hints for S3 clients.
 >
 > **TLS note:** `topology.parameters.tls.enabled` turns on **gRPC mTLS between
@@ -286,29 +287,57 @@ kubectl get seaweed -A
 >
 > Optional JWT signing for volume/filer (`topology.parameters.securityConfig`) is
 > supported via YAML/API only there is no UI for it yet.
->
-> For Postgres backups, point a `BackupStorage` at that endpoint. Without an
-> S3 identity config on the gateway, SeaweedFS accepts requests without auth —
-> create any credentials Secret with `AWS_ACCESS_KEY_ID` /
-> `AWS_SECRET_ACCESS_KEY` for BackupStorage to reference, create the bucket,
-> then attach the storage to the Postgres Instance.
->
-> ```yaml
-> apiVersion: backup.openeverest.io/v1alpha1
-> kind: BackupStorage
-> metadata:
->   name: seaweedfs-backups
-> spec:
->   type: s3
->   s3:
->     bucket: seaweedfs-standalone-backups
->     region: us-east-1
->     endpointURL: http://seaweedfs-standalone-s3.default.svc:8333
->     forcePathStyle: true
->     verifyTLS: false
->     credentialsSecretRef:
->       name: my-s3-creds
-> ```
+
+### S3 credentials
+
+The S3 gateway never accepts anonymous requests. On first sync the provider
+creates Secret `<name>-s3-config`, owned by the Instance, with:
+
+| Key | Content |
+|---|---|
+| `AWS_ACCESS_KEY_ID` | Admin access key (20 characters, generated) |
+| `AWS_SECRET_ACCESS_KEY` | Admin secret key (40 characters, generated) |
+| `s3.json` | SeaweedFS identities file built from the keys above, passed to `weed s3 -config` |
+
+The same keys are published in `<name>-conn` as `username` / `password` (shown
+in the OpenEverest UI) and as `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`:
+
+```bash
+kubectl get secret seaweedfs-standalone-conn -o jsonpath='{.data.AWS_ACCESS_KEY_ID}' | base64 -d
+kubectl get secret seaweedfs-standalone-conn -o jsonpath='{.data.AWS_SECRET_ACCESS_KEY}' | base64 -d
+```
+
+- **Bring your own keys:** create `<name>-s3-config` with `AWS_ACCESS_KEY_ID`
+  and `AWS_SECRET_ACCESS_KEY` before the Instance. The provider keeps them and
+  generates only what is missing.
+- **Rotate:** edit either key in `<name>-s3-config`. The provider rewrites
+  `s3.json` and the S3 gateway pods roll to pick it up. Deleting the Secret
+  generates a new key pair the same way.
+- The keys are deleted together with the Instance.
+
+### Backups to SeaweedFS
+
+To store OpenEverest database backups in SeaweedFS, create the bucket with the
+admin credentials and point a `BackupStorage` at the in-cluster endpoint. A
+`BackupStorage` in the same namespace can reference the connection Secret
+directly, because it reads `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`:
+
+```yaml
+apiVersion: backup.openeverest.io/v1alpha1
+kind: BackupStorage
+metadata:
+  name: seaweedfs-backups
+spec:
+  type: s3
+  s3:
+    bucket: seaweedfs-standalone-backups
+    region: us-east-1
+    endpointURL: http://seaweedfs-standalone-s3.default.svc:8333
+    forcePathStyle: true
+    verifyTLS: false
+    credentialsSecretRef:
+      name: seaweedfs-standalone-conn
+```
 
 ## Topologies
 
@@ -403,7 +432,8 @@ kubectl logs -n everest-system deploy/provider-seaweedfs -f
 
 | Symptom | Where to look |
 |---|---|
-| `Instance` stuck in `Provisioning` | `kubectl describe instance <name>` conditions, then the provider logs. Common waits: Seaweed Ready, S3 Service, LoadBalancer ingress, S3 Ingress, or `<name>-server-tls` Secret when TLS is enabled |
+| `Instance` stuck in `Provisioning` | `kubectl describe instance <name>` conditions, then the provider logs. Common waits: Seaweed Ready, S3 Service, S3 credentials Secret `<name>-s3-config`, LoadBalancer ingress, S3 Ingress, or `<name>-server-tls` Secret when TLS is enabled |
+| S3 requests fail with `AccessDenied` | Requests must be signed with the keys from `<name>-conn` (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`). Anonymous access is disabled |
 | No `Provider` resource in the cluster | Is the chart installed? Check the provider deployment logs |
 | `Instance` ignored entirely | `spec.providerRef.name` must be `provider-seaweedfs` |
 | `Seaweed` resource created but no pods | Inspect the `Seaweed` custom resource status — the failure is upstream in the operator |
