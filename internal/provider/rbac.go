@@ -28,3 +28,6 @@ package provider
 
 // Operator-managed S3 Ingress (read for HTTPS connection details):
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch
+
+// Storage classes named on master, volume, or filer (existence check only):
+// +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get
