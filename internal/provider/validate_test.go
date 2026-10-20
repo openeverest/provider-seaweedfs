@@ -31,12 +31,14 @@ import (
 	corev1alpha1 "github.com/openeverest/openeverest/v2/api/core/v1alpha1"
 	"github.com/openeverest/openeverest/v2/provider-runtime/controller"
 
+	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
+
 	"github.com/openeverest/provider-seaweedfs/internal/common"
 )
 
 func TestValidateInstanceName(t *testing.T) {
-	require.Equal(t, 51, maxInstanceNameLength)
-	require.LessOrEqual(t, maxInstanceNameLength+len(volumePeerServiceSuffix), dnsLabelMaxLength)
+	require.Equal(t, 45, maxInstanceNameLength)
+	require.LessOrEqual(t, maxInstanceNameLength+len(statefulSetSuffix), statefulSetNameMaxLength)
 
 	require.NoError(t, validateInstanceName("a"))
 	require.NoError(t, validateInstanceName("seaweedfs-standalone"))
@@ -44,7 +46,7 @@ func TestValidateInstanceName(t *testing.T) {
 
 	err := validateInstanceName(strings.Repeat("a", maxInstanceNameLength+1))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "exceeds max length of 51")
+	assert.Contains(t, err.Error(), "exceeds max length of 45")
 
 	err = validateInstanceName("1invalid")
 	require.Error(t, err)
@@ -103,6 +105,12 @@ func TestValidateStorageClasses(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "RFC-1035")
 	})
+
+	t.Run("missing class is ignored once the cluster exists", func(t *testing.T) {
+		sw := &seaweedv1.Seaweed{ObjectMeta: metav1.ObjectMeta{Name: "test-instance", Namespace: "default"}}
+		err := New().Validate(newValidateContext(t, "test-instance", withClass("missing"), sw))
+		require.NoError(t, err)
+	})
 }
 
 func newValidateContext(t *testing.T, name string, components map[string]corev1alpha1.ComponentSpec, extras ...client.Object) *controller.Context {
@@ -113,6 +121,7 @@ func newValidateContext(t *testing.T, name string, components map[string]corev1a
 	}
 	scheme := runtime.NewScheme()
 	require.NoError(t, corev1alpha1.AddToScheme(scheme))
+	require.NoError(t, seaweedv1.AddToScheme(scheme))
 	objs := append([]client.Object{instance}, extras...)
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
 	return controller.NewContext(context.Background(), cl, instance, common.ProviderName)

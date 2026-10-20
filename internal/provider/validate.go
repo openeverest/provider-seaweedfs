@@ -26,23 +26,25 @@ import (
 
 	"github.com/openeverest/openeverest/v2/provider-runtime/controller"
 
+	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
+
 	"github.com/openeverest/provider-seaweedfs/definition/components"
 	"github.com/openeverest/provider-seaweedfs/definition/topologies/standalone"
 	"github.com/openeverest/provider-seaweedfs/internal/common"
 )
 
-// dnsLabelMaxLength is the Kubernetes limit for Service and Pod names.
-const dnsLabelMaxLength = 63
+// statefulSetNameMaxLength keeps the StatefulSet pod label
+// controller-revision-hash ("<statefulset>-<hash>", hash up to 10 chars)
+// within the 63-character label value limit.
+const statefulSetNameMaxLength = 52
 
-// volumePeerServiceSuffix is the longest suffix seaweedfs-operator appends
-// to the Seaweed name for a DNS label this provider always creates.
-// The volume and master headless Services are "<name>-volume-peer" and
-// "<name>-master-peer". Volume pod names ("<name>-volume-<ordinal>") stay
-// inside the same budget through ordinal 9999.
-const volumePeerServiceSuffix = "-volume-peer"
+// statefulSetSuffix is the longest suffix seaweedfs-operator appends for a
+// StatefulSet ("<name>-volume", "<name>-master"). Service names such as
+// "<name>-volume-peer" and volume pod names stay under 63 at this length too.
+const statefulSetSuffix = "-volume"
 
-// maxInstanceNameLength leaves room for that suffix under dnsLabelMaxLength.
-const maxInstanceNameLength = dnsLabelMaxLength - len(volumePeerServiceSuffix)
+// maxInstanceNameLength is 45.
+const maxInstanceNameLength = statefulSetNameMaxLength - len(statefulSetSuffix)
 
 var storageClassGVK = schema.GroupVersionKind{
 	Group:   "storage.k8s.io",
@@ -116,8 +118,16 @@ func (p *Provider) Validate(c *controller.Context) error {
 	if err := validateReplication(effectiveReplication(topo.Replication, *volume.Replicas), *volume.Replicas); err != nil {
 		return err
 	}
-	if err := validateStorageClasses(c); err != nil {
+	// The StorageClass only matters when PVCs are created. Checking it on a
+	// provisioned instance would mark it Failed if the class is later removed.
+	provisioned, err := c.Exists(&seaweedv1.Seaweed{}, c.Name())
+	if err != nil {
 		return err
+	}
+	if !provisioned {
+		if err := validateStorageClasses(c); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -133,8 +143,8 @@ func validateTopologyParameters(topo standalone.StandaloneTopologyConfig) error 
 	return nil
 }
 
-// validateInstanceName requires an RFC-1035 label short enough that operator
-// child names such as "<name>-volume-peer" stay within 63 characters.
+// validateInstanceName requires an RFC-1035 label short enough for the
+// operator's StatefulSets ("<name>-volume") and their pod labels.
 func validateInstanceName(name string) error {
 	if len(name) > maxInstanceNameLength {
 		return fmt.Errorf("name %q exceeds max length of %d", name, maxInstanceNameLength)

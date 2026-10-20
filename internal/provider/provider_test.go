@@ -991,6 +991,7 @@ func TestValidate(t *testing.T) {
 			}
 			scheme := runtime.NewScheme()
 			require.NoError(t, corev1alpha1.AddToScheme(scheme))
+			require.NoError(t, seaweedv1.AddToScheme(scheme))
 			fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(instance).Build()
 			ctx := controller.NewContext(context.Background(), fakeClient, instance, common.ProviderName)
 
