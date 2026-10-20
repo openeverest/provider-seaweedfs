@@ -1,3 +1,17 @@
+// Copyright (C) 2026 The OpenEverest Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package provider
 
 import (
@@ -95,85 +109,6 @@ func s3IngressToInstance(_ context.Context, obj client.Object) []reconcile.Reque
 	return []reconcile.Request{{
 		NamespacedName: types.NamespacedName{Namespace: obj.GetNamespace(), Name: owner.Name},
 	}}
-}
-
-// Validate checks if the Instance spec is valid.
-//
-// Add your provider-specific validation logic here.
-// Return an error if the spec is invalid.
-func (p *Provider) Validate(c *controller.Context) error {
-	l := log.FromContext(c.Context())
-	l.Info("Validating instance", "name", c.Name())
-
-	master, isMasterPresent := c.Instance().Spec.Components[common.ComponentMaster]
-	if err := validateMaster(master, isMasterPresent); err != nil {
-		return err
-	}
-
-	volume, isVolumePresent := c.Instance().Spec.Components[common.ComponentVolume]
-	if err := validateVolume(volume, isVolumePresent); err != nil {
-		return err
-	}
-
-	filer, isFilerPresent := c.Instance().Spec.Components[common.ComponentFiler]
-	if err := validateFiler(filer, isFilerPresent); err != nil {
-		return err
-	}
-
-	s3, isS3Present := c.Instance().Spec.Components[common.ComponentS3]
-	if err := validateS3(s3, isS3Present); err != nil {
-		return err
-	}
-
-	var masterCustomSpec components.MasterCustomSpec
-	if c.TryDecodeComponentParameters(master, &masterCustomSpec) {
-		if err := validateMasterParameters(masterCustomSpec); err != nil {
-			return err
-		}
-	}
-
-	var volumeCustomSpec components.VolumeCustomSpec
-	if c.TryDecodeComponentParameters(volume, &volumeCustomSpec) {
-		if err := validateVolumeParameters(volumeCustomSpec); err != nil {
-			return err
-		}
-	}
-
-	var filerCustomSpec components.FilerCustomSpec
-	if c.TryDecodeComponentParameters(filer, &filerCustomSpec) {
-		if err := validateFilerParameters(filerCustomSpec); err != nil {
-			return err
-		}
-	}
-
-	var s3CustomSpec components.S3CustomSpec
-	if c.TryDecodeComponentParameters(s3, &s3CustomSpec) {
-		if err := validateS3Parameters(s3CustomSpec); err != nil {
-			return err
-		}
-	}
-
-	var topo standalone.StandaloneTopologyConfig
-	if c.TryDecodeTopologyParameters(&topo) {
-		if err := validateTopologyParameters(topo); err != nil {
-			return err
-		}
-	}
-	if err := validateReplication(effectiveReplication(topo.Replication, *volume.Replicas), *volume.Replicas); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func validateTopologyParameters(topo standalone.StandaloneTopologyConfig) error {
-	if topo.VolumeServerDiskCount != nil && *topo.VolumeServerDiskCount < 1 {
-		return fmt.Errorf("volumeServerDiskCount must be at least 1")
-	}
-	if err := validateTLSParameters(topo); err != nil {
-		return err
-	}
-	return nil
 }
 
 // Sync ensures all required resources exist and are configured correctly.
