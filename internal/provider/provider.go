@@ -77,6 +77,13 @@ func New() *Provider {
 					predicate.NewPredicateFuncs(func(o client.Object) bool {
 						return strings.HasSuffix(o.GetName(), tlsServerSecretSuffix)
 					})),
+				// PVC resize conditions change without a Seaweed status update.
+				controller.WatchExternal(&corev1.PersistentVolumeClaim{},
+					handler.EnqueueRequestsFromMapFunc(pvcToInstance),
+					predicate.NewPredicateFuncs(func(o client.Object) bool {
+						name := o.GetName()
+						return strings.Contains(name, "-volume-") || strings.Contains(name, "-filer-") || strings.Contains(name, "-master-")
+					})),
 			},
 		},
 	}
@@ -94,6 +101,33 @@ func s3ServiceToInstance(_ context.Context, obj client.Object) []reconcile.Reque
 	}
 	return []reconcile.Request{{
 		NamespacedName: types.NamespacedName{Namespace: obj.GetNamespace(), Name: owner.Name},
+	}}
+}
+
+// pvcToInstance maps a StatefulSet PVC back to the Instance. Volume, filer, and
+// master StatefulSets are named "<instance>-volume", "<instance>-filer", and
+// "<instance>-master".
+func pvcToInstance(_ context.Context, obj client.Object) []reconcile.Request {
+	owner := metav1.GetControllerOf(obj)
+	if owner == nil || owner.Kind != "StatefulSet" {
+		return nil
+	}
+	var instance string
+	switch {
+	case strings.HasSuffix(owner.Name, "-volume"):
+		instance = strings.TrimSuffix(owner.Name, "-volume")
+	case strings.HasSuffix(owner.Name, "-filer"):
+		instance = strings.TrimSuffix(owner.Name, "-filer")
+	case strings.HasSuffix(owner.Name, "-master"):
+		instance = strings.TrimSuffix(owner.Name, "-master")
+	default:
+		return nil
+	}
+	if instance == "" {
+		return nil
+	}
+	return []reconcile.Request{{
+		NamespacedName: types.NamespacedName{Namespace: obj.GetNamespace(), Name: instance},
 	}}
 }
 
@@ -264,6 +298,14 @@ func (p *Provider) Status(c *controller.Context) (controller.Status, error) {
 			details, err := buildConnectionDetailsFromService(c, svc, sw, s3Params)
 			if err != nil {
 				return controller.Status{}, err
+			}
+			expansion, err := storageExpansionStatus(c, sw)
+			if err != nil {
+				return controller.Status{}, err
+			}
+			if expansion != nil {
+				expansion.ConnectionDetails = details
+				return *expansion, nil
 			}
 			return controller.ReadyWithConnectionDetails(details), nil
 		}

@@ -43,5 +43,10 @@ package provider
 // Operator-managed S3 Ingress (read for HTTPS connection details):
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch
 
-// Storage classes named on master, volume, or filer (existence check only):
-// +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get
+// Storage classes named on master, volume, or filer. list resolves the default
+// class when storage.size grows and no class is set:
+// +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list
+
+// Volume, filer, and master PVCs. Read during Status to report in-place expansion
+// (operator image 1.0.40 patches these; it does not copy the new size onto Seaweed status):
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch
