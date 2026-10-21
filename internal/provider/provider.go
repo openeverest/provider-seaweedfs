@@ -78,11 +78,12 @@ func New() *Provider {
 						return strings.HasSuffix(o.GetName(), tlsServerSecretSuffix)
 					})),
 				// PVC resize conditions change without a Seaweed status update.
+				// The operator label drops unrelated claims; name substrings
+				// such as "-volume-" match PVCs this provider does not own.
 				controller.WatchExternal(&corev1.PersistentVolumeClaim{},
 					handler.EnqueueRequestsFromMapFunc(pvcToInstance),
 					predicate.NewPredicateFuncs(func(o client.Object) bool {
-						name := o.GetName()
-						return strings.Contains(name, "-volume-") || strings.Contains(name, "-filer-") || strings.Contains(name, "-master-")
+						return o.GetLabels()[labelManagedBy] == managedBySeaweedOperator
 					})),
 			},
 		},
@@ -104,25 +105,32 @@ func s3ServiceToInstance(_ context.Context, obj client.Object) []reconcile.Reque
 	}}
 }
 
-// pvcToInstance maps a StatefulSet PVC back to the Instance. Volume, filer, and
-// master StatefulSets are named "<instance>-volume", "<instance>-filer", and
-// "<instance>-master".
+// Selector labels seaweedfs-operator sets on volume, filer, and master
+// StatefulSets. Kubernetes copies spec.selector.matchLabels onto PVCs
+// created from volumeClaimTemplates.
+const (
+	labelManagedBy           = "app.kubernetes.io/managed-by"
+	labelComponent           = "app.kubernetes.io/component"
+	labelInstance            = "app.kubernetes.io/instance"
+	managedBySeaweedOperator = "seaweedfs-operator"
+)
+
+// pvcToInstance maps a volume, filer, or master PVC back to the Instance.
+// The operator sets persistentVolumeClaimRetentionPolicy.whenDeleted to
+// Retain, so Kubernetes adds no StatefulSet controller owner reference.
+// With enablePVReclaim, a controller reference is added only after scale-down,
+// and it points at the Pod. Selector labels are present on the live claim.
 func pvcToInstance(_ context.Context, obj client.Object) []reconcile.Request {
-	owner := metav1.GetControllerOf(obj)
-	if owner == nil || owner.Kind != "StatefulSet" {
+	labels := obj.GetLabels()
+	if labels[labelManagedBy] != managedBySeaweedOperator {
 		return nil
 	}
-	var instance string
-	switch {
-	case strings.HasSuffix(owner.Name, "-volume"):
-		instance = strings.TrimSuffix(owner.Name, "-volume")
-	case strings.HasSuffix(owner.Name, "-filer"):
-		instance = strings.TrimSuffix(owner.Name, "-filer")
-	case strings.HasSuffix(owner.Name, "-master"):
-		instance = strings.TrimSuffix(owner.Name, "-master")
+	switch labels[labelComponent] {
+	case common.ComponentVolume, common.ComponentFiler, common.ComponentMaster:
 	default:
 		return nil
 	}
+	instance := labels[labelInstance]
 	if instance == "" {
 		return nil
 	}

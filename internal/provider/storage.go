@@ -1,3 +1,17 @@
+// Copyright (C) 2026 The OpenEverest Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package provider
 
 import (
@@ -18,20 +32,30 @@ import (
 	"github.com/openeverest/provider-seaweedfs/internal/common"
 )
 
-// validateStorageExpansion rejects a smaller storage.size and a larger one
-// whose StorageClass does not set allowVolumeExpansion. seaweedfs-operator
-// image 1.0.40 patches live PVCs when only the storage request grew a
-// shrink is ignored and a class that disallows expansion leaves the PVC
+// validateStorageExpansion rejects a smaller storage.size, enabling master
+// persistence after creation, and a larger size whose applied StorageClass
+// does not set allowVolumeExpansion. seaweedfs-operator image 1.0.40 patches
+// live PVCs only when the claim template differs in the storage request
+// (pvcEqualExceptStorageRequests). A class change emits
+// VolumeClaimTemplatesMismatch and leaves the PVCs unchanged. Adding master
+// persistence deletes and recreates the master StatefulSet. A shrink is
+// ignored by the operator. A class that disallows expansion leaves the PVC
 // unchanged (Warning event VolumeExpansionNotSupported). StatefulSet
 // volumeClaimTemplates stay immutable either way.
 func validateStorageExpansion(c *controller.Context, sw *seaweedv1.Seaweed) error {
 	for _, component := range persistentComponents {
-		applied, ok := appliedStorage(sw, component)
-		if !ok {
-			continue
-		}
 		comp, found := c.Instance().Spec.Components[component]
 		if !found {
+			continue
+		}
+		applied, ok := appliedStorage(sw, component)
+		if !ok {
+			// Volume and filer always have a claim. Master persistence is
+			// optional, turning it on later makes the operator delete the
+			// master StatefulSet and restart every master at once.
+			if component == common.ComponentMaster && comp.Storage != nil && !comp.Storage.Size.IsZero() {
+				return fmt.Errorf("%q component: storage cannot be enabled after creation", component)
+			}
 			continue
 		}
 		desired := resource.Quantity{}
@@ -44,7 +68,17 @@ func validateStorageExpansion(c *controller.Context, sw *seaweedv1.Seaweed) erro
 		case -1:
 			return fmt.Errorf("%q component: storage.size cannot shrink from %s to %s", component, applied.size.String(), desired.String())
 		}
-		if err := requireExpansionAllowed(c, component, expansionClassName(comp, applied.class)); err != nil {
+		// The operator only expands PVCs when the claim template differs in
+		// size alone, so the class must stay as applied.
+		if comp.Storage != nil && comp.Storage.StorageClass != nil && *comp.Storage.StorageClass != "" &&
+			(applied.class == nil || *applied.class != *comp.Storage.StorageClass) {
+			return fmt.Errorf("%q component: storage.storageClass cannot change while storage.size grows", component)
+		}
+		className := ""
+		if applied.class != nil {
+			className = *applied.class
+		}
+		if err := requireExpansionAllowed(c, component, className); err != nil {
 			return err
 		}
 	}
@@ -53,8 +87,10 @@ func validateStorageExpansion(c *controller.Context, sw *seaweedv1.Seaweed) erro
 
 // storageExpansionStatus reports PVC growth after the Seaweed cluster is Ready.
 // The operator does not copy expansion onto Seaweed status. Progress is the
-// PVC Resizing and FileSystemResizePending conditions; a class that disallows
-// expansion never changes the PVC request.
+// PVC Resizing condition. FileSystemResizePending is ignored: with offline
+// expansion it stays until a pod restart that neither the operator nor the
+// provider performs. A class that disallows expansion never changes the PVC
+// request.
 func storageExpansionStatus(c *controller.Context, sw *seaweedv1.Seaweed) (*controller.Status, error) {
 	pvcs := &corev1.PersistentVolumeClaimList{}
 	if err := c.Client().List(c.Context(), pvcs, client.InNamespace(c.Namespace())); err != nil {
@@ -166,16 +202,6 @@ func persistenceStorageSpec(p *seaweedv1.PersistenceSpec) (componentStorage, boo
 		return componentStorage{}, false
 	}
 	return componentStorage{size: q, class: p.StorageClassName}, true
-}
-
-func expansionClassName(comp corev1alpha1.ComponentSpec, applied *string) string {
-	if comp.Storage != nil && comp.Storage.StorageClass != nil && *comp.Storage.StorageClass != "" {
-		return *comp.Storage.StorageClass
-	}
-	if applied != nil {
-		return *applied
-	}
-	return ""
 }
 
 func requireExpansionAllowed(c *controller.Context, component, className string) error {
@@ -306,7 +332,10 @@ func pvcResizeMessage(component string, pvc *corev1.PersistentVolumeClaim) (stri
 		if cond.Status != corev1.ConditionTrue {
 			continue
 		}
-		if cond.Type != corev1.PersistentVolumeClaimResizing && cond.Type != corev1.PersistentVolumeClaimFileSystemResizePending {
+		// FileSystemResizePending is not tracked: with offline-only drivers it
+		// stays until a pod restart that neither the operator nor the provider
+		// performs, which would pin the Instance in Updating.
+		if cond.Type != corev1.PersistentVolumeClaimResizing {
 			continue
 		}
 		msg := fmt.Sprintf("%s PVC %s: %s", component, pvc.Name, cond.Type)
