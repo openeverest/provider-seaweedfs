@@ -19,6 +19,9 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/openeverest/openeverest/v2/provider-runtime/controller"
 	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
@@ -63,20 +66,31 @@ func buildAdminSpec(secretName string) *seaweedv1.AdminSpec {
 	}
 }
 
+// ensureAdminCredentials creates the credentials Secret once and never
+// overwrites an existing password. Reads come from the informer cache, which
+// can lag right after the Secret is created; Create is atomic on the API
+// server, so a stale read ends in AlreadyExists instead of a new password.
 func ensureAdminCredentials(c *controller.Context, topo standalone.StandaloneTopologyConfig) (string, error) {
 	if !adminEnabled(topo) {
 		return "", nil
 	}
 	name := adminCredentialsSecretName(c.Name())
-	password, err := existingAdminPassword(c, name)
-	if err != nil {
+
+	existing := &corev1.Secret{}
+	err := c.Get(existing, name)
+	switch {
+	case err == nil:
+		if err := completeAdminCredentials(c, existing); err != nil {
+			return "", fmt.Errorf("updating admin credentials Secret %q: %w", name, err)
+		}
+		return name, nil
+	case !controller.IsNotFound(err):
 		return "", err
 	}
-	if password == "" {
-		password, err = generateAdminPassword()
-		if err != nil {
-			return "", fmt.Errorf("generating admin password: %w", err)
-		}
+
+	password, err := generateAdminPassword()
+	if err != nil {
+		return "", fmt.Errorf("generating admin password: %w", err)
 	}
 	secret := &corev1.Secret{
 		ObjectMeta: c.ObjectMeta(name),
@@ -86,21 +100,35 @@ func ensureAdminCredentials(c *controller.Context, topo standalone.StandaloneTop
 			adminPasswordKey: []byte(password),
 		},
 	}
-	if err := c.Apply(secret); err != nil {
-		return "", fmt.Errorf("applying admin credentials Secret %q: %w", name, err)
+	if err := controllerutil.SetControllerReference(c.Instance(), secret, c.Client().Scheme()); err != nil {
+		return "", fmt.Errorf("setting owner on admin credentials Secret %q: %w", name, err)
+	}
+	if err := c.Client().Create(c.Context(), secret); err != nil && !apierrors.IsAlreadyExists(err) {
+		return "", fmt.Errorf("creating admin credentials Secret %q: %w", name, err)
 	}
 	return name, nil
 }
 
-func existingAdminPassword(c *controller.Context, name string) (string, error) {
-	secret := &corev1.Secret{}
-	if err := c.Get(secret, name); err != nil {
-		if controller.IsNotFound(err) {
-			return "", nil
-		}
-		return "", err
+// completeAdminCredentials forces the username and fills in a missing
+// password on a Secret that already exists, keeping any password it has.
+func completeAdminCredentials(c *controller.Context, secret *corev1.Secret) error {
+	hasPassword := len(secret.Data[adminPasswordKey]) > 0
+	if hasPassword && string(secret.Data[adminUserKey]) == adminUsername {
+		return nil
 	}
-	return string(secret.Data[adminPasswordKey]), nil
+	patch := client.MergeFrom(secret.DeepCopy())
+	if secret.Data == nil {
+		secret.Data = map[string][]byte{}
+	}
+	secret.Data[adminUserKey] = []byte(adminUsername)
+	if !hasPassword {
+		password, err := generateAdminPassword()
+		if err != nil {
+			return fmt.Errorf("generating admin password: %w", err)
+		}
+		secret.Data[adminPasswordKey] = []byte(password)
+	}
+	return c.Client().Patch(c.Context(), secret, patch)
 }
 
 func generateAdminPassword() (string, error) {

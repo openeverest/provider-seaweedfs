@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -197,4 +198,40 @@ func controllerContext(t *testing.T, instance *corev1alpha1.Instance, objs ...cl
 		builder = builder.WithObjects(objs...)
 	}
 	return controller.NewContext(context.Background(), builder.Build(), instance, common.ProviderName)
+}
+
+// staleSecretCache simulates an informer cache that has not yet observed the
+// admin credentials Secret: Get reports NotFound while writes still hit the
+// API server (the fake store).
+type staleSecretCache struct {
+	client.Client
+	name string
+}
+
+func (c staleSecretCache) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*corev1.Secret); ok && key.Name == c.name {
+		return apierrors.NewNotFound(corev1.Resource("secrets"), key.Name)
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
+}
+
+func TestSyncAdminKeepsPasswordWhenCacheIsStale(t *testing.T) {
+	instance := newSyncInstance(validComponents())
+	instance.Spec.Topology = &corev1alpha1.TopologySpec{
+		Type:       "standalone",
+		Parameters: &runtime.RawExtension{Raw: []byte(`{"admin":{"enabled":true}}`)},
+	}
+	cl := newSyncClient(t, instance)
+	secretName := adminCredentialsSecretName(instance.Name)
+	key := types.NamespacedName{Namespace: instance.Namespace, Name: secretName}
+
+	syncSeaweed(t, cl, instance)
+	secret := &corev1.Secret{}
+	require.NoError(t, cl.Get(context.Background(), key, secret))
+	password := string(secret.Data[adminPasswordKey])
+	require.NotEmpty(t, password)
+
+	syncSeaweed(t, staleSecretCache{Client: cl, name: secretName}, instance)
+	require.NoError(t, cl.Get(context.Background(), key, secret))
+	assert.Equal(t, password, string(secret.Data[adminPasswordKey]))
 }
