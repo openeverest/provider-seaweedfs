@@ -120,14 +120,22 @@ func (p *Provider) Validate(c *controller.Context) error {
 	}
 	// The StorageClass only matters when PVCs are created. Checking it on a
 	// provisioned instance would mark it Failed if the class is later removed.
-	provisioned, err := c.Exists(&seaweedv1.Seaweed{}, c.Name())
-	if err != nil {
-		return err
-	}
-	if !provisioned {
+	// Growth of an existing claim is checked separately.
+	sw := &seaweedv1.Seaweed{}
+	if err := c.Get(sw, c.Name()); err != nil {
+		if !controller.IsNotFound(err) {
+			return err
+		}
 		if err := validateStorageClasses(c); err != nil {
 			return err
 		}
+		return nil
+	}
+	if err := validateStorageExpansion(c, sw); err != nil {
+		// The reconciler records Failed but not the error text. The admission
+		// webhook returns the error itself and ignores this message.
+		c.Instance().Status.Message = err.Error()
+		return err
 	}
 
 	return nil

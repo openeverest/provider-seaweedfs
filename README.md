@@ -130,7 +130,7 @@ Stateful workloads additionally report:
 | Capability | Status | Notes |
 |---|---|---|
 | Persistent storage | ✅ | Volume/filer `storage.size` required; optional master `storage.size`. Optional per-component `storage.storageClass` (UI picker for master/volume/filer) |
-| Storage expansion | ⚠️ | Increasing `storage.size` is written onto the Seaweed spec. Image `1.0.40` grows existing master, volume, and filer PVCs in place when the StorageClass has `allowVolumeExpansion: true` and only the size changed ([seaweedfs-operator#394](https://github.com/seaweedfs/seaweedfs-operator/pull/394)). Shrinks are ignored. A class that disallows expansion leaves the PVC unchanged and emits `VolumeExpansionNotSupported`; this provider does not surface that event |
+| Storage expansion | ✅ | Volume, filer, and master `storage.size` can grow. A smaller size is rejected. Master `storage.size` cannot be set after creation when the master has no persistence, because the operator deletes and recreates the master StatefulSet. A larger size is rejected unless the StorageClass already on the Seaweed spec has `allowVolumeExpansion: true`, or the newest default class when the spec names none. Changing `storage.storageClass` in the same request as a size increase is rejected. Image `1.0.40` then patches the live PVCs and leaves StatefulSet `volumeClaimTemplates` unchanged ([seaweedfs-operator#394](https://github.com/seaweedfs/seaweedfs-operator/pull/394)). While a PVC is `Resizing`, or the operator has not patched it yet, the Instance phase is `Updating`. `FileSystemResizePending` does not hold the phase; offline expansion needs a pod restart. If the class on the PVC disallows expansion, the phase is `Failed`. Other claim-template edits are not applied; the operator emits Warning event `VolumeClaimTemplatesMismatch` (not a status condition) |
 | Backups | ❌ | Not implemented. Operator chart `0.1.30` and later install a `SeaweedBackup` CRD; this provider does not create it |
 | Restore | ❌ | Not implemented. `SeaweedRestore` ships in the same chart; this provider does not create it |
 
@@ -340,9 +340,12 @@ inter-component TLS (`topology.parameters.tls`), JWT signing
 (`topology.parameters.securityConfig`), and pod scheduling (affinity,
 nodeSelector, tolerations, schedulerName) onto the upstream `Seaweed` CR.
 `topologySpreadConstraints` and load-balancer source ranges are rejected.
-A larger `storage.size` is written through and operator image `1.0.40` may
-grow the PVCs (see the capabilities table). Shrinks, monitoring, backups, and
-restores are not applied.
+A larger volume, filer, or master `storage.size` is written through when the
+StorageClass already on the Seaweed spec allows expansion. Operator image
+`1.0.40` grows the PVCs (see the capabilities table). Shrinks are rejected.
+Setting master `storage.size` when the master has no disk yet is rejected.
+Changing `storage.storageClass` together with a size increase is rejected.
+Monitoring, backups, and restores are not applied.
 
 ## Development
 
@@ -404,6 +407,8 @@ kubectl logs -n everest-system deploy/provider-seaweedfs -f
 | Symptom | Where to look |
 |---|---|
 | `Instance` stuck in `Provisioning` | `kubectl describe instance <name>` conditions, then the provider logs. Common waits: Seaweed Ready, S3 Service, LoadBalancer ingress, S3 Ingress, or `<name>-server-tls` Secret when TLS is enabled |
+| `Instance` stays `Updating` after a disk increase | `kubectl get pvc -o wide` for `Resizing`. Image `1.0.40` patches the PVC request and leaves the StatefulSet claim template unchanged. `FileSystemResizePending` does not keep the Instance in `Updating`. When the CSI driver only expands offline, restart the pod that mounts the PVC so the kubelet grows the filesystem. An older image only emits Warning event `VolumeClaimTemplatesMismatch` and does not grow the PVC. Deleting the StatefulSet does not resize claims that already exist. Patch each PVC yourself when `allowVolumeExpansion` is true: `kubectl patch pvc <name> --type=merge -p '{"spec":{"resources":{"requests":{"storage":"<size>"}}}}'`. Names are `mount<N>-<instance>-volume-<ordinal>`, `<instance>-filer-<instance>-filer-<ordinal>`, and `<instance>-master-<instance>-master-<ordinal>` |
+| Disk increase rejected | The StorageClass needs `allowVolumeExpansion: true`. Shrinking `storage.size` is rejected |
 | No `Provider` resource in the cluster | Is the chart installed? Check the provider deployment logs |
 | `Instance` ignored entirely | `spec.providerRef.name` must be `provider-seaweedfs` |
 | `Seaweed` resource created but no pods | Inspect the `Seaweed` custom resource status — the failure is upstream in the operator |

@@ -8,6 +8,7 @@
 - apiGroups:
     - ""
   resources:
+    - persistentvolumeclaims
     - pods
     - services
   verbs:
@@ -101,3 +102,4 @@
     - storageclasses
   verbs:
     - get
+    - list

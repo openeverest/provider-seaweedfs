@@ -77,6 +77,14 @@ func New() *Provider {
 					predicate.NewPredicateFuncs(func(o client.Object) bool {
 						return strings.HasSuffix(o.GetName(), tlsServerSecretSuffix)
 					})),
+				// PVC resize conditions change without a Seaweed status update.
+				// The operator label drops unrelated claims; name substrings
+				// such as "-volume-" match PVCs this provider does not own.
+				controller.WatchExternal(&corev1.PersistentVolumeClaim{},
+					handler.EnqueueRequestsFromMapFunc(pvcToInstance),
+					predicate.NewPredicateFuncs(func(o client.Object) bool {
+						return o.GetLabels()[labelManagedBy] == managedBySeaweedOperator
+					})),
 			},
 		},
 	}
@@ -94,6 +102,40 @@ func s3ServiceToInstance(_ context.Context, obj client.Object) []reconcile.Reque
 	}
 	return []reconcile.Request{{
 		NamespacedName: types.NamespacedName{Namespace: obj.GetNamespace(), Name: owner.Name},
+	}}
+}
+
+// Selector labels seaweedfs-operator sets on volume, filer, and master
+// StatefulSets. Kubernetes copies spec.selector.matchLabels onto PVCs
+// created from volumeClaimTemplates.
+const (
+	labelManagedBy           = "app.kubernetes.io/managed-by"
+	labelComponent           = "app.kubernetes.io/component"
+	labelInstance            = "app.kubernetes.io/instance"
+	managedBySeaweedOperator = "seaweedfs-operator"
+)
+
+// pvcToInstance maps a volume, filer, or master PVC back to the Instance.
+// The operator sets persistentVolumeClaimRetentionPolicy.whenDeleted to
+// Retain, so Kubernetes adds no StatefulSet controller owner reference.
+// With enablePVReclaim, a controller reference is added only after scale-down,
+// and it points at the Pod. Selector labels are present on the live claim.
+func pvcToInstance(_ context.Context, obj client.Object) []reconcile.Request {
+	labels := obj.GetLabels()
+	if labels[labelManagedBy] != managedBySeaweedOperator {
+		return nil
+	}
+	switch labels[labelComponent] {
+	case common.ComponentVolume, common.ComponentFiler, common.ComponentMaster:
+	default:
+		return nil
+	}
+	instance := labels[labelInstance]
+	if instance == "" {
+		return nil
+	}
+	return []reconcile.Request{{
+		NamespacedName: types.NamespacedName{Namespace: obj.GetNamespace(), Name: instance},
 	}}
 }
 
@@ -264,6 +306,14 @@ func (p *Provider) Status(c *controller.Context) (controller.Status, error) {
 			details, err := buildConnectionDetailsFromService(c, svc, sw, s3Params)
 			if err != nil {
 				return controller.Status{}, err
+			}
+			expansion, err := storageExpansionStatus(c, sw)
+			if err != nil {
+				return controller.Status{}, err
+			}
+			if expansion != nil {
+				expansion.ConnectionDetails = details
+				return *expansion, nil
 			}
 			return controller.ReadyWithConnectionDetails(details), nil
 		}

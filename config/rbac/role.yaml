@@ -14,6 +14,7 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - persistentvolumeclaims
   - pods
   - services
   verbs:
@@ -107,3 +108,4 @@ rules:
   - storageclasses
   verbs:
   - get
+  - list

@@ -109,11 +109,9 @@ ui:
                             fieldParams:
                                 badge: Gi
                                 badgeToApi: true
-                                helperText: Optional. Enables master persistence when set. Leave empty to run without a PVC. Cannot be changed after creation.
+                                helperText: Optional. Enables master persistence when set at creation. Can be increased after creation when the storage class allows volume expansion. Cannot be enabled, shrunk, or cleared after creation.
                                 label: Disk
                                 modes:
-                                    edit:
-                                        disabled: true
                                     restore:
                                         disabled: true
                             path: spec.components.master.storage.size
@@ -204,6 +202,7 @@ ui:
                                 badge: Gi
                                 badgeToApi: true
                                 defaultValue: 10
+                                helperText: Can be increased after creation when the storage class allows volume expansion. Cannot shrink.
                                 label: Disk
                             path: spec.components.volume.storage.size
                             uiType: number
@@ -294,6 +293,7 @@ ui:
                                 badge: Gi
                                 badgeToApi: true
                                 defaultValue: 1
+                                helperText: Can be increased after creation when the storage class allows volume expansion. Cannot shrink.
                                 label: Disk
                             path: spec.components.filer.storage.size
                             uiType: number
