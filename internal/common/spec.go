@@ -9,4 +9,7 @@ const (
 	ComponentVolume = "volume"
 	ComponentFiler  = "filer"
 	ComponentS3     = "s3"
+	// ComponentAdmin is not an Instance component. The provider always runs
+	// one admin server; the name is only the pod label the runtime counts.
+	ComponentAdmin = "admin"
 )

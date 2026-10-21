@@ -79,6 +79,11 @@ spec:
       parametersSchema:
         openAPIV3Schema:
           properties:
+            admin:
+              properties:
+                credentialsSecret:
+                  type: string
+              type: object
             replication:
               type: string
             securityConfig:
@@ -131,6 +136,27 @@ spec:
   uiSchema:
     standalone:
       sections:
+        admin:
+          components:
+            ui:
+              components:
+                credentialsSecret:
+                  fieldParams:
+                    label: Credentials secret
+                  path: spec.topology.parameters.admin.credentialsSecret
+                  uiType: text
+                  validation:
+                    required: true
+              componentsOrder:
+                - credentialsSecret
+              description: Runs one admin server on ClusterIP Service <instance>-admin, port 23646. Credentials secret is the name of a Secret that already exists in this namespace. It must contain adminPassword; adminUser defaults to admin when omitted. readOnlyUser and readOnlyPassword are optional. Without adminPassword the admin container exits and the cluster stays NotReady.
+              groupType: toggleable
+              label: Enable admin UI
+              uiType: group
+          componentsOrder:
+            - ui
+          description: Optional web UI for managing S3 buckets. Off unless you name a credentials Secret.
+          label: Admin
         basicInfo:
           components:
             version:
@@ -634,6 +660,7 @@ spec:
         - volume
         - filer
         - s3
+        - admin
         - tls
   versions:
     - components:

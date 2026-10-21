@@ -31,6 +31,19 @@ type StandaloneTopologyConfig struct {
 	// security.toml. Independent of TLS; YAML/API only (no UI fields yet).
 	// +optional
 	SecurityConfig *SecurityConfigSpec `json:"securityConfig,omitempty"`
+
+	// Admin runs the SeaweedFS admin UI when CredentialsSecret names an
+	// existing Secret. This provider does not create that Secret.
+	// +optional
+	Admin *AdminConfig `json:"admin,omitempty"`
+}
+
+// AdminConfig points the admin server at a user-supplied credentials Secret.
+type AdminConfig struct {
+	// CredentialsSecret is the name of an existing Secret in the Instance
+	// namespace. The operator reads adminUser and adminPassword, and
+	// optionally readOnlyUser and readOnlyPassword.
+	CredentialsSecret string `json:"credentialsSecret,omitempty"`
 }
 
 // TLSSpec mirrors seaweedfs-operator TLSSpec for inter-component gRPC mTLS.

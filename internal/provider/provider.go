@@ -195,6 +195,7 @@ func (p *Provider) Sync(c *controller.Context) error {
 			Volume:                buildVolumeSpec(volume, volumeCustomSpec),
 			Filer:                 buildFilerSpec(filer, filerCustomSpec),
 			S3:                    buildS3Spec(s3, s3CustomSpec),
+			Admin:                 buildAdminSpec(topo),
 			TLS:                   buildTLSSpec(topo),
 			SecurityConfig:        buildSecurityConfigSpec(topo),
 		},
@@ -212,11 +213,16 @@ func (p *Provider) Sync(c *controller.Context) error {
 // labelPods labels every component's pods so the runtime counts them into
 // the Instance's status.components. The operator adds them to the pod
 // templates only, never to the StatefulSet/Deployment selectors.
+// Admin is labelled only when the user enabled it. It is not an Instance
+// component; the operator runs that one pod from spec.admin.
 func labelPods(c *controller.Context, sw *seaweedv1.Seaweed) {
 	sw.Spec.Master.Labels = c.PodLabels(common.ComponentMaster)
 	sw.Spec.Volume.Labels = c.PodLabels(common.ComponentVolume)
 	sw.Spec.Filer.Labels = c.PodLabels(common.ComponentFiler)
 	sw.Spec.S3.Labels = c.PodLabels(common.ComponentS3)
+	if sw.Spec.Admin != nil {
+		sw.Spec.Admin.Labels = c.PodLabels(common.ComponentAdmin)
+	}
 }
 
 func resolveImage(c *controller.Context, componentName string, comp corev1alpha1.ComponentSpec) (string, error) {
@@ -317,7 +323,17 @@ func (p *Provider) Status(c *controller.Context) (controller.Status, error) {
 			}
 			return controller.ReadyWithConnectionDetails(details), nil
 		}
+		if msg, err := adminNotReadyMessage(c, sw); err != nil {
+			return controller.Status{}, err
+		} else if msg != "" {
+			return controller.Provisioning(msg), nil
+		}
 		return controller.Provisioning(cond.Message), nil
+	}
+	if msg, err := adminNotReadyMessage(c, sw); err != nil {
+		return controller.Status{}, err
+	} else if msg != "" {
+		return controller.Provisioning(msg), nil
 	}
 
 	if sw.Status.Master.Replicas > 0 {
