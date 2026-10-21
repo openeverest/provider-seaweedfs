@@ -1233,6 +1233,7 @@ func TestStatus(t *testing.T) {
 				}
 				assert.NotContains(t, status.ConnectionDetails.AdditionalProperties, "adminURL")
 				assert.NotContains(t, status.ConnectionDetails.AdditionalProperties, "adminUser")
+				assert.NotContains(t, status.ConnectionDetails.AdditionalProperties, "adminCredentialsSecret")
 				assert.NotContains(t, status.ConnectionDetails.AdditionalProperties, "adminPassword")
 			}
 		})
@@ -1355,13 +1356,17 @@ func newSyncInstance(comps map[string]corev1alpha1.ComponentSpec) *corev1alpha1.
 	}
 }
 
-func newSyncClient(t *testing.T, instance *corev1alpha1.Instance) client.Client {
+func newSyncClient(t *testing.T, instance *corev1alpha1.Instance, objs ...client.Object) client.Client {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	require.NoError(t, corev1alpha1.AddToScheme(scheme))
 	require.NoError(t, seaweedv1.AddToScheme(scheme))
 	require.NoError(t, corev1.AddToScheme(scheme))
-	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(instance).Build()
+	builder := fake.NewClientBuilder().WithScheme(scheme).WithObjects(instance)
+	if len(objs) > 0 {
+		builder = builder.WithObjects(objs...)
+	}
+	return builder.Build()
 }
 
 func podLabels(instance, component string) map[string]string {

@@ -186,6 +186,11 @@ func (p *Provider) Sync(c *controller.Context) error {
 		return err
 	}
 
+	adminSecretName, err := ensureAdminCredentials(c, topo)
+	if err != nil {
+		return err
+	}
+
 	sw := &seaweedv1.Seaweed{
 		ObjectMeta: c.ObjectMeta(c.Name()),
 		Spec: seaweedv1.SeaweedSpec{
@@ -195,7 +200,7 @@ func (p *Provider) Sync(c *controller.Context) error {
 			Volume:                buildVolumeSpec(volume, volumeCustomSpec),
 			Filer:                 buildFilerSpec(filer, filerCustomSpec),
 			S3:                    buildS3Spec(s3, s3CustomSpec),
-			Admin:                 buildAdminSpec(topo),
+			Admin:                 buildAdminSpec(adminSecretName),
 			TLS:                   buildTLSSpec(topo),
 			SecurityConfig:        buildSecurityConfigSpec(topo),
 		},

@@ -21,7 +21,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -32,62 +31,113 @@ import (
 	"github.com/openeverest/openeverest/v2/provider-runtime/controller"
 	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
 
-	"github.com/openeverest/provider-seaweedfs/definition/topologies/standalone"
 	"github.com/openeverest/provider-seaweedfs/internal/common"
 )
 
 func TestBuildAdminSpec(t *testing.T) {
-	assert.Nil(t, buildAdminSpec(standalone.StandaloneTopologyConfig{}))
-	assert.Nil(t, buildAdminSpec(standalone.StandaloneTopologyConfig{Admin: &standalone.AdminConfig{}}))
+	assert.Nil(t, buildAdminSpec(""))
 
-	spec := buildAdminSpec(standalone.StandaloneTopologyConfig{
-		Admin: &standalone.AdminConfig{CredentialsSecret: "seaweed-admin"},
-	})
+	spec := buildAdminSpec("test-instance-admin-credentials")
 	require.NotNil(t, spec)
 	require.NotNil(t, spec.CredentialsSecret)
-	assert.Equal(t, "seaweed-admin", spec.CredentialsSecret.Name)
+	assert.Equal(t, "test-instance-admin-credentials", spec.CredentialsSecret.Name)
 	assert.Nil(t, spec.Service)
 	assert.Nil(t, spec.MetricsPort)
 	assert.Nil(t, spec.Ingress)
 }
 
-func TestValidateAdminParameters(t *testing.T) {
-	require.NoError(t, validateAdminParameters(standalone.StandaloneTopologyConfig{}))
-	require.NoError(t, validateAdminParameters(standalone.StandaloneTopologyConfig{
-		Admin: &standalone.AdminConfig{CredentialsSecret: "seaweed-admin"},
-	}))
-
-	err := validateAdminParameters(standalone.StandaloneTopologyConfig{
-		Admin: &standalone.AdminConfig{CredentialsSecret: "Not a secret"},
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "admin.credentialsSecret")
+func TestGenerateAdminPassword(t *testing.T) {
+	password, err := generateAdminPassword()
+	require.NoError(t, err)
+	assert.Len(t, password, adminPasswordLength)
+	for _, r := range password {
+		assert.Contains(t, adminPasswordAlphabet, string(r))
+	}
 }
 
-func TestSyncAdminReferencesUserSecret(t *testing.T) {
+func TestSyncAdminCreatesCredentials(t *testing.T) {
 	instance := newSyncInstance(validComponents())
 	instance.Spec.Topology = &corev1alpha1.TopologySpec{
 		Type:       "standalone",
-		Parameters: &runtime.RawExtension{Raw: []byte(`{"admin":{"credentialsSecret":"seaweed-admin"}}`)},
+		Parameters: &runtime.RawExtension{Raw: []byte(`{"admin":{"enabled":true}}`)},
 	}
 	cl := newSyncClient(t, instance)
 
 	ctx, sw := syncSeaweed(t, cl, instance)
+	secretName := adminCredentialsSecretName(instance.Name)
 	require.NotNil(t, sw.Spec.Admin)
 	require.NotNil(t, sw.Spec.Admin.CredentialsSecret)
-	assert.Equal(t, "seaweed-admin", sw.Spec.Admin.CredentialsSecret.Name)
+	assert.Equal(t, secretName, sw.Spec.Admin.CredentialsSecret.Name)
 	assert.Equal(t, podLabels(instance.Name, "admin"), sw.Spec.Admin.Labels)
 	assert.Contains(t, ctx.LabelledComponents(), "admin")
 	assert.Nil(t, sw.Spec.Worker)
 
 	secret := &corev1.Secret{}
-	err := cl.Get(context.Background(), types.NamespacedName{Namespace: instance.Namespace, Name: "seaweed-admin"}, secret)
-	require.Error(t, err)
-	assert.True(t, errors.IsNotFound(err))
+	require.NoError(t, cl.Get(context.Background(), types.NamespacedName{Namespace: instance.Namespace, Name: secretName}, secret))
+	assert.Equal(t, adminUsername, string(secret.Data[adminUserKey]))
+	password := string(secret.Data[adminPasswordKey])
+	assert.Len(t, password, adminPasswordLength)
+
+	_, sw = syncSeaweed(t, cl, instance)
+	require.NoError(t, cl.Get(context.Background(), types.NamespacedName{Namespace: instance.Namespace, Name: secretName}, secret))
+	assert.Equal(t, adminUsername, string(secret.Data[adminUserKey]))
+	assert.Equal(t, password, string(secret.Data[adminPasswordKey]))
+	assert.Equal(t, secretName, sw.Spec.Admin.CredentialsSecret.Name)
 
 	instance.Spec.Topology = nil
 	_, sw = syncSeaweed(t, cl, instance)
 	assert.Nil(t, sw.Spec.Admin)
+	require.NoError(t, cl.Get(context.Background(), types.NamespacedName{Namespace: instance.Namespace, Name: secretName}, secret))
+	assert.Equal(t, password, string(secret.Data[adminPasswordKey]))
+}
+
+func TestSyncAdminKeepsExistingPasswordAndForcesUsername(t *testing.T) {
+	instance := newSyncInstance(validComponents())
+	instance.Spec.Topology = &corev1alpha1.TopologySpec{
+		Type:       "standalone",
+		Parameters: &runtime.RawExtension{Raw: []byte(`{"admin":{"enabled":true}}`)},
+	}
+	secretName := adminCredentialsSecretName(instance.Name)
+	cl := newSyncClient(t, instance, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: instance.Namespace},
+		Data: map[string][]byte{
+			adminUserKey:     []byte("someone-else"),
+			adminPasswordKey: []byte("keep-me"),
+		},
+	})
+
+	_, sw := syncSeaweed(t, cl, instance)
+	require.NotNil(t, sw.Spec.Admin)
+	assert.Equal(t, secretName, sw.Spec.Admin.CredentialsSecret.Name)
+
+	secret := &corev1.Secret{}
+	require.NoError(t, cl.Get(context.Background(), types.NamespacedName{Namespace: instance.Namespace, Name: secretName}, secret))
+	assert.Equal(t, adminUsername, string(secret.Data[adminUserKey]))
+	assert.Equal(t, "keep-me", string(secret.Data[adminPasswordKey]))
+}
+
+func TestAddAdminConnectionDetails(t *testing.T) {
+	instance := newSyncInstance(validComponents())
+	secretName := adminCredentialsSecretName(instance.Name)
+	sw := &seaweedv1.Seaweed{
+		ObjectMeta: metav1.ObjectMeta{Name: instance.Name, Namespace: instance.Namespace},
+		Spec: seaweedv1.SeaweedSpec{
+			Admin: &seaweedv1.AdminSpec{
+				CredentialsSecret: &corev1.LocalObjectReference{Name: secretName},
+			},
+		},
+	}
+	ctx := controllerContext(t, instance)
+	props := map[string]string{}
+	addAdminConnectionDetails(ctx, sw, props)
+	assert.Equal(t, "http://test-instance-admin.default.svc:23646", props["adminURL"])
+	assert.Equal(t, adminUsername, props["adminUser"])
+	assert.Equal(t, secretName, props["adminCredentialsSecret"])
+	assert.NotContains(t, props, "adminPassword")
+
+	empty := map[string]string{}
+	addAdminConnectionDetails(ctx, &seaweedv1.Seaweed{}, empty)
+	assert.Empty(t, empty)
 }
 
 func TestSyncWithoutAdminLeavesItUnset(t *testing.T) {

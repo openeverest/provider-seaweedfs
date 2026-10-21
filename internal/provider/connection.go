@@ -70,6 +70,7 @@ func buildConnectionDetailsFromService(
 			props["externalVerifyTLS"] = strconv.FormatBool(externalHTTPSVerifyTLS(s3Params))
 		}
 	}
+	addAdminConnectionDetails(c, sw, props)
 
 	return controller.ConnectionDetails{
 		Type:                 "s3",

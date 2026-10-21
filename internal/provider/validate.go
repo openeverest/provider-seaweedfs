@@ -148,9 +148,6 @@ func validateTopologyParameters(topo standalone.StandaloneTopologyConfig) error 
 	if err := validateTLSParameters(topo); err != nil {
 		return err
 	}
-	if err := validateAdminParameters(topo); err != nil {
-		return err
-	}
 	return nil
 }
 

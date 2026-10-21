@@ -119,11 +119,11 @@ an MVP: several capabilities are stubbed or not wired yet.
 | High availability | ⚠️ | Replica counts are passed through. Data copies follow `topology.parameters.replication` (`master.defaultReplication`); empty uses `001` with at least 2 volume servers, otherwise `000`. Placements that need another data center or rack are rejected |
 | Custom configuration | ✅ | Master `masterVolumeSizeLimitMB`; topology `replication` and `volumeServerDiskCount`; volume `maxVolumeCounts`; filer `maxMB`; S3 `port` / `domainName` / Ingress; JWT signing via `topology.parameters.securityConfig` |
 | S3 service exposure | ✅ | `spec.components.s3.service.serviceType`: ClusterIP, NodePort, or LoadBalancer. `loadBalancerService.sourceRanges` is rejected. Only S3 can be exposed |
-| Admin UI | ✅ | Off unless `topology.parameters.admin.credentialsSecret` names an existing Secret. ClusterIP Service `<instance>-admin`, port 23646. The Secret's keys are `adminUser` and `adminPassword` (optional `readOnlyUser`, `readOnlyPassword`). This provider does not create the Secret. Operator image `1.0.40` exits the admin container when `adminPassword` is missing, and the Seaweed `Ready` condition stays false. Workers are not created |
+| Admin UI | ✅ | Off unless `topology.parameters.admin.enabled` is true. This provider creates Secret `<instance>-admin-credentials` with `adminUser=admin` and a generated `adminPassword` (kept across reconciles). ClusterIP Service `<instance>-admin`, port 23646. Connection details add `adminURL`, `adminUser`, and `adminCredentialsSecret` (the Secret name). Operator image `1.0.40` exits the admin container when `adminPassword` is missing. Workers are not created |
 | Monitoring | ❌ | Not wired through the Instance API. The operator chart can enable `serviceMonitor` on its own (`enabled: false` by default); this provider does not set it |
 | TLS | ✅ | Inter-component gRPC mTLS via `topology.parameters.tls`. Client HTTPS via S3 Ingress TLS (`components.s3.parameters.ingress`) → `externalEndpointURL=https://…`. Native S3 HTTPS on the gateway is not supported by the operator yet ([seaweedfs-operator#411](https://github.com/seaweedfs/seaweedfs-operator/issues/411)) |
 | Status / readiness | ✅ | Maps Seaweed Ready condition; waits for TLS Secret / LoadBalancer / Ingress when configured |
-| Connection details | ✅ | Publishes in-cluster S3 endpoint on Ready; NodePort / LoadBalancer / Ingress add `externalEndpointURL` |
+| Connection details | ✅ | Publishes in-cluster S3 endpoint on Ready; NodePort / LoadBalancer / Ingress add `externalEndpointURL`. Admin UI adds `adminURL`, `adminUser`, and `adminCredentialsSecret` |
 | Pod scheduling | ✅ | `schedulingPolicy` affinity, nodeSelector, tolerations and schedulerName, written on each Seaweed component. Master, volume and filer pods prefer separate nodes (preferred anti-affinity on hostname, weight 100); `affinity: {}` opts out. S3 has no default affinity. `topologySpreadConstraints` is rejected (no seaweedfs-operator field) |
 
 Stateful workloads additionally report:
@@ -288,7 +288,9 @@ kubectl get seaweed -A
 > Optional JWT signing for volume/filer (`topology.parameters.securityConfig`) is
 > supported via YAML/API only there is no UI for it yet.
 >
-> The admin UI is off until you name a Secret you created:
+> The admin UI is off until you enable it. This provider creates the
+> credentials Secret; the username is `admin` and the password is generated
+> once and reused:
 >
 > ```yaml
 > spec:
@@ -296,19 +298,23 @@ kubectl get seaweed -A
 >     type: standalone
 >     parameters:
 >       admin:
->         credentialsSecret: seaweed-admin
+>         enabled: true
 > ```
 >
+> The Secret is `<instance>-admin-credentials` (`adminUser`, `adminPassword`).
+> Connection details name it in `adminCredentialsSecret` and do not copy the
+> password. Read it with:
+>
 > ```bash
-> kubectl create secret generic seaweed-admin \
->   --from-literal=adminUser=admin \
->   --from-literal=adminPassword='replace-me'
-> # optional: readOnlyUser, readOnlyPassword
+> kubectl get secret <instance>-admin-credentials \
+>   -o jsonpath='{.data.adminPassword}' | base64 -d; echo
 > ```
 >
 > The Service is ClusterIP `<instance>-admin` port 23646. Reach it with
 > `kubectl port-forward svc/<instance>-admin 23646:23646` and open
 > `http://localhost:23646`. The admin process reads the Secret only at start.
+> Turning the UI off stops the server and leaves the Secret in place, so
+> turning it back on keeps the same password.
 >
 > For Postgres backups, point a `BackupStorage` at the S3 endpoint. Without an
 > S3 identity config on the gateway, SeaweedFS accepts requests without auth —
@@ -357,8 +363,8 @@ Source of truth: [definition/versions.yaml](definition/versions.yaml).
 
 Sync writes replica counts, CPU and memory resources, volume/filer/master
 persistence (including storage class), S3 service type and Ingress, the admin
-server when `topology.parameters.admin.credentialsSecret` is set (the Secret
-itself is not created here), component
+server when `topology.parameters.admin.enabled` is true (Secret
+`<instance>-admin-credentials`, user `admin`, generated password), component
 parameters (`masterVolumeSizeLimitMB`, `maxVolumeCounts`, `maxMB`, `port`,
 `domainName`), topology `replication` and `volumeServerDiskCount`, optional
 inter-component TLS (`topology.parameters.tls`), JWT signing
