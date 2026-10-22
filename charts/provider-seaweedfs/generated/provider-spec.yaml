@@ -79,6 +79,11 @@ spec:
       parametersSchema:
         openAPIV3Schema:
           properties:
+            admin:
+              properties:
+                enabled:
+                  type: boolean
+              type: object
             replication:
               type: string
             securityConfig:
@@ -131,6 +136,21 @@ spec:
   uiSchema:
     standalone:
       sections:
+        admin:
+          components:
+            enabled:
+              fieldParams:
+                defaultValue: false
+                helperText: Creates user admin and a generated password. One server on ClusterIP Service <instance>-admin, port 23646.
+                label: Enable admin UI
+              path: spec.topology.parameters.admin.enabled
+              uiType: toggle
+              validation:
+                required: false
+          componentsOrder:
+            - enabled
+          description: Optional web UI for managing S3 buckets.
+          label: Admin
         basicInfo:
           components:
             version:
@@ -634,6 +654,7 @@ spec:
         - volume
         - filer
         - s3
+        - admin
         - tls
   versions:
     - components:

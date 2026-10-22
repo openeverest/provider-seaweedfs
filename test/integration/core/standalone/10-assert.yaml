@@ -106,3 +106,5 @@ spec:
     (affinity == null): true
     # Default ClusterIP leaves the operator's own Service defaults in place.
     (service == null): true
+  # Admin UI stays off unless topology.parameters.admin.enabled is true.
+  (admin == null): true

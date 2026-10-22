@@ -59,6 +59,7 @@ func TestSyncScheduling(t *testing.T) {
 		assert.Equal(t, preferredHostnameAntiAffinity(podLabels(instance.Name, common.ComponentVolume)), sw.Spec.Volume.Affinity)
 		assert.Equal(t, preferredHostnameAntiAffinity(podLabels(instance.Name, common.ComponentFiler)), sw.Spec.Filer.Affinity)
 		assert.Nil(t, sw.Spec.S3.Affinity)
+		assert.Nil(t, sw.Spec.Admin)
 		assert.Nil(t, sw.Spec.Affinity)
 		assert.Nil(t, sw.Spec.NodeSelector)
 		assert.Empty(t, sw.Spec.Tolerations)
