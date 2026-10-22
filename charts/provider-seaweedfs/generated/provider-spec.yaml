@@ -351,6 +351,7 @@ spec:
             volumeSizeLimitMB:
               fieldParams:
                 defaultValue: 1024
+                helperText: Maximum size of a single SeaweedFS volume. When a volume reaches this size, the master stops writing to it and uses another volume.
                 label: Volume size limit (MB)
               path: spec.components.master.parameters.masterVolumeSizeLimitMB
               uiType: number
