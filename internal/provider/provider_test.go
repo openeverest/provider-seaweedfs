@@ -147,6 +147,15 @@ func TestValidateMasterParameters(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "masterVolumeSizeLimitMB must be at least 1")
+
+	require.NoError(t, validateMasterParameters(components.MasterCustomSpec{
+		VolumeGrowthCount: pointer.ToInt32(1),
+	}))
+	err = validateMasterParameters(components.MasterCustomSpec{
+		VolumeGrowthCount: pointer.ToInt32(0),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "volumeGrowthCount must be at least 1")
 }
 
 func TestValidateVolume(t *testing.T) {
@@ -413,6 +422,32 @@ func TestBuildMasterSpec(t *testing.T) {
 		assert.Equal(t, DefaultReplication, *spec.DefaultReplication)
 		assert.Nil(t, spec.Persistence)
 		assert.Nil(t, spec.Service)
+		require.NotNil(t, spec.Config)
+		assert.Equal(t, "[master.volume_growth]\ncopy_1 = 2\ncopy_2 = 2\ncopy_3 = 2\n", *spec.Config)
+	})
+
+	t.Run("custom volume growth count overrides default", func(t *testing.T) {
+		spec := buildMasterSpec(
+			corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(1)},
+			components.MasterCustomSpec{VolumeGrowthCount: pointer.ToInt32(6)},
+			DefaultReplication,
+		)
+		require.NotNil(t, spec.Config)
+		assert.Equal(t, "[master.volume_growth]\ncopy_1 = 6\ncopy_2 = 6\ncopy_3 = 6\n", *spec.Config)
+	})
+
+	t.Run("config checksum annotation rolls masters on change", func(t *testing.T) {
+		build := func(count *int32) *seaweedv1.MasterSpec {
+			return buildMasterSpec(
+				corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(3)},
+				components.MasterCustomSpec{VolumeGrowthCount: count},
+				DefaultReplication,
+			)
+		}
+		defaults := build(nil).Annotations[masterConfigChecksumAnnotation]
+		require.NotEmpty(t, defaults)
+		assert.Equal(t, defaults, build(pointer.ToInt32(DefaultVolumeGrowthCount)).Annotations[masterConfigChecksumAnnotation])
+		assert.NotEqual(t, defaults, build(pointer.ToInt32(3)).Annotations[masterConfigChecksumAnnotation])
 	})
 
 	t.Run("custom volume size limit overrides default", func(t *testing.T) {
@@ -688,15 +723,14 @@ func TestBuildFilerSpec(t *testing.T) {
 func TestBuildVolumeSpec(t *testing.T) {
 	t.Run("defaults when no custom spec", func(t *testing.T) {
 		spec := buildVolumeSpec(corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(2)}, components.VolumeCustomSpec{})
-		require.NotNil(t, spec.MaxVolumeCounts)
-		assert.Equal(t, DefaultMaxVolumeCounts, *spec.MaxVolumeCounts)
+		assert.Nil(t, spec.MaxVolumeCounts, "unset lets the operator pass -max=0 so SeaweedFS sizes slots from free disk")
 		assert.Equal(t, int32(2), spec.Replicas)
 		assert.Nil(t, spec.Requests)
 		assert.Nil(t, spec.StorageClassName)
 		assert.Nil(t, spec.Service)
 	})
 
-	t.Run("custom max volume counts overrides default", func(t *testing.T) {
+	t.Run("custom max volume counts is passed through", func(t *testing.T) {
 		spec := buildVolumeSpec(
 			corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(1)},
 			components.VolumeCustomSpec{MaxVolumeCounts: pointer.ToInt32(16)},
@@ -864,6 +898,17 @@ func TestValidate(t *testing.T) {
 				return c
 			}(),
 			expectErr: "masterVolumeSizeLimitMB must be at least 1",
+		},
+		{
+			name: "invalid master volume growth count",
+			components: func() map[string]corev1alpha1.ComponentSpec {
+				c := validComponents()
+				master := c[common.ComponentMaster]
+				master.Parameters = &runtime.RawExtension{Raw: []byte(`{"volumeGrowthCount":0}`)}
+				c[common.ComponentMaster] = master
+				return c
+			}(),
+			expectErr: "volumeGrowthCount must be at least 1",
 		},
 		{
 			name: "missing volume storage",

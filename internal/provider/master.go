@@ -1,6 +1,22 @@
+// Copyright (C) 2026 The OpenEverest Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package provider
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"regexp"
 
@@ -39,7 +55,21 @@ func validateMasterParameters(spec components.MasterCustomSpec) error {
 	if spec.MasterVolumeSizeLimitMB != nil && *spec.MasterVolumeSizeLimitMB < 1 {
 		return fmt.Errorf("masterVolumeSizeLimitMB must be at least 1")
 	}
+	if spec.VolumeGrowthCount != nil && *spec.VolumeGrowthCount < 1 {
+		return fmt.Errorf("volumeGrowthCount must be at least 1")
+	}
 	return nil
+}
+
+// masterConfigChecksumAnnotation rolls the master pods when master.toml
+// changes: `weed master` reads it only at startup.
+const masterConfigChecksumAnnotation = "seaweedfs.openeverest.io/master-config-checksum"
+
+// volumeGrowthConfig renders the master.toml that sets how many logical
+// volumes the master grows at once for one-, two- and three-copy placements.
+// Placements with more copies keep the upstream copy_other default of 1.
+func volumeGrowthConfig(count int32) string {
+	return fmt.Sprintf("[master.volume_growth]\ncopy_1 = %d\ncopy_2 = %d\ncopy_3 = %d\n", count, count, count)
 }
 
 // effectiveReplication returns the placement written to master.defaultReplication.
@@ -80,6 +110,15 @@ func buildMasterSpec(comp corev1alpha1.ComponentSpec, masterCustomSpec component
 	if masterCustomSpec.MasterVolumeSizeLimitMB != nil {
 		spec.VolumeSizeLimitMB = masterCustomSpec.MasterVolumeSizeLimitMB
 	}
+
+	growthCount := DefaultVolumeGrowthCount
+	if masterCustomSpec.VolumeGrowthCount != nil {
+		growthCount = *masterCustomSpec.VolumeGrowthCount
+	}
+	config := volumeGrowthConfig(growthCount)
+	spec.Config = pointer.ToString(config)
+	sum := sha256.Sum256([]byte(config))
+	spec.Annotations = map[string]string{masterConfigChecksumAnnotation: hex.EncodeToString(sum[:])}
 
 	if comp.Resources != nil {
 		spec.ResourceRequirements = *comp.Resources
