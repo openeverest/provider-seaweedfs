@@ -765,6 +765,17 @@ func validComponents() map[string]corev1alpha1.ComponentSpec {
 	}
 }
 
+func withFilers(image string, filers int32) map[string]corev1alpha1.ComponentSpec {
+	c := validComponents()
+	master := c[common.ComponentMaster]
+	master.Image = image
+	c[common.ComponentMaster] = master
+	filer := c[common.ComponentFiler]
+	filer.Replicas = pointer.ToInt32(filers)
+	c[common.ComponentFiler] = filer
+	return c
+}
+
 func TestValidate(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -775,6 +786,23 @@ func TestValidate(t *testing.T) {
 		{
 			name:       "valid",
 			components: validComponents(),
+		},
+		{
+			name:       "two filers on 4.47 are rejected",
+			components: withFilers("chrislusf/seaweedfs:4.47", 2),
+			expectErr:  `"filer" component: 2 replicas require SeaweedFS 4.48 or newer, got 4.47`,
+		},
+		{
+			name:       "one filer on 4.47 is allowed",
+			components: withFilers("chrislusf/seaweedfs:4.47", 1),
+		},
+		{
+			name:       "two filers on 4.48 are allowed",
+			components: withFilers("chrislusf/seaweedfs:4.48", 2),
+		},
+		{
+			name:       "two filers on an image without a release tag are allowed",
+			components: withFilers("chrislusf/seaweedfs:latest", 2),
 		},
 		{
 			name: "missing master",

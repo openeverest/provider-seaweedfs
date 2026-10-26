@@ -75,6 +75,12 @@ func (p *Provider) Validate(c *controller.Context) error {
 	if err := validateFiler(filer, isFilerPresent); err != nil {
 		return err
 	}
+	// An unresolvable image is reported by Sync; only a known release is checked.
+	if image, err := resolveImage(c, common.ComponentMaster, master); err == nil {
+		if err := validateFilerVersion(image, *filer.Replicas); err != nil {
+			return err
+		}
+	}
 
 	s3, isS3Present := c.Instance().Spec.Components[common.ComponentS3]
 	if err := validateS3(s3, isS3Present); err != nil {

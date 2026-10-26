@@ -1,0 +1,41 @@
+# Both filers must end up with the same objects. Before SeaweedFS 4.48 the
+# returning filer missed the writes acknowledged while the other one shut down.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: compare
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: curl
+          image: curlimages/curl:8.11.1
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -u
+              # A failed request is not an empty listing: report it separately.
+              list() {
+                curl -sf -m 30 -H 'Accept: application/json' -o /tmp/raw \
+                  "http://e2e-filer-ha-$1.e2e-filer-ha-filer-peer:8888/buckets/filer-ha/?limit=1000000" || return 1
+                grep -o '"FullPath":"[^"]*"' /tmp/raw | sort
+              }
+              for attempt in $(seq 1 24); do
+                if ! list filer-0 > /tmp/a || ! list filer-1 > /tmp/b; then
+                  echo "attempt $attempt: a filer did not answer"; sleep 5; continue
+                fi
+                a=$(wc -l < /tmp/a); b=$(wc -l < /tmp/b)
+                echo "attempt $attempt: filer-0=$a filer-1=$b"
+                if [ "$a" -gt 0 ] && cmp -s /tmp/a /tmp/b; then
+                  echo "filers agree on $a objects"
+                  exit 0
+                fi
+                sleep 5
+              done
+              echo "only on filer-0:"; comm -23 /tmp/a /tmp/b | head -20
+              echo "only on filer-1:"; comm -13 /tmp/a /tmp/b | head -20
+              exit 1

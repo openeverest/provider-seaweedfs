@@ -1,0 +1,11 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: e2e-filer-ha
+spec:
+  components:
+    filer:
+      type: seaweedfs
+      replicas: 2
+      storage:
+        size: 1Gi

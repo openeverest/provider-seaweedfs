@@ -19,7 +19,8 @@ config:
                 replicas: 2
         filer:
             defaults:
-                replicas: 1
+                # Two filers keep S3 serving when one restarts or its node fails.
+                replicas: 2
         s3:
             defaults:
                 replicas: 1
@@ -255,7 +256,7 @@ ui:
             components:
                 replicas:
                     fieldParams:
-                        defaultValue: 1
+                        defaultValue: 2
                         label: Filer replicas
                     path: spec.components.filer.replicas
                     uiType: number
@@ -264,6 +265,9 @@ ui:
                         max: 5
                         min: 1
                         required: true
+                        celExpressions:
+                          - celExpr: "!(spec.version == '4.47' && spec.components.filer.replicas > 1)"
+                            message: "More than one filer requires SeaweedFS 4.48 or newer"
                 maxMB:
                     fieldParams:
                         defaultValue: 4
