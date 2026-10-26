@@ -6,7 +6,9 @@ metadata:
 spec:
   description: |
     Create a standalone Instance on a real seaweedfs-operator, put and get an
-    S3 object, scale the volume servers from 2 to 1, and read the object again.
+    S3 object with the admin credentials from the connection Secret, check that
+    unsigned requests are denied, scale the volume servers from 2 to 1, and read
+    the object again.
   catch:
     # kubectl aborts the whole request when one type is unknown, which hid
     # the Instance dump when the Seaweed CRD was not installed.

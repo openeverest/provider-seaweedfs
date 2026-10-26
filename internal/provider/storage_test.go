@@ -196,6 +196,7 @@ func TestStorageExpansionStatus(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, corev1alpha1.InstancePhaseReady, status.Phase)
 		assert.NotEmpty(t, status.ConnectionDetails.Host)
+		assert.Equal(t, "AKTEST", status.ConnectionDetails.Username)
 	})
 
 	t.Run("resizing is updating", func(t *testing.T) {
@@ -367,7 +368,14 @@ func expansionStatusContext(t *testing.T, sw *seaweedv1.Seaweed, extras ...clien
 	require.NoError(t, corev1alpha1.AddToScheme(scheme))
 	require.NoError(t, seaweedv1.AddToScheme(scheme))
 	require.NoError(t, corev1.AddToScheme(scheme))
-	objs := []client.Object{instance, sw, svc}
+	s3Creds := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: s3ConfigSecretName(instance.Name), Namespace: "default"},
+		Data: map[string][]byte{
+			s3AccessKeyIDKey:     []byte("AKTEST"),
+			s3SecretAccessKeyKey: []byte("secret-test"),
+		},
+	}
+	objs := []client.Object{instance, sw, svc, s3Creds}
 	objs = append(objs, extras...)
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
 	return controller.NewContext(context.Background(), cl, instance, common.ProviderName)
