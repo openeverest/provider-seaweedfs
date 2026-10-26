@@ -23,7 +23,7 @@ spec:
                   addressing_style = path
               EOF
               printf '%s' 'e2e-smoke' > /tmp/payload
-              aws s3 cp s3://e2e-smoke/obj /tmp/downloaded --endpoint-url "$ENDPOINT" --no-sign-request
+              aws s3 cp s3://e2e-smoke/obj /tmp/downloaded --endpoint-url "$ENDPOINT"
               expected=$(sha256sum /tmp/payload | awk '{print $1}')
               actual=$(sha256sum /tmp/downloaded | awk '{print $1}')
               test "$expected" = "$actual"
@@ -37,6 +37,16 @@ spec:
                 secretKeyRef:
                   name: e2e-seaweedfs-conn
                   key: region
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: e2e-seaweedfs-conn
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: e2e-seaweedfs-conn
+                  key: AWS_SECRET_ACCESS_KEY
             - name: ENDPOINT
               valueFrom:
                 secretKeyRef:

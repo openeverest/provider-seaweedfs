@@ -81,6 +81,14 @@ spec:
                 "s3":{"replicas":1,"readyReplicas":1}}}'
         - assert:
             file: 12-assert.yaml
+        # The connection Secret publishes the same admin keys the S3 gateway loads.
+        - script:
+            content: |
+              set -e
+              key() { kubectl get secret "$1" -n $NAMESPACE -o jsonpath="{.data.$2}"; }
+              test -n "$(key test-seaweedfs-s3-config AWS_ACCESS_KEY_ID)"
+              test "$(key test-seaweedfs-conn AWS_ACCESS_KEY_ID)" = "$(key test-seaweedfs-s3-config AWS_ACCESS_KEY_ID)"
+              test "$(key test-seaweedfs-conn AWS_SECRET_ACCESS_KEY)" = "$(key test-seaweedfs-s3-config AWS_SECRET_ACCESS_KEY)"
 
     - name: scale-cluster
       try:
@@ -224,5 +232,11 @@ spec:
             apiVersion: v1
             kind: Secret
             name: test-seaweedfs-conn
+            for:
+              deletion: {}
+        - wait:
+            apiVersion: v1
+            kind: Secret
+            name: test-seaweedfs-s3-config
             for:
               deletion: {}

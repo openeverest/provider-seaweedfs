@@ -61,6 +61,11 @@ func New() *Provider {
 			},
 			WatchConfigs: []controller.WatchConfig{
 				controller.WatchOwned(&seaweedv1.Seaweed{}),
+				// Re-apply the S3 identities Secret if it is edited or deleted.
+				controller.WatchOwned(&corev1.Secret{},
+					predicate.NewPredicateFuncs(func(o client.Object) bool {
+						return strings.HasSuffix(o.GetName(), s3ConfigSecretSuffix)
+					})),
 				// The operator does not touch the Seaweed CR when LB ingress or NodePort
 				// changes, so watch the S3 Service directly to refresh status.
 				controller.WatchExternal(&corev1.Service{},
@@ -186,6 +191,11 @@ func (p *Provider) Sync(c *controller.Context) error {
 		return err
 	}
 
+	s3ConfigChecksum, err := syncS3ConfigSecret(c)
+	if err != nil {
+		return err
+	}
+
 	adminSecretName, err := ensureAdminCredentials(c, topo)
 	if err != nil {
 		return err
@@ -209,6 +219,7 @@ func (p *Provider) Sync(c *controller.Context) error {
 	if topo.VolumeServerDiskCount != nil {
 		sw.Spec.VolumeServerDiskCount = topo.VolumeServerDiskCount
 	}
+	applyS3Auth(sw.Spec.S3, c.Name(), s3ConfigChecksum)
 	labelPods(c, sw)
 	applyScheduling(c, sw)
 
@@ -310,6 +321,14 @@ func (p *Provider) Status(c *controller.Context) (controller.Status, error) {
 				return controller.Provisioning("Waiting for S3 Ingress"), nil
 			}
 
+			creds, err := readS3Credentials(c)
+			if err != nil {
+				return controller.Status{}, err
+			}
+			if !creds.complete() {
+				return controller.Provisioning("Waiting for S3 credentials Secret " + s3ConfigSecretName(c.Name())), nil
+			}
+
 			var s3Params components.S3CustomSpec
 			if s3Comp, ok := c.Instance().Spec.Components[common.ComponentS3]; ok {
 				c.TryDecodeComponentParameters(s3Comp, &s3Params)
@@ -318,6 +337,7 @@ func (p *Provider) Status(c *controller.Context) (controller.Status, error) {
 			if err != nil {
 				return controller.Status{}, err
 			}
+			details = withS3Credentials(details, creds)
 			expansion, err := storageExpansionStatus(c, sw)
 			if err != nil {
 				return controller.Status{}, err

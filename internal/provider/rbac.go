@@ -37,7 +37,8 @@ package provider
 // in status.components (provider-runtime lists/watches labelled pods):
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 
-// Connection details Secret written by provider-runtime on Ready:
+// Connection details Secret written by provider-runtime on Ready, and the
+// S3 identities Secret (<name>-s3-config) the provider applies:
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
 
 // Operator-managed S3 Ingress (read for HTTPS connection details):

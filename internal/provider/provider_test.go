@@ -1033,6 +1033,7 @@ func TestStatus(t *testing.T) {
 		seaweed           *seaweedv1.Seaweed
 		service           *corev1.Service
 		extraObjs         []client.Object
+		noS3Credentials   bool
 		expectPhase       corev1alpha1.InstancePhase
 		expectConnection  bool
 		expectExternalURL string
@@ -1054,6 +1055,19 @@ func TestStatus(t *testing.T) {
 			service:          s3Service,
 			expectPhase:      corev1alpha1.InstancePhaseReady,
 			expectConnection: true,
+		},
+		{
+			name: "ready without S3 credentials Secret stays provisioning",
+			seaweed: &seaweedv1.Seaweed{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-instance", Namespace: "default"},
+				Status: seaweedv1.SeaweedStatus{
+					Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Ready"}},
+				},
+			},
+			service:           s3Service,
+			noS3Credentials:   true,
+			expectPhase:       corev1alpha1.InstancePhaseProvisioning,
+			expectMessagePart: "Waiting for S3 credentials Secret test-instance-s3-config",
 		},
 		{
 			name: "TLS enabled without server secret stays provisioning",
@@ -1210,6 +1224,15 @@ func TestStatus(t *testing.T) {
 			if len(tt.extraObjs) > 0 {
 				builder = builder.WithObjects(tt.extraObjs...)
 			}
+			if !tt.noS3Credentials {
+				builder = builder.WithObjects(&corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{Name: "test-instance-s3-config", Namespace: "default"},
+					Data: map[string][]byte{
+						"AWS_ACCESS_KEY_ID":     []byte("AKTEST"),
+						"AWS_SECRET_ACCESS_KEY": []byte("secret-test"),
+					},
+				})
+			}
 			ctx := controller.NewContext(context.Background(), builder.Build(), instance, common.ProviderName)
 
 			status, err := New().Status(ctx)
@@ -1226,6 +1249,10 @@ func TestStatus(t *testing.T) {
 				assert.Equal(t, "http://test-instance-s3.default.svc:8333", status.ConnectionDetails.URI)
 				assert.Equal(t, "true", status.ConnectionDetails.AdditionalProperties["forcePathStyle"])
 				assert.Equal(t, "false", status.ConnectionDetails.AdditionalProperties["verifyTLS"])
+				assert.Equal(t, "AKTEST", status.ConnectionDetails.Username)
+				assert.Equal(t, "secret-test", status.ConnectionDetails.Password)
+				assert.Equal(t, "AKTEST", status.ConnectionDetails.AdditionalProperties["AWS_ACCESS_KEY_ID"])
+				assert.Equal(t, "secret-test", status.ConnectionDetails.AdditionalProperties["AWS_SECRET_ACCESS_KEY"])
 				if tt.expectExternalURL != "" {
 					assert.Equal(t, tt.expectExternalURL, status.ConnectionDetails.AdditionalProperties["externalEndpointURL"])
 				} else {

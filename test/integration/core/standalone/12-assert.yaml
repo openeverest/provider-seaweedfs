@@ -40,5 +40,10 @@ data:
   (base64_decode(region)): us-east-1
   (base64_decode(forcePathStyle)): "true"
   (base64_decode(verifyTLS)): "false"
+  # Admin S3 credentials from test-seaweedfs-s3-config (checked in chainsaw-test.yaml).
+  (length(base64_decode(username))): 20
+  (length(base64_decode(password))): 40
+  (base64_decode(AWS_ACCESS_KEY_ID) == base64_decode(username)): true
+  (base64_decode(AWS_SECRET_ACCESS_KEY) == base64_decode(password)): true
   # ClusterIP is in-cluster only.
   (externalEndpointURL == null): true
