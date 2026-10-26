@@ -72,6 +72,17 @@ ui:
                         int: true
                         min: 1
                         required: false
+                volumeGrowthCount:
+                    fieldParams:
+                        defaultValue: 2
+                        helperText: Logical volumes created at once when a bucket needs space. Each takes one slot per data copy on the volume servers. Higher values spread writes wider but use more slots per bucket.
+                        label: Volume growth count
+                    path: spec.components.master.parameters.volumeGrowthCount
+                    uiType: number
+                    validation:
+                        int: true
+                        min: 1
+                        required: false
                 replication:
                     fieldParams:
                         helperText: Three-digit SeaweedFS placement, for example 001. Empty uses 001 when volume replicas are at least 2, otherwise 000.
@@ -146,6 +157,7 @@ ui:
             componentsOrder:
                 - replicas
                 - volumeSizeLimitMB
+                - volumeGrowthCount
                 - replication
                 - resources
                 - storageClass
@@ -176,7 +188,7 @@ ui:
                         required: false
                 maxVolumeCounts:
                     fieldParams:
-                        defaultValue: 8
+                        helperText: Optional. Empty sizes it automatically from free disk space and the volume size limit, and follows disk expansion.
                         label: Max volumes per disk
                     path: spec.components.volume.parameters.maxVolumeCounts
                     uiType: number

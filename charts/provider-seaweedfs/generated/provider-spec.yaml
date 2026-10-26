@@ -26,6 +26,9 @@ spec:
             masterVolumeSizeLimitMB:
               format: int32
               type: integer
+            volumeGrowthCount:
+              format: int32
+              type: integer
           type: object
       type: seaweedfs
     s3:
@@ -366,6 +369,17 @@ spec:
               uiType: select
               validation:
                 required: false
+            volumeGrowthCount:
+              fieldParams:
+                defaultValue: 2
+                helperText: Logical volumes created at once when a bucket needs space. Each takes one slot per data copy on the volume servers. Higher values spread writes wider but use more slots per bucket.
+                label: Volume growth count
+              path: spec.components.master.parameters.volumeGrowthCount
+              uiType: number
+              validation:
+                int: true
+                min: 1
+                required: false
             volumeSizeLimitMB:
               fieldParams:
                 defaultValue: 1024
@@ -379,6 +393,7 @@ spec:
           componentsOrder:
             - replicas
             - volumeSizeLimitMB
+            - volumeGrowthCount
             - replication
             - resources
             - storageClass
@@ -612,7 +627,7 @@ spec:
                 required: false
             maxVolumeCounts:
               fieldParams:
-                defaultValue: 8
+                helperText: Optional. Empty sizes it automatically from free disk space and the volume size limit, and follows disk expansion.
                 label: Max volumes per disk
               path: spec.components.volume.parameters.maxVolumeCounts
               uiType: number

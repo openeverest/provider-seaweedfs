@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"maps"
 
-	"github.com/AlekSi/pointer"
 	corev1alpha1 "github.com/openeverest/openeverest/v2/api/core/v1alpha1"
 	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -31,15 +30,14 @@ func validateVolumeParameters(spec components.VolumeCustomSpec) error {
 }
 
 func buildVolumeSpec(comp corev1alpha1.ComponentSpec, volumeCustomSpec components.VolumeCustomSpec) *seaweedv1.VolumeSpec {
+	// Left unset, the operator passes -max=0 and each volume server derives
+	// its slot count from free disk space on every heartbeat, so slots follow
+	// the filesystem size, including after expansion, without a restart.
 	spec := &seaweedv1.VolumeSpec{
 		Replicas: *comp.Replicas,
 		VolumeServerConfig: seaweedv1.VolumeServerConfig{
-			MaxVolumeCounts: pointer.ToInt32(DefaultMaxVolumeCounts),
+			MaxVolumeCounts: volumeCustomSpec.MaxVolumeCounts,
 		},
-	}
-
-	if volumeCustomSpec.MaxVolumeCounts != nil {
-		spec.MaxVolumeCounts = volumeCustomSpec.MaxVolumeCounts
 	}
 
 	if comp.Resources != nil {

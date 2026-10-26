@@ -2,7 +2,12 @@ package provider
 
 const DefaultMasterVolumeSizeLimitMB int32 = 1024
 const DefaultVolumeServerDiskCount int32 = 1
-const DefaultMaxVolumeCounts int32 = 8
+
+// DefaultVolumeGrowthCount is how many logical volumes the master creates at
+// once when a collection (one per S3 bucket) needs a writable volume. Upstream
+// defaults (7 for 000, 6 for 001, 3 for 002) reserve up to 12 volume slots per
+// bucket, which exhausts small clusters after a couple of buckets.
+const DefaultVolumeGrowthCount int32 = 2
 
 // DefaultReplication is SeaweedFS master.defaultReplication when the user
 // leaves topology.parameters.replication empty and at least two volume

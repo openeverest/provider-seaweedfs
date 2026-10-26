@@ -120,7 +120,7 @@ an MVP: several capabilities are stubbed or not wired yet.
 | Version selection | ✅ | `spec.version` / component image from [definition/versions.yaml](definition/versions.yaml) |
 | High availability | ⚠️ | Replica counts are passed through. Data copies follow `topology.parameters.replication` (`master.defaultReplication`); empty uses `001` with at least 2 volume servers, otherwise `000`. Placements that need another data center or rack are rejected. Two filers by default so S3 survives a filer restart or node failure, see [Filer high availability](#filer-high-availability) |
 | Disruption budgets | ✅ | One `PodDisruptionBudget` per component (`<name>-<component>-pdb`) with `maxUnavailable: 1`, so node drains and cluster upgrades evict one master, volume, filer or S3 pod at a time. This keeps master quorum and never blocks a drain outright, even for single-replica components |
-| Custom configuration | ✅ | Master `masterVolumeSizeLimitMB`; topology `replication` and `volumeServerDiskCount`; volume `maxVolumeCounts`; filer `maxMB`; S3 `port` / `domainName` / Ingress; JWT signing via `topology.parameters.securityConfig` |
+| Custom configuration | ✅ | Master `masterVolumeSizeLimitMB` and `volumeGrowthCount`; topology `replication` and `volumeServerDiskCount`; volume `maxVolumeCounts` (automatic when unset); filer `maxMB`; S3 `port` / `domainName` / Ingress; JWT signing via `topology.parameters.securityConfig`. See [Volume slots and buckets](#volume-slots-and-buckets) |
 | S3 service exposure | ✅ | `spec.components.s3.service.serviceType`: ClusterIP, NodePort, or LoadBalancer. `loadBalancerService.sourceRanges` is rejected. Only S3 can be exposed |
 | Admin UI | ✅ | Off unless `topology.parameters.admin.enabled` is true. This provider creates Secret `<instance>-admin-credentials` with `adminUser=admin` and a generated `adminPassword` (kept across reconciles). ClusterIP Service `<instance>-admin`, port 23646. Connection details add `adminURL`, `adminUser`, and `adminCredentialsSecret` (the Secret name). Operator image `1.0.40` exits the admin container when `adminPassword` is missing. Workers are not created |
 | Monitoring | ✅ | Prometheus / VictoriaMetrics metrics on every component via `topology.parameters.metrics`, see [Metrics](#metrics-for-prometheus-and-victoriametrics). OpenEverest `MonitoringConfig` (PMM) is not used |
@@ -419,6 +419,31 @@ returned 404 for objects it had acknowledged.
 
 Not supported yet: a shared external metadata store (PostgreSQL, Redis, etc.).
 
+## Volume slots and buckets
+
+SeaweedFS stores objects in volumes of up to `masterVolumeSizeLimitMB` (1024 MB by
+default). Every S3 bucket is its own collection with its own volumes, and each volume
+takes one *slot* on every volume server that holds a copy of it. When a server has no
+free slot left, new buckets cannot get a volume and uploads to them fail with
+`InternalError`.
+
+Two settings decide how many buckets fit:
+
+| Setting | Default | Effect |
+|---|---|---|
+| Volume `maxVolumeCounts` | Unset (automatic) | Slots per disk. Unset passes `-max=0`, so every volume server sizes its slots from free disk space divided by the volume size limit, rechecked on each heartbeat. Growing `storage.size` adds slots as soon as the filesystem in the pod grows, with no setting change. CSI drivers that expand only offline need the disk reattached first (for example, by rescheduling the pod to another node). A fixed value caps the slots regardless of disk size |
+| Master `volumeGrowthCount` | `2` | Logical volumes the master creates at once when a bucket needs space (`master.volume_growth` `copy_1`/`copy_2`/`copy_3` in `master.toml`). Upstream defaults are 7, 6 and 3, so with `001` replication every bucket took 12 slots up front |
+
+With the defaults and `001` replication, a new bucket takes 4 slots (2 volumes × 2
+copies), and the filer's own collection takes the first 4. Three volume servers with
+20Gi each get 57 slots, so 13 buckets fit before more disk is needed. With the
+previous fixed 8 slots per server and upstream growth counts, the same cluster fit 1.
+Raise `volumeGrowthCount` for write-heavy buckets that benefit from more parallel
+volumes; lower `masterVolumeSizeLimitMB` for many small buckets on small disks.
+
+Changing either setting on a running instance restarts the affected pods one at a
+time.
+
 ## Metrics for Prometheus and VictoriaMetrics
 
 ```yaml
@@ -488,7 +513,7 @@ Sync writes replica counts, CPU and memory resources, volume/filer/master
 persistence (including storage class), S3 service type and Ingress, the admin
 server when `topology.parameters.admin.enabled` is true (Secret
 `<instance>-admin-credentials`, user `admin`, generated password), component
-parameters (`masterVolumeSizeLimitMB`, `maxVolumeCounts`, `maxMB`, `port`,
+parameters (`masterVolumeSizeLimitMB`, `volumeGrowthCount`, `maxVolumeCounts`, `maxMB`, `port`,
 `domainName`), topology `replication` and `volumeServerDiskCount`, optional
 inter-component TLS (`topology.parameters.tls`), JWT signing
 (`topology.parameters.securityConfig`), and pod scheduling (affinity,
