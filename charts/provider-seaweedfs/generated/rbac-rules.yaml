@@ -71,6 +71,15 @@
     - list
     - watch
 - apiGroups:
+    - monitoring.coreos.com
+  resources:
+    - podmonitors
+  verbs:
+    - create
+    - delete
+    - get
+    - patch
+- apiGroups:
     - networking.k8s.io
   resources:
     - ingresses
@@ -78,6 +87,21 @@
     - get
     - list
     - watch
+- apiGroups:
+    - operator.victoriametrics.com
+  resources:
+    - vmpodscrapes
+  verbs:
+    - create
+    - delete
+    - get
+    - patch
+- apiGroups:
+    - operator.victoriametrics.com
+  resources:
+    - vmservicescrapes
+  verbs:
+    - deletecollection
 - apiGroups:
     - policy
   resources:

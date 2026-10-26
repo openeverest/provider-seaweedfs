@@ -149,3 +149,11 @@ jobs:
     with:
       make_target: test-integration-core-validation
       suite: validation
+
+  test-integration-monitoring-metrics:
+    name: Integration / monitoring metrics
+    needs: [lint, build, verify]
+    uses: ./.github/workflows/integration-test.yaml
+    with:
+      make_target: test-integration-monitoring-metrics
+      suite: metrics

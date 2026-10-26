@@ -61,9 +61,11 @@ The provider binary still compiles against the Go module pin in
 writes on `Seaweed` are already in that module.
 
 Chart `0.1.42` (image `1.0.39`) changes admin startup and ServiceMonitor
-scraping, plus dependencies. This provider sets `spec.admin` (see Admin UI
-below) and does not set `spec.admin.metricsPort`, so it does not create the
-admin ServiceMonitor.
+scraping, plus dependencies. Its ServiceMonitors select only the per-pod
+Services, so they no longer scrape every target twice through the headless
+peer Services. This provider sets `spec.admin` (see Admin UI below), and sets
+`spec.admin.metricsPort` only when metrics are exposed (see
+[Metrics](#metrics-for-prometheus-and-victoriametrics)).
 
 Chart `0.1.43` (image `1.0.40`) changes Instance behavior beyond that. The GitHub release notes for `1.0.40`
 only mention a SeaweedFS library bump. The tag also contains
@@ -121,7 +123,7 @@ an MVP: several capabilities are stubbed or not wired yet.
 | Custom configuration | ✅ | Master `masterVolumeSizeLimitMB`; topology `replication` and `volumeServerDiskCount`; volume `maxVolumeCounts`; filer `maxMB`; S3 `port` / `domainName` / Ingress; JWT signing via `topology.parameters.securityConfig` |
 | S3 service exposure | ✅ | `spec.components.s3.service.serviceType`: ClusterIP, NodePort, or LoadBalancer. `loadBalancerService.sourceRanges` is rejected. Only S3 can be exposed |
 | Admin UI | ✅ | Off unless `topology.parameters.admin.enabled` is true. This provider creates Secret `<instance>-admin-credentials` with `adminUser=admin` and a generated `adminPassword` (kept across reconciles). ClusterIP Service `<instance>-admin`, port 23646. Connection details add `adminURL`, `adminUser`, and `adminCredentialsSecret` (the Secret name). Operator image `1.0.40` exits the admin container when `adminPassword` is missing. Workers are not created |
-| Monitoring | ❌ | Not wired through the Instance API. The operator chart can enable `serviceMonitor` on its own (`enabled: false` by default); this provider does not set it |
+| Monitoring | ✅ | Prometheus / VictoriaMetrics metrics on every component via `topology.parameters.metrics`, see [Metrics](#metrics-for-prometheus-and-victoriametrics). OpenEverest `MonitoringConfig` (PMM) is not used |
 | TLS | ✅ | Inter-component gRPC mTLS via `topology.parameters.tls`. Client HTTPS via S3 Ingress TLS (`components.s3.parameters.ingress`) → `externalEndpointURL=https://…`. Native S3 HTTPS on the gateway is not supported by the operator yet ([seaweedfs-operator#411](https://github.com/seaweedfs/seaweedfs-operator/issues/411)) |
 | Status / readiness | ✅ | Maps Seaweed Ready condition; waits for TLS Secret / LoadBalancer / Ingress when configured |
 | Connection details | ✅ | Publishes in-cluster S3 endpoint and admin S3 credentials on Ready; NodePort / LoadBalancer / Ingress add `externalEndpointURL`. Admin UI adds `adminURL`, `adminUser`, and `adminCredentialsSecret` |
@@ -417,6 +419,63 @@ returned 404 for objects it had acknowledged.
 
 Not supported yet: a shared external metadata store (PostgreSQL, Redis, etc.).
 
+## Metrics for Prometheus and VictoriaMetrics
+
+```yaml
+spec:
+  topology:
+    type: standalone
+    parameters:
+      metrics:
+        prometheus:
+          enabled: true
+        victoriaMetrics:
+          enabled: false
+```
+
+| Parameter | Purpose |
+|---|---|
+| `metrics` | Expose metrics on every component; omit to expose none |
+| `metrics.prometheus.enabled` | Create a `PodMonitor` for the Prometheus Operator |
+| `metrics.victoriaMetrics.enabled` | Create a `VMPodScrape` for the VictoriaMetrics Operator |
+
+Setting `metrics` sets `metricsPort: 9327` on the master, volume, filer and S3 gateway, and on
+the admin server when it is enabled. Each pod then serves metrics at `:9327/metrics` on a port
+named `<component>-metrics` (`master-metrics`, `volume-metrics`, …). Adding or removing the
+port changes each component's command line, so the pods restart one at a time. With metrics
+exposed, the S3 `port` cannot be 9327.
+
+The scrape resources are named `<instance>-prometheus` (`PodMonitor`) and
+`<instance>-victoriametrics` (`VMPodScrape`), live next to the Instance, and are removed with
+it. They select the pods by the `core.openeverest.io/instance` label, and every series carries
+the `core_openeverest_io_instance` and `core_openeverest_io_component` labels. Keep in mind:
+
+- The matching operator must be installed; otherwise the Instance fails validation.
+- Prometheus must select the `PodMonitor`. kube-prometheus-stack, for example, selects only
+  `PodMonitor`s labelled with its release unless
+  `prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues=false` is set.
+- seaweedfs-operator creates its own ServiceMonitors (`<instance>-master`, `-volume`, `-filer`,
+  `-s3`, `-admin`) whenever `metricsPort` is set and the Prometheus Operator CRDs are installed.
+  This provider cannot turn them off yet: the operator gains a switch for it in
+  [seaweedfs-operator#435](https://github.com/seaweedfs/seaweedfs-operator/pull/435), which the
+  provider will set once it ships. A Prometheus that selects both them and the `PodMonitor`
+  scrapes every pod twice. The operator checks for the CRD once and caches the answer, so restart it
+  after installing the Prometheus Operator. It removes the S3 ServiceMonitor when metrics are switched
+  off, but keeps the others until the Instance is deleted. They then have no targets.
+- The VictoriaMetrics Operator converts `PodMonitor`s and `ServiceMonitor`s into its own
+  scrape resources by default, so with its converter on VictoriaMetrics may scrape the instance
+  more than once. The converted copies have no owner reference; the provider deletes them
+  (`VMPodScrape` `<instance>-prometheus` and the `VMServiceScrape`s labelled with the instance)
+  when the Instance is deleted, and the `VMPodScrape` also when Prometheus scraping is turned
+  off.
+
+For Grafana, SeaweedFS publishes a Kubernetes dashboard,
+[grafana_seaweedfs_k8s.json](https://github.com/seaweedfs/seaweedfs/blob/master/other/metrics/grafana_seaweedfs_k8s.json),
+that filters by namespace. The bundled operator chart also installs ConfigMap
+`seaweedfs-operator-grafana-dashboard` (labelled `grafana_dashboard: "1"` for the
+kube-prometheus-stack Grafana sidecar). Its panels expect metrics pushed to a Pushgateway, not
+the scraped ones.
+
 ## Configuration
 
 - **Chart values:** [charts/provider-seaweedfs/values.yaml](charts/provider-seaweedfs/values.yaml)
@@ -440,7 +499,9 @@ StorageClass already on the Seaweed spec allows expansion. Operator image
 `1.0.40` grows the PVCs (see the capabilities table). Shrinks are rejected.
 Setting master `storage.size` when the master has no disk yet is rejected.
 Changing `storage.storageClass` together with a size increase is rejected.
-Monitoring, backups, and restores are not applied.
+With `topology.parameters.metrics` set, every component's `metricsPort` is set
+and the provider creates the requested `PodMonitor` / `VMPodScrape`.
+Backups and restores are not applied.
 
 ## Development
 
@@ -472,6 +533,7 @@ markers, watches, and code generation are documented once for all providers in
 | `cmd/provider/` | Entry point |
 | `internal/provider/` | `ProviderInterface` implementation, RBAC markers |
 | `internal/common/` | Provider and component name constants |
+| `internal/apis/` | Subset of third-party APIs the provider writes (`VMPodScrape`); DeepCopy is generated by `make generate` |
 | `definition/` | Provider identity, component types, versions, topologies |
 | `charts/provider-seaweedfs/` | Helm chart (`generated/` is produced by `make generate`) |
 | `config/rbac/role.yaml` | Generated `ClusterRole` — do not edit |
@@ -490,7 +552,7 @@ markers, watches, and code generation are documented once for all providers in
   (cd ../openeverest && make build-controller docker-build-controller)
   make load-openeverest-controller-image
   (cd ../openeverest && make deploy-test-controller)
-  make test-integration            # or test-integration-core-standalone / -validation
+  make test-integration            # or test-integration-core-standalone / -validation / -monitoring-metrics
   ```
 
 ## Troubleshooting

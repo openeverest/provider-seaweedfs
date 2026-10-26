@@ -1,0 +1,40 @@
+# Every component, admin included, serves metrics on the same port.
+apiVersion: seaweed.seaweedfs.com/v1
+kind: Seaweed
+metadata:
+  name: metrics-seaweedfs
+spec:
+  master:
+    metricsPort: 9327
+  volume:
+    metricsPort: 9327
+  filer:
+    metricsPort: 9327
+  s3:
+    metricsPort: 9327
+  admin:
+    metricsPort: 9327
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: metrics-seaweedfs-prometheus
+  (ownerReferences[?kind == 'Instance' && name == 'metrics-seaweedfs'] | length(@)): 1
+spec:
+  selector:
+    matchLabels:
+      core.openeverest.io/instance: metrics-seaweedfs
+  podTargetLabels:
+    - core.openeverest.io/instance
+    - core.openeverest.io/component
+  podMetricsEndpoints:
+    - port: master-metrics
+      path: /metrics
+    - port: volume-metrics
+      path: /metrics
+    - port: filer-metrics
+      path: /metrics
+    - port: s3-metrics
+      path: /metrics
+    - port: admin-metrics
+      path: /metrics

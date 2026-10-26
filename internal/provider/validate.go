@@ -124,6 +124,12 @@ func (p *Provider) Validate(c *controller.Context) error {
 	if err := validateReplication(effectiveReplication(topo.Replication, *volume.Replicas), *volume.Replicas); err != nil {
 		return err
 	}
+	if err := validateMetricsPort(topo.Metrics, s3CustomSpec); err != nil {
+		return err
+	}
+	if err := validateMetrics(c, topo.Metrics); err != nil {
+		return err
+	}
 	// The StorageClass only matters when PVCs are created. Checking it on a
 	// provisioned instance would mark it Failed if the class is later removed.
 	// Growth of an existing claim is checked separately.
