@@ -99,6 +99,34 @@ status:
 apiVersion: core.openeverest.io/v1alpha1
 kind: Instance
 metadata:
+  name: 1invalid-name
+status:
+  phase: Failed
+---
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: invalid-name-length-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+status:
+  phase: Failed
+---
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: invalid-storage-class
+status:
+  phase: Failed
+---
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: invalid-replication-copies
+status:
+  phase: Failed
+---
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
   name: invalid-replication-format
 status:
   phase: Failed

@@ -72,6 +72,26 @@ metadata:
 apiVersion: seaweed.seaweedfs.com/v1
 kind: Seaweed
 metadata:
+  name: 1invalid-name
+---
+apiVersion: seaweed.seaweedfs.com/v1
+kind: Seaweed
+metadata:
+  name: invalid-name-length-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+---
+apiVersion: seaweed.seaweedfs.com/v1
+kind: Seaweed
+metadata:
+  name: invalid-storage-class
+---
+apiVersion: seaweed.seaweedfs.com/v1
+kind: Seaweed
+metadata:
+  name: invalid-replication-copies
+---
+apiVersion: seaweed.seaweedfs.com/v1
+kind: Seaweed
+metadata:
   name: invalid-replication-format
 ---
 apiVersion: seaweed.seaweedfs.com/v1

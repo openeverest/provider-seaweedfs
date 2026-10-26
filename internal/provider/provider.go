@@ -77,6 +77,14 @@ func New() *Provider {
 					predicate.NewPredicateFuncs(func(o client.Object) bool {
 						return strings.HasSuffix(o.GetName(), tlsServerSecretSuffix)
 					})),
+				// PVC resize conditions change without a Seaweed status update.
+				// The operator label drops unrelated claims; name substrings
+				// such as "-volume-" match PVCs this provider does not own.
+				controller.WatchExternal(&corev1.PersistentVolumeClaim{},
+					handler.EnqueueRequestsFromMapFunc(pvcToInstance),
+					predicate.NewPredicateFuncs(func(o client.Object) bool {
+						return o.GetLabels()[labelManagedBy] == managedBySeaweedOperator
+					})),
 			},
 		},
 	}
@@ -97,6 +105,40 @@ func s3ServiceToInstance(_ context.Context, obj client.Object) []reconcile.Reque
 	}}
 }
 
+// Selector labels seaweedfs-operator sets on volume, filer, and master
+// StatefulSets. Kubernetes copies spec.selector.matchLabels onto PVCs
+// created from volumeClaimTemplates.
+const (
+	labelManagedBy           = "app.kubernetes.io/managed-by"
+	labelComponent           = "app.kubernetes.io/component"
+	labelInstance            = "app.kubernetes.io/instance"
+	managedBySeaweedOperator = "seaweedfs-operator"
+)
+
+// pvcToInstance maps a volume, filer, or master PVC back to the Instance.
+// The operator sets persistentVolumeClaimRetentionPolicy.whenDeleted to
+// Retain, so Kubernetes adds no StatefulSet controller owner reference.
+// With enablePVReclaim, a controller reference is added only after scale-down,
+// and it points at the Pod. Selector labels are present on the live claim.
+func pvcToInstance(_ context.Context, obj client.Object) []reconcile.Request {
+	labels := obj.GetLabels()
+	if labels[labelManagedBy] != managedBySeaweedOperator {
+		return nil
+	}
+	switch labels[labelComponent] {
+	case common.ComponentVolume, common.ComponentFiler, common.ComponentMaster:
+	default:
+		return nil
+	}
+	instance := labels[labelInstance]
+	if instance == "" {
+		return nil
+	}
+	return []reconcile.Request{{
+		NamespacedName: types.NamespacedName{Namespace: obj.GetNamespace(), Name: instance},
+	}}
+}
+
 // s3IngressToInstance maps the operator-owned S3 Ingress to its Instance.
 func s3IngressToInstance(_ context.Context, obj client.Object) []reconcile.Request {
 	owner := metav1.GetControllerOf(obj)
@@ -109,91 +151,6 @@ func s3IngressToInstance(_ context.Context, obj client.Object) []reconcile.Reque
 	return []reconcile.Request{{
 		NamespacedName: types.NamespacedName{Namespace: obj.GetNamespace(), Name: owner.Name},
 	}}
-}
-
-// Validate checks if the Instance spec is valid.
-//
-// Add your provider-specific validation logic here.
-// Return an error if the spec is invalid.
-func (p *Provider) Validate(c *controller.Context) error {
-	l := log.FromContext(c.Context())
-	l.Info("Validating instance", "name", c.Name())
-
-	master, isMasterPresent := c.Instance().Spec.Components[common.ComponentMaster]
-	if err := validateMaster(master, isMasterPresent); err != nil {
-		return err
-	}
-
-	volume, isVolumePresent := c.Instance().Spec.Components[common.ComponentVolume]
-	if err := validateVolume(volume, isVolumePresent); err != nil {
-		return err
-	}
-
-	filer, isFilerPresent := c.Instance().Spec.Components[common.ComponentFiler]
-	if err := validateFiler(filer, isFilerPresent); err != nil {
-		return err
-	}
-	// An unresolvable image is reported by Sync; only a known release is checked.
-	if image, err := resolveImage(c, common.ComponentMaster, master); err == nil {
-		if err := validateFilerVersion(image, *filer.Replicas); err != nil {
-			return err
-		}
-	}
-
-	s3, isS3Present := c.Instance().Spec.Components[common.ComponentS3]
-	if err := validateS3(s3, isS3Present); err != nil {
-		return err
-	}
-
-	var masterCustomSpec components.MasterCustomSpec
-	if c.TryDecodeComponentParameters(master, &masterCustomSpec) {
-		if err := validateMasterParameters(masterCustomSpec); err != nil {
-			return err
-		}
-	}
-
-	var volumeCustomSpec components.VolumeCustomSpec
-	if c.TryDecodeComponentParameters(volume, &volumeCustomSpec) {
-		if err := validateVolumeParameters(volumeCustomSpec); err != nil {
-			return err
-		}
-	}
-
-	var filerCustomSpec components.FilerCustomSpec
-	if c.TryDecodeComponentParameters(filer, &filerCustomSpec) {
-		if err := validateFilerParameters(filerCustomSpec); err != nil {
-			return err
-		}
-	}
-
-	var s3CustomSpec components.S3CustomSpec
-	if c.TryDecodeComponentParameters(s3, &s3CustomSpec) {
-		if err := validateS3Parameters(s3CustomSpec); err != nil {
-			return err
-		}
-	}
-
-	var topo standalone.StandaloneTopologyConfig
-	if c.TryDecodeTopologyParameters(&topo) {
-		if err := validateTopologyParameters(topo); err != nil {
-			return err
-		}
-	}
-	if err := validateReplication(effectiveReplication(topo.Replication, *volume.Replicas), *volume.Replicas); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func validateTopologyParameters(topo standalone.StandaloneTopologyConfig) error {
-	if topo.VolumeServerDiskCount != nil && *topo.VolumeServerDiskCount < 1 {
-		return fmt.Errorf("volumeServerDiskCount must be at least 1")
-	}
-	if err := validateTLSParameters(topo); err != nil {
-		return err
-	}
-	return nil
 }
 
 // Sync ensures all required resources exist and are configured correctly.
@@ -229,6 +186,11 @@ func (p *Provider) Sync(c *controller.Context) error {
 		return err
 	}
 
+	adminSecretName, err := ensureAdminCredentials(c, topo)
+	if err != nil {
+		return err
+	}
+
 	sw := &seaweedv1.Seaweed{
 		ObjectMeta: c.ObjectMeta(c.Name()),
 		Spec: seaweedv1.SeaweedSpec{
@@ -238,6 +200,7 @@ func (p *Provider) Sync(c *controller.Context) error {
 			Volume:                buildVolumeSpec(volume, volumeCustomSpec),
 			Filer:                 buildFilerSpec(filer, filerCustomSpec),
 			S3:                    buildS3Spec(s3, s3CustomSpec),
+			Admin:                 buildAdminSpec(adminSecretName),
 			TLS:                   buildTLSSpec(topo),
 			SecurityConfig:        buildSecurityConfigSpec(topo),
 		},
@@ -255,11 +218,16 @@ func (p *Provider) Sync(c *controller.Context) error {
 // labelPods labels every component's pods so the runtime counts them into
 // the Instance's status.components. The operator adds them to the pod
 // templates only, never to the StatefulSet/Deployment selectors.
+// Admin is labelled only when the user enabled it. It is not an Instance
+// component; the operator runs that one pod from spec.admin.
 func labelPods(c *controller.Context, sw *seaweedv1.Seaweed) {
 	sw.Spec.Master.Labels = c.PodLabels(common.ComponentMaster)
 	sw.Spec.Volume.Labels = c.PodLabels(common.ComponentVolume)
 	sw.Spec.Filer.Labels = c.PodLabels(common.ComponentFiler)
 	sw.Spec.S3.Labels = c.PodLabels(common.ComponentS3)
+	if sw.Spec.Admin != nil {
+		sw.Spec.Admin.Labels = c.PodLabels(common.ComponentAdmin)
+	}
 }
 
 func resolveImage(c *controller.Context, componentName string, comp corev1alpha1.ComponentSpec) (string, error) {
@@ -350,9 +318,27 @@ func (p *Provider) Status(c *controller.Context) (controller.Status, error) {
 			if err != nil {
 				return controller.Status{}, err
 			}
+			expansion, err := storageExpansionStatus(c, sw)
+			if err != nil {
+				return controller.Status{}, err
+			}
+			if expansion != nil {
+				expansion.ConnectionDetails = details
+				return *expansion, nil
+			}
 			return controller.ReadyWithConnectionDetails(details), nil
 		}
+		if msg, err := adminNotReadyMessage(c, sw); err != nil {
+			return controller.Status{}, err
+		} else if msg != "" {
+			return controller.Provisioning(msg), nil
+		}
 		return controller.Provisioning(cond.Message), nil
+	}
+	if msg, err := adminNotReadyMessage(c, sw); err != nil {
+		return controller.Status{}, err
+	} else if msg != "" {
+		return controller.Provisioning(msg), nil
 	}
 
 	if sw.Status.Master.Replicas > 0 {
