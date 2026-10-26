@@ -1,0 +1,4 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMPodScrape
+metadata:
+  name: metrics-seaweedfs-victoriametrics

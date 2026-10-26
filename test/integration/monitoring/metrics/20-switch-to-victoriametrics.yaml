@@ -1,0 +1,13 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: metrics-seaweedfs
+spec:
+  topology:
+    type: standalone
+    parameters:
+      metrics:
+        prometheus:
+          enabled: false
+        victoriaMetrics:
+          enabled: true

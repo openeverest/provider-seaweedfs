@@ -1,0 +1,20 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: metrics-seaweedfs
+spec:
+  topology:
+    parameters:
+      (metrics == null): true
+---
+# The metrics listeners go away with the metrics.
+apiVersion: seaweed.seaweedfs.com/v1
+kind: Seaweed
+metadata:
+  name: metrics-seaweedfs
+spec:
+  (master.metricsPort == null): true
+  (volume.metricsPort == null): true
+  (filer.metricsPort == null): true
+  (s3.metricsPort == null): true
+  (admin.metricsPort == null): true

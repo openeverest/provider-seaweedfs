@@ -30,6 +30,13 @@ package provider
 // +kubebuilder:rbac:groups=seaweed.seaweedfs.com,resources=seaweeds,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=seaweed.seaweedfs.com,resources=seaweeds/status,verbs=get
 
+// Scrape resources created when the topology exposes metrics:
+// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=podmonitors,verbs=get;create;patch;delete
+// +kubebuilder:rbac:groups=operator.victoriametrics.com,resources=vmpodscrapes,verbs=get;create;patch;delete
+// VMServiceScrapes the VictoriaMetrics Operator converts from seaweedfs-operator's
+// ServiceMonitors, removed with the Instance:
+// +kubebuilder:rbac:groups=operator.victoriametrics.com,resources=vmservicescrapes,verbs=deletecollection
+
 // Operator-managed S3 Service (read for connection details):
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 

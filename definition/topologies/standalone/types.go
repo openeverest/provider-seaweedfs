@@ -50,6 +50,31 @@ type StandaloneTopologyConfig struct {
 	// creates the credentials Secret (user admin, generated password).
 	// +optional
 	Admin *AdminConfig `json:"admin,omitempty"`
+
+	// Metrics exposes metrics in the Prometheus format on every SeaweedFS
+	// component. If not specified, no metrics are exposed.
+	// +optional
+	Metrics *MetricsConfig `json:"metrics,omitempty"`
+}
+
+// MetricsConfig configures which monitoring systems scrape the exposed
+// metrics.
+type MetricsConfig struct {
+	// Prometheus configures scraping by the Prometheus Operator.
+	// +optional
+	Prometheus *ScrapeConfig `json:"prometheus,omitempty"`
+
+	// VictoriaMetrics configures scraping by the VictoriaMetrics Operator.
+	// +optional
+	VictoriaMetrics *ScrapeConfig `json:"victoriaMetrics,omitempty"`
+}
+
+// ScrapeConfig configures scraping of the exposed metrics by one monitoring
+// system.
+type ScrapeConfig struct {
+	// Enabled creates the monitoring system's scrape resource for the
+	// instance: a PodMonitor for Prometheus, a VMPodScrape for VictoriaMetrics.
+	Enabled bool `json:"enabled,omitempty"`
 }
 
 // AdminConfig enables the admin server. This provider creates the credentials.

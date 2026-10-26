@@ -1,0 +1,31 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMPodScrape
+metadata:
+  name: metrics-seaweedfs-victoriametrics
+  (ownerReferences[?kind == 'Instance' && name == 'metrics-seaweedfs'] | length(@)): 1
+spec:
+  selector:
+    matchLabels:
+      core.openeverest.io/instance: metrics-seaweedfs
+  podTargetLabels:
+    - core.openeverest.io/instance
+    - core.openeverest.io/component
+  podMetricsEndpoints:
+    - port: master-metrics
+      path: /metrics
+    - port: volume-metrics
+      path: /metrics
+    - port: filer-metrics
+      path: /metrics
+    - port: s3-metrics
+      path: /metrics
+    - port: admin-metrics
+      path: /metrics
+---
+apiVersion: seaweed.seaweedfs.com/v1
+kind: Seaweed
+metadata:
+  name: metrics-seaweedfs
+spec:
+  master:
+    metricsPort: 9327

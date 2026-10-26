@@ -490,6 +490,39 @@ ui:
                 - enabled
             description: Optional web UI for managing S3 buckets.
             label: Admin
+        monitoring:
+            components:
+                metrics:
+                    uiType: group
+                    groupType: toggleable
+                    label: Expose metrics
+                    description: Serve metrics in the Prometheus format on port 9327 of every master, volume, filer, S3 and admin pod. Switching this on or off restarts the pods.
+                    components:
+                        prometheus:
+                            fieldParams:
+                                defaultValue: false
+                                helperText: Create a PodMonitor so the Prometheus Operator scrapes the metrics.
+                                label: Prometheus
+                            path: spec.topology.parameters.metrics.prometheus.enabled
+                            uiType: toggle
+                            validation:
+                                required: false
+                        victoriaMetrics:
+                            fieldParams:
+                                defaultValue: false
+                                helperText: Create a VMPodScrape so the VictoriaMetrics Operator scrapes the metrics.
+                                label: VictoriaMetrics
+                            path: spec.topology.parameters.metrics.victoriaMetrics.enabled
+                            uiType: toggle
+                            validation:
+                                required: false
+                    componentsOrder:
+                        - prometheus
+                        - victoriaMetrics
+            componentsOrder:
+                - metrics
+            description: Monitor the health of your SeaweedFS cluster to detect issues quickly and improve its performance.
+            label: Monitoring
         tls:
             components:
                 enabled:
@@ -548,4 +581,5 @@ ui:
         - filer
         - s3
         - admin
+        - monitoring
         - tls

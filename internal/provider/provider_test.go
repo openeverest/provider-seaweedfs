@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/AlekSi/pointer"
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -40,6 +41,7 @@ import (
 
 	"github.com/openeverest/provider-seaweedfs/definition/components"
 	"github.com/openeverest/provider-seaweedfs/definition/topologies/standalone"
+	vmv1beta1 "github.com/openeverest/provider-seaweedfs/internal/apis/victoriametrics/v1beta1"
 	"github.com/openeverest/provider-seaweedfs/internal/common"
 )
 
@@ -1321,6 +1323,8 @@ func TestSyncPassesTLSAndSecurityConfig(t *testing.T) {
 	require.NoError(t, seaweedv1.AddToScheme(scheme))
 	require.NoError(t, corev1.AddToScheme(scheme))
 	require.NoError(t, policyv1.AddToScheme(scheme))
+	require.NoError(t, monitoringv1.AddToScheme(scheme))
+	require.NoError(t, vmv1beta1.AddToScheme(scheme))
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(instance).Build()
 	ctx := controller.NewContext(context.Background(), fakeClient, instance, common.ProviderName)
 
@@ -1420,6 +1424,8 @@ func newSyncClient(t *testing.T, instance *corev1alpha1.Instance, objs ...client
 	require.NoError(t, seaweedv1.AddToScheme(scheme))
 	require.NoError(t, policyv1.AddToScheme(scheme))
 	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, monitoringv1.AddToScheme(scheme))
+	require.NoError(t, vmv1beta1.AddToScheme(scheme))
 	builder := fake.NewClientBuilder().WithScheme(scheme).WithObjects(instance)
 	if len(objs) > 0 {
 		builder = builder.WithObjects(objs...)

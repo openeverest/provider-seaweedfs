@@ -1,0 +1,32 @@
+apiVersion: seaweed.seaweedfs.com/v1
+kind: Seaweed
+metadata:
+  name: e2e-metrics
+spec:
+  (master.metricsPort == null): true
+  (volume.metricsPort == null): true
+  (filer.metricsPort == null): true
+  (s3.metricsPort == null): true
+  (admin.metricsPort == null): true
+---
+# The components restart without the listener and the cluster comes back.
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: e2e-metrics
+status:
+  phase: Ready
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: e2e-metrics-master
+spec:
+  template:
+    spec:
+      containers:
+        - name: master
+          (ports[?name == 'master-metrics'] | length(@)): 0
+status:
+  readyReplicas: 1
+  updatedReplicas: 1
