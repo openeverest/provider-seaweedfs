@@ -37,11 +37,15 @@ package provider
 // in status.components (provider-runtime lists/watches labelled pods):
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 
-// Connection details Secret written by provider-runtime on Ready:
+// Connection details Secret written by provider-runtime on Ready, and the
+// S3 identities Secret (<name>-s3-config) the provider applies:
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
 
 // Operator-managed S3 Ingress (read for HTTPS connection details):
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch
+
+// PodDisruptionBudgets the provider creates per component:
+// +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 
 // Storage classes named on master, volume, or filer. list resolves the default
 // class when storage.size grows and no class is set:

@@ -1,5 +1,3 @@
-# Anonymous until connection secrets carry credentials (#27). Then drop
-# --no-sign-request and read the keys from this secret.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -25,12 +23,21 @@ spec:
                   addressing_style = path
               EOF
               printf '%s' 'e2e-smoke' > /tmp/payload
-              aws s3 mb s3://e2e-smoke --endpoint-url "$ENDPOINT" --no-sign-request
-              aws s3 cp /tmp/payload s3://e2e-smoke/obj --endpoint-url "$ENDPOINT" --no-sign-request
-              aws s3 cp s3://e2e-smoke/obj /tmp/downloaded --endpoint-url "$ENDPOINT" --no-sign-request
+              aws s3 mb s3://e2e-smoke --endpoint-url "$ENDPOINT"
+              aws s3 cp /tmp/payload s3://e2e-smoke/obj --endpoint-url "$ENDPOINT"
+              aws s3 cp s3://e2e-smoke/obj /tmp/downloaded --endpoint-url "$ENDPOINT"
               expected=$(sha256sum /tmp/payload | awk '{print $1}')
               actual=$(sha256sum /tmp/downloaded | awk '{print $1}')
               test "$expected" = "$actual"
+              # The gateway must reject unsigned requests.
+              if aws s3 cp s3://e2e-smoke/obj /tmp/anon --endpoint-url "$ENDPOINT" --no-sign-request; then
+                echo "anonymous read was allowed" >&2
+                exit 1
+              fi
+              if aws s3 cp /tmp/payload s3://e2e-smoke/anon --endpoint-url "$ENDPOINT" --no-sign-request; then
+                echo "anonymous write was allowed" >&2
+                exit 1
+              fi
           env:
             - name: HOME
               value: /tmp
@@ -41,6 +48,16 @@ spec:
                 secretKeyRef:
                   name: e2e-seaweedfs-conn
                   key: region
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: e2e-seaweedfs-conn
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: e2e-seaweedfs-conn
+                  key: AWS_SECRET_ACCESS_KEY
             - name: ENDPOINT
               valueFrom:
                 secretKeyRef:

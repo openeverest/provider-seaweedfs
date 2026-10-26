@@ -24,3 +24,72 @@ data:
   (base64_decode(verifyTLS)): "false"
   # ClusterIP is in-cluster only.
   (externalEndpointURL == null): true
+# expectedPods proves each selector matches the operator's pods.
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: e2e-seaweedfs-master-pdb
+  (ownerReferences[?kind == 'Instance' && name == 'e2e-seaweedfs'] | length(@)): 1
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      core.openeverest.io/component: master
+      core.openeverest.io/instance: e2e-seaweedfs
+      core.openeverest.io/provider: provider-seaweedfs
+status:
+  expectedPods: 1
+  currentHealthy: 1
+  disruptionsAllowed: 1
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: e2e-seaweedfs-volume-pdb
+  (ownerReferences[?kind == 'Instance' && name == 'e2e-seaweedfs'] | length(@)): 1
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      core.openeverest.io/component: volume
+      core.openeverest.io/instance: e2e-seaweedfs
+      core.openeverest.io/provider: provider-seaweedfs
+status:
+  expectedPods: 2
+  currentHealthy: 2
+  disruptionsAllowed: 1
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: e2e-seaweedfs-filer-pdb
+  (ownerReferences[?kind == 'Instance' && name == 'e2e-seaweedfs'] | length(@)): 1
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      core.openeverest.io/component: filer
+      core.openeverest.io/instance: e2e-seaweedfs
+      core.openeverest.io/provider: provider-seaweedfs
+status:
+  expectedPods: 1
+  currentHealthy: 1
+  disruptionsAllowed: 1
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: e2e-seaweedfs-s3-pdb
+  (ownerReferences[?kind == 'Instance' && name == 'e2e-seaweedfs'] | length(@)): 1
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      core.openeverest.io/component: s3
+      core.openeverest.io/instance: e2e-seaweedfs
+      core.openeverest.io/provider: provider-seaweedfs
+status:
+  expectedPods: 1
+  currentHealthy: 1
+  disruptionsAllowed: 1

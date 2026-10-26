@@ -21,6 +21,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -58,9 +59,16 @@ func New() *Provider {
 			SchemeFuncs: []func(*runtime.Scheme) error{
 				seaweedv1.AddToScheme,
 				networkingv1.AddToScheme,
+				policyv1.AddToScheme,
 			},
 			WatchConfigs: []controller.WatchConfig{
 				controller.WatchOwned(&seaweedv1.Seaweed{}),
+				// Re-apply the S3 identities Secret if it is edited or deleted.
+				controller.WatchOwned(&corev1.Secret{},
+					predicate.NewPredicateFuncs(func(o client.Object) bool {
+						return strings.HasSuffix(o.GetName(), s3ConfigSecretSuffix)
+					})),
+				controller.WatchOwned(&policyv1.PodDisruptionBudget{}),
 				// The operator does not touch the Seaweed CR when LB ingress or NodePort
 				// changes, so watch the S3 Service directly to refresh status.
 				controller.WatchExternal(&corev1.Service{},
@@ -186,6 +194,11 @@ func (p *Provider) Sync(c *controller.Context) error {
 		return err
 	}
 
+	s3ConfigChecksum, err := syncS3ConfigSecret(c)
+	if err != nil {
+		return err
+	}
+
 	adminSecretName, err := ensureAdminCredentials(c, topo)
 	if err != nil {
 		return err
@@ -209,10 +222,14 @@ func (p *Provider) Sync(c *controller.Context) error {
 	if topo.VolumeServerDiskCount != nil {
 		sw.Spec.VolumeServerDiskCount = topo.VolumeServerDiskCount
 	}
+	applyS3Auth(sw.Spec.S3, c.Name(), s3ConfigChecksum)
 	labelPods(c, sw)
 	applyScheduling(c, sw)
 
-	return c.Apply(sw)
+	if err := c.Apply(sw); err != nil {
+		return err
+	}
+	return syncPodDisruptionBudgets(c)
 }
 
 // labelPods labels every component's pods so the runtime counts them into
@@ -310,6 +327,14 @@ func (p *Provider) Status(c *controller.Context) (controller.Status, error) {
 				return controller.Provisioning("Waiting for S3 Ingress"), nil
 			}
 
+			creds, err := readS3Credentials(c)
+			if err != nil {
+				return controller.Status{}, err
+			}
+			if !creds.complete() {
+				return controller.Provisioning("Waiting for S3 credentials Secret " + s3ConfigSecretName(c.Name())), nil
+			}
+
 			var s3Params components.S3CustomSpec
 			if s3Comp, ok := c.Instance().Spec.Components[common.ComponentS3]; ok {
 				c.TryDecodeComponentParameters(s3Comp, &s3Params)
@@ -318,6 +343,7 @@ func (p *Provider) Status(c *controller.Context) (controller.Status, error) {
 			if err != nil {
 				return controller.Status{}, err
 			}
+			details = withS3Credentials(details, creds)
 			expansion, err := storageExpansionStatus(c, sw)
 			if err != nil {
 				return controller.Status{}, err
