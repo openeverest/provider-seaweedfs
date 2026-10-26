@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -1291,6 +1292,7 @@ func TestSyncPassesTLSAndSecurityConfig(t *testing.T) {
 	require.NoError(t, corev1alpha1.AddToScheme(scheme))
 	require.NoError(t, seaweedv1.AddToScheme(scheme))
 	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, policyv1.AddToScheme(scheme))
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(instance).Build()
 	ctx := controller.NewContext(context.Background(), fakeClient, instance, common.ProviderName)
 
@@ -1388,6 +1390,7 @@ func newSyncClient(t *testing.T, instance *corev1alpha1.Instance, objs ...client
 	scheme := runtime.NewScheme()
 	require.NoError(t, corev1alpha1.AddToScheme(scheme))
 	require.NoError(t, seaweedv1.AddToScheme(scheme))
+	require.NoError(t, policyv1.AddToScheme(scheme))
 	require.NoError(t, corev1.AddToScheme(scheme))
 	builder := fake.NewClientBuilder().WithScheme(scheme).WithObjects(instance)
 	if len(objs) > 0 {

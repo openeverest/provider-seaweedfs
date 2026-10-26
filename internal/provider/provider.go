@@ -21,6 +21,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -58,6 +59,7 @@ func New() *Provider {
 			SchemeFuncs: []func(*runtime.Scheme) error{
 				seaweedv1.AddToScheme,
 				networkingv1.AddToScheme,
+				policyv1.AddToScheme,
 			},
 			WatchConfigs: []controller.WatchConfig{
 				controller.WatchOwned(&seaweedv1.Seaweed{}),
@@ -66,6 +68,7 @@ func New() *Provider {
 					predicate.NewPredicateFuncs(func(o client.Object) bool {
 						return strings.HasSuffix(o.GetName(), s3ConfigSecretSuffix)
 					})),
+				controller.WatchOwned(&policyv1.PodDisruptionBudget{}),
 				// The operator does not touch the Seaweed CR when LB ingress or NodePort
 				// changes, so watch the S3 Service directly to refresh status.
 				controller.WatchExternal(&corev1.Service{},
@@ -223,7 +226,10 @@ func (p *Provider) Sync(c *controller.Context) error {
 	labelPods(c, sw)
 	applyScheduling(c, sw)
 
-	return c.Apply(sw)
+	if err := c.Apply(sw); err != nil {
+		return err
+	}
+	return syncPodDisruptionBudgets(c)
 }
 
 // labelPods labels every component's pods so the runtime counts them into

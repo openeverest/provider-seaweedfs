@@ -235,6 +235,12 @@ spec:
             for:
               deletion: {}
         - wait:
+            apiVersion: policy/v1
+            kind: PodDisruptionBudget
+            name: test-seaweedfs-master-pdb
+            for:
+              deletion: {}
+        - wait:
             apiVersion: v1
             kind: Secret
             name: test-seaweedfs-s3-config

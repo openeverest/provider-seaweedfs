@@ -113,6 +113,58 @@ spec:
   # Admin UI stays off unless topology.parameters.admin.enabled is true.
   (admin == null): true
 ---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: test-seaweedfs-master-pdb
+  (ownerReferences[?kind == 'Instance' && name == 'test-seaweedfs'] | length(@)): 1
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      core.openeverest.io/component: master
+      core.openeverest.io/instance: test-seaweedfs
+      core.openeverest.io/provider: provider-seaweedfs
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: test-seaweedfs-volume-pdb
+  (ownerReferences[?kind == 'Instance' && name == 'test-seaweedfs'] | length(@)): 1
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      core.openeverest.io/component: volume
+      core.openeverest.io/instance: test-seaweedfs
+      core.openeverest.io/provider: provider-seaweedfs
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: test-seaweedfs-filer-pdb
+  (ownerReferences[?kind == 'Instance' && name == 'test-seaweedfs'] | length(@)): 1
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      core.openeverest.io/component: filer
+      core.openeverest.io/instance: test-seaweedfs
+      core.openeverest.io/provider: provider-seaweedfs
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: test-seaweedfs-s3-pdb
+  (ownerReferences[?kind == 'Instance' && name == 'test-seaweedfs'] | length(@)): 1
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      core.openeverest.io/component: s3
+      core.openeverest.io/instance: test-seaweedfs
+      core.openeverest.io/provider: provider-seaweedfs
+---
 apiVersion: v1
 kind: Secret
 metadata:

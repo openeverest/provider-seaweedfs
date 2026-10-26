@@ -44,6 +44,9 @@ package provider
 // Operator-managed S3 Ingress (read for HTTPS connection details):
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch
 
+// PodDisruptionBudgets the provider creates per component:
+// +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
+
 // Storage classes named on master, volume, or filer. list resolves the default
 // class when storage.size grows and no class is set:
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list
