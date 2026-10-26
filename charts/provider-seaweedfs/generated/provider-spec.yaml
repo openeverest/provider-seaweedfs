@@ -79,6 +79,11 @@ spec:
       parametersSchema:
         openAPIV3Schema:
           properties:
+            admin:
+              properties:
+                enabled:
+                  type: boolean
+              type: object
             replication:
               type: string
             securityConfig:
@@ -131,6 +136,21 @@ spec:
   uiSchema:
     standalone:
       sections:
+        admin:
+          components:
+            enabled:
+              fieldParams:
+                defaultValue: false
+                helperText: Creates user admin and a generated password. One server on ClusterIP Service <instance>-admin, port 23646.
+                label: Enable admin UI
+              path: spec.topology.parameters.admin.enabled
+              uiType: toggle
+              validation:
+                required: false
+          componentsOrder:
+            - enabled
+          description: Optional web UI for managing S3 buckets.
+          label: Admin
         basicInfo:
           components:
             version:
@@ -193,6 +213,7 @@ spec:
                     badge: Gi
                     badgeToApi: true
                     defaultValue: 1
+                    helperText: Can be increased after creation when the storage class allows volume expansion. Cannot shrink.
                     label: Disk
                   path: spec.components.filer.storage.size
                   uiType: number
@@ -282,11 +303,9 @@ spec:
                   fieldParams:
                     badge: Gi
                     badgeToApi: true
-                    helperText: Optional. Enables master persistence when set. Leave empty to run without a PVC. Cannot be changed after creation.
+                    helperText: Optional. Enables master persistence when set at creation. Can be increased after creation when the storage class allows volume expansion. Cannot be enabled, shrunk, or cleared after creation.
                     label: Disk
                     modes:
-                      edit:
-                        disabled: true
                       restore:
                         disabled: true
                   path: spec.components.master.storage.size
@@ -580,6 +599,7 @@ spec:
                     badge: Gi
                     badgeToApi: true
                     defaultValue: 10
+                    helperText: Can be increased after creation when the storage class allows volume expansion. Cannot shrink.
                     label: Disk
                   path: spec.components.volume.storage.size
                   uiType: number
@@ -634,6 +654,7 @@ spec:
         - volume
         - filer
         - s3
+        - admin
         - tls
   versions:
     - components:

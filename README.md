@@ -61,11 +61,11 @@ The provider binary still compiles against the Go module pin in
 writes on `Seaweed` are already in that module.
 
 Chart `0.1.42` (image `1.0.39`) changes admin startup and ServiceMonitor
-scraping, plus dependencies. This provider does not set `spec.admin` and does
-not enable the operator ServiceMonitor, so that release does not change
-Instance behavior.
+scraping, plus dependencies. This provider sets `spec.admin` (see Admin UI
+below) and does not set `spec.admin.metricsPort`, so it does not create the
+admin ServiceMonitor.
 
-Chart `0.1.43` (image `1.0.40`) does. The GitHub release notes for `1.0.40`
+Chart `0.1.43` (image `1.0.40`) changes Instance behavior beyond that. The GitHub release notes for `1.0.40`
 only mention a SeaweedFS library bump. The tag also contains
 [seaweedfs-operator#394](https://github.com/seaweedfs/seaweedfs-operator/pull/394)
 (in-place PVC growth) and
@@ -119,26 +119,41 @@ an MVP: several capabilities are stubbed or not wired yet.
 | High availability | ⚠️ | Replica counts are passed through. Data copies follow `topology.parameters.replication` (`master.defaultReplication`); empty uses `001` with at least 2 volume servers, otherwise `000`. Placements that need another data center or rack are rejected |
 | Custom configuration | ✅ | Master `masterVolumeSizeLimitMB`; topology `replication` and `volumeServerDiskCount`; volume `maxVolumeCounts`; filer `maxMB`; S3 `port` / `domainName` / Ingress; JWT signing via `topology.parameters.securityConfig` |
 | S3 service exposure | ✅ | `spec.components.s3.service.serviceType`: ClusterIP, NodePort, or LoadBalancer. `loadBalancerService.sourceRanges` is rejected. Only S3 can be exposed |
+| Admin UI | ✅ | Off unless `topology.parameters.admin.enabled` is true. This provider creates Secret `<instance>-admin-credentials` with `adminUser=admin` and a generated `adminPassword` (kept across reconciles). ClusterIP Service `<instance>-admin`, port 23646. Connection details add `adminURL`, `adminUser`, and `adminCredentialsSecret` (the Secret name). Operator image `1.0.40` exits the admin container when `adminPassword` is missing. Workers are not created |
 | Monitoring | ❌ | Not wired through the Instance API. The operator chart can enable `serviceMonitor` on its own (`enabled: false` by default); this provider does not set it |
 | TLS | ✅ | Inter-component gRPC mTLS via `topology.parameters.tls`. Client HTTPS via S3 Ingress TLS (`components.s3.parameters.ingress`) → `externalEndpointURL=https://…`. Native S3 HTTPS on the gateway is not supported by the operator yet ([seaweedfs-operator#411](https://github.com/seaweedfs/seaweedfs-operator/issues/411)) |
 | Status / readiness | ✅ | Maps Seaweed Ready condition; waits for TLS Secret / LoadBalancer / Ingress when configured |
-| Connection details | ✅ | Publishes in-cluster S3 endpoint and admin S3 credentials on Ready; NodePort / LoadBalancer / Ingress add `externalEndpointURL` |
+| Connection details | ✅ | Publishes in-cluster S3 endpoint and admin S3 credentials on Ready; NodePort / LoadBalancer / Ingress add `externalEndpointURL`. Admin UI adds `adminURL`, `adminUser`, and `adminCredentialsSecret` |
 | S3 authentication | ✅ | Always on. The provider generates an admin access key pair in Secret `<name>-s3-config` and starts the gateway with it, so anonymous requests are denied from the first boot. See [S3 credentials](#s3-credentials) |
-| Pod scheduling | ✅ | `schedulingPolicy` affinity, nodeSelector, tolerations and schedulerName. Master and volume pods require separate nodes by default; `affinity: {}` opts out. `topologySpreadConstraints` is rejected (no seaweedfs-operator field) |
+| Pod scheduling | ✅ | `schedulingPolicy` affinity, nodeSelector, tolerations and schedulerName, written on each Seaweed component. Master, volume and filer pods prefer separate nodes (preferred anti-affinity on hostname, weight 100); `affinity: {}` opts out. S3 has no default affinity. `topologySpreadConstraints` is rejected (no seaweedfs-operator field) |
 
 Stateful workloads additionally report:
 
 | Capability | Status | Notes |
 |---|---|---|
 | Persistent storage | ✅ | Volume/filer `storage.size` required; optional master `storage.size`. Optional per-component `storage.storageClass` (UI picker for master/volume/filer) |
-| Storage expansion | ⚠️ | Increasing `storage.size` is written onto the Seaweed spec. Image `1.0.40` grows existing master, volume, and filer PVCs in place when the StorageClass has `allowVolumeExpansion: true` and only the size changed ([seaweedfs-operator#394](https://github.com/seaweedfs/seaweedfs-operator/pull/394)). Shrinks are ignored. A class that disallows expansion leaves the PVC unchanged and emits `VolumeExpansionNotSupported`; this provider does not surface that event |
+| Storage expansion | ✅ | Volume, filer, and master `storage.size` can grow. A smaller size is rejected. Master `storage.size` cannot be set after creation when the master has no persistence, because the operator deletes and recreates the master StatefulSet. A larger size is rejected unless the StorageClass already on the Seaweed spec has `allowVolumeExpansion: true`, or the newest default class when the spec names none. Changing `storage.storageClass` in the same request as a size increase is rejected. Image `1.0.40` then patches the live PVCs and leaves StatefulSet `volumeClaimTemplates` unchanged ([seaweedfs-operator#394](https://github.com/seaweedfs/seaweedfs-operator/pull/394)). While a PVC is `Resizing`, or the operator has not patched it yet, the Instance phase is `Updating`. `FileSystemResizePending` does not hold the phase; offline expansion needs a pod restart. If the class on the PVC disallows expansion, the phase is `Failed`. Other claim-template edits are not applied; the operator emits Warning event `VolumeClaimTemplatesMismatch` (not a status condition) |
 | Backups | ❌ | Not implemented. Operator chart `0.1.30` and later install a `SeaweedBackup` CRD; this provider does not create it |
 | Restore | ❌ | Not implemented. `SeaweedRestore` ships in the same chart; this provider does not create it |
 
 ## Installation
 
-Install from the chart in this repository (OCI chart publish is not set up for MVP yet;
-container images are published to GHCR on tagged releases):
+The Helm chart and container image are published to GHCR on every tagged
+[release](https://github.com/openeverest/provider-seaweedfs/releases). Pick a version
+from the releases page:
+
+```bash
+helm install provider-seaweedfs \
+  oci://ghcr.io/openeverest/charts/provider-seaweedfs \
+  --version <version> \
+  --namespace everest-system \
+  --create-namespace
+```
+
+- The `seaweedfs-operator` (and its CRDs) is bundled as a chart dependency and is
+  installed automatically when `seaweedfs-operator.enabled` is `true` (the default).
+
+To run unreleased changes from `main`, install from the chart in this repository instead:
 
 ```bash
 make helm-deps
@@ -147,13 +162,13 @@ helm install provider-seaweedfs charts/provider-seaweedfs \
   --create-namespace
 ```
 
-- The `seaweedfs-operator` (and its CRDs) is bundled as a chart dependency and is
-  installed automatically when `seaweedfs-operator.enabled` is `true` (the default).
-
 Upgrade and uninstall:
 
 ```bash
-helm upgrade provider-seaweedfs charts/provider-seaweedfs --namespace everest-system
+helm upgrade provider-seaweedfs \
+  oci://ghcr.io/openeverest/charts/provider-seaweedfs \
+  --version <version> \
+  --namespace everest-system
 helm uninstall provider-seaweedfs --namespace everest-system
 ```
 
@@ -273,6 +288,34 @@ kubectl get seaweed -A
 >
 > Optional JWT signing for volume/filer (`topology.parameters.securityConfig`) is
 > supported via YAML/API only there is no UI for it yet.
+>
+> The admin UI is off until you enable it. This provider creates the
+> credentials Secret; the username is `admin` and the password is generated
+> once and reused:
+>
+> ```yaml
+> spec:
+>   topology:
+>     type: standalone
+>     parameters:
+>       admin:
+>         enabled: true
+> ```
+>
+> The Secret is `<instance>-admin-credentials` (`adminUser`, `adminPassword`).
+> Connection details name it in `adminCredentialsSecret` and do not copy the
+> password. Read it with:
+>
+> ```bash
+> kubectl get secret <instance>-admin-credentials \
+>   -o jsonpath='{.data.adminPassword}' | base64 -d; echo
+> ```
+>
+> The Service is ClusterIP `<instance>-admin` port 23646. Reach it with
+> `kubectl port-forward svc/<instance>-admin 23646:23646` and open
+> `http://localhost:23646`. The admin process reads the Secret only at start.
+> Turning the UI off stops the server and leaves the Secret in place, so
+> turning it back on keeps the same password.
 
 ### S3 credentials
 
@@ -348,16 +391,21 @@ Source of truth: [definition/versions.yaml](definition/versions.yaml).
   validate user input against these schemas.
 
 Sync writes replica counts, CPU and memory resources, volume/filer/master
-persistence (including storage class), S3 service type and Ingress, component
+persistence (including storage class), S3 service type and Ingress, the admin
+server when `topology.parameters.admin.enabled` is true (Secret
+`<instance>-admin-credentials`, user `admin`, generated password), component
 parameters (`masterVolumeSizeLimitMB`, `maxVolumeCounts`, `maxMB`, `port`,
 `domainName`), topology `replication` and `volumeServerDiskCount`, optional
 inter-component TLS (`topology.parameters.tls`), JWT signing
 (`topology.parameters.securityConfig`), and pod scheduling (affinity,
 nodeSelector, tolerations, schedulerName) onto the upstream `Seaweed` CR.
 `topologySpreadConstraints` and load-balancer source ranges are rejected.
-A larger `storage.size` is written through and operator image `1.0.40` may
-grow the PVCs (see the capabilities table). Shrinks, monitoring, backups, and
-restores are not applied.
+A larger volume, filer, or master `storage.size` is written through when the
+StorageClass already on the Seaweed spec allows expansion. Operator image
+`1.0.40` grows the PVCs (see the capabilities table). Shrinks are rejected.
+Setting master `storage.size` when the master has no disk yet is rejected.
+Changing `storage.storageClass` together with a size increase is rejected.
+Monitoring, backups, and restores are not applied.
 
 ## Development
 
@@ -420,6 +468,8 @@ kubectl logs -n everest-system deploy/provider-seaweedfs -f
 |---|---|
 | `Instance` stuck in `Provisioning` | `kubectl describe instance <name>` conditions, then the provider logs. Common waits: Seaweed Ready, S3 Service, S3 credentials Secret `<name>-s3-config`, LoadBalancer ingress, S3 Ingress, or `<name>-server-tls` Secret when TLS is enabled |
 | S3 requests fail with `AccessDenied` | Requests must be signed with the keys from `<name>-conn` (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`). Anonymous access is disabled |
+| `Instance` stays `Updating` after a disk increase | `kubectl get pvc -o wide` for `Resizing`. Image `1.0.40` patches the PVC request and leaves the StatefulSet claim template unchanged. `FileSystemResizePending` does not keep the Instance in `Updating`. When the CSI driver only expands offline, restart the pod that mounts the PVC so the kubelet grows the filesystem. An older image only emits Warning event `VolumeClaimTemplatesMismatch` and does not grow the PVC. Deleting the StatefulSet does not resize claims that already exist. Patch each PVC yourself when `allowVolumeExpansion` is true: `kubectl patch pvc <name> --type=merge -p '{"spec":{"resources":{"requests":{"storage":"<size>"}}}}'`. Names are `mount<N>-<instance>-volume-<ordinal>`, `<instance>-filer-<instance>-filer-<ordinal>`, and `<instance>-master-<instance>-master-<ordinal>` |
+| Disk increase rejected | The StorageClass needs `allowVolumeExpansion: true`. Shrinking `storage.size` is rejected |
 | No `Provider` resource in the cluster | Is the chart installed? Check the provider deployment logs |
 | `Instance` ignored entirely | `spec.providerRef.name` must be `provider-seaweedfs` |
 | `Seaweed` resource created but no pods | Inspect the `Seaweed` custom resource status — the failure is upstream in the operator |

@@ -1005,6 +1005,7 @@ func TestValidate(t *testing.T) {
 			}
 			scheme := runtime.NewScheme()
 			require.NoError(t, corev1alpha1.AddToScheme(scheme))
+			require.NoError(t, seaweedv1.AddToScheme(scheme))
 			fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(instance).Build()
 			ctx := controller.NewContext(context.Background(), fakeClient, instance, common.ProviderName)
 
@@ -1166,6 +1167,24 @@ func TestStatus(t *testing.T) {
 			expectMessagePart: "scaling up",
 		},
 		{
+			name: "missing admin secret replaces the operator NotReady message",
+			seaweed: &seaweedv1.Seaweed{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-instance", Namespace: "default"},
+				Spec: seaweedv1.SeaweedSpec{
+					Admin: &seaweedv1.AdminSpec{
+						CredentialsSecret: &corev1.LocalObjectReference{Name: "seaweed-admin"},
+					},
+				},
+				Status: seaweedv1.SeaweedStatus{
+					Conditions: []metav1.Condition{{
+						Type: "Ready", Status: metav1.ConditionFalse, Reason: "NotReady", Message: "Admin: 0/1 ready",
+					}},
+				},
+			},
+			expectPhase:       corev1alpha1.InstancePhaseProvisioning,
+			expectMessagePart: `Waiting for admin credentials Secret "seaweed-admin"`,
+		},
+		{
 			name: "no condition with replicas is provisioning",
 			seaweed: &seaweedv1.Seaweed{
 				ObjectMeta: metav1.ObjectMeta{Name: "test-instance", Namespace: "default"},
@@ -1239,6 +1258,10 @@ func TestStatus(t *testing.T) {
 				} else {
 					assert.NotContains(t, status.ConnectionDetails.AdditionalProperties, "externalEndpointURL")
 				}
+				assert.NotContains(t, status.ConnectionDetails.AdditionalProperties, "adminURL")
+				assert.NotContains(t, status.ConnectionDetails.AdditionalProperties, "adminUser")
+				assert.NotContains(t, status.ConnectionDetails.AdditionalProperties, "adminCredentialsSecret")
+				assert.NotContains(t, status.ConnectionDetails.AdditionalProperties, "adminPassword")
 			}
 		})
 	}
@@ -1360,13 +1383,17 @@ func newSyncInstance(comps map[string]corev1alpha1.ComponentSpec) *corev1alpha1.
 	}
 }
 
-func newSyncClient(t *testing.T, instance *corev1alpha1.Instance) client.Client {
+func newSyncClient(t *testing.T, instance *corev1alpha1.Instance, objs ...client.Object) client.Client {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	require.NoError(t, corev1alpha1.AddToScheme(scheme))
 	require.NoError(t, seaweedv1.AddToScheme(scheme))
 	require.NoError(t, corev1.AddToScheme(scheme))
-	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(instance).Build()
+	builder := fake.NewClientBuilder().WithScheme(scheme).WithObjects(instance)
+	if len(objs) > 0 {
+		builder = builder.WithObjects(objs...)
+	}
+	return builder.Build()
 }
 
 func podLabels(instance, component string) map[string]string {
@@ -1396,6 +1423,7 @@ func TestSync(t *testing.T) {
 		assert.Equal(t, podLabels(instance.Name, common.ComponentVolume), sw.Spec.Volume.Labels)
 		assert.Equal(t, podLabels(instance.Name, common.ComponentFiler), sw.Spec.Filer.Labels)
 		assert.Equal(t, podLabels(instance.Name, common.ComponentS3), sw.Spec.S3.Labels)
+		assert.Nil(t, sw.Spec.Admin)
 		assert.ElementsMatch(t,
 			[]string{common.ComponentMaster, common.ComponentVolume, common.ComponentFiler, common.ComponentS3},
 			ctx.LabelledComponents())

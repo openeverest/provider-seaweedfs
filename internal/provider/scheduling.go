@@ -1,3 +1,17 @@
+// Copyright (C) 2026 The OpenEverest Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package provider
 
 import (
@@ -24,16 +38,19 @@ func validateSchedulingPolicy(component string, policy *commonv1alpha1.Schedulin
 	return nil
 }
 
-// applyScheduling places the pods of every component. Master (raft quorum)
-// and volume (data) pods require separate nodes unless the user brings their
-// own affinity; filer and S3 are left to the scheduler's built-in spreading.
+// applyScheduling places the pods of every component. Master, volume, and
+// filer pods prefer separate nodes unless the user brings their own affinity.
+// S3 is left to the scheduler. Values are written on each component. The
+// operator applies a component value over the cluster one, nodeSelector is
+// merged, with the component key winning.
 func applyScheduling(c *controller.Context, sw *seaweedv1.Seaweed) {
 	components := c.Instance().Spec.Components
 	scheduleComponent(&sw.Spec.Master.ComponentSpec, components[common.ComponentMaster].SchedulingPolicy,
-		requiredHostnameAntiAffinity(c.PodLabels(common.ComponentMaster)))
+		preferredHostnameAntiAffinity(c.PodLabels(common.ComponentMaster)))
 	scheduleComponent(&sw.Spec.Volume.ComponentSpec, components[common.ComponentVolume].SchedulingPolicy,
-		requiredHostnameAntiAffinity(c.PodLabels(common.ComponentVolume)))
-	scheduleComponent(&sw.Spec.Filer.ComponentSpec, components[common.ComponentFiler].SchedulingPolicy, nil)
+		preferredHostnameAntiAffinity(c.PodLabels(common.ComponentVolume)))
+	scheduleComponent(&sw.Spec.Filer.ComponentSpec, components[common.ComponentFiler].SchedulingPolicy,
+		preferredHostnameAntiAffinity(c.PodLabels(common.ComponentFiler)))
 	scheduleComponent(&sw.Spec.S3.ComponentSpec, components[common.ComponentS3].SchedulingPolicy, nil)
 }
 
@@ -58,12 +75,19 @@ func scheduleComponent(spec *seaweedv1.ComponentSpec, policy *commonv1alpha1.Sch
 	spec.Tolerations = slices.Clone(policy.Tolerations)
 }
 
-func requiredHostnameAntiAffinity(podLabels map[string]string) *corev1.Affinity {
+// preferredAntiAffinityWeight is a strong preference (1–100). The operator
+// does not add its own anti-affinity for master, volume, or filer.
+const preferredAntiAffinityWeight = 100
+
+func preferredHostnameAntiAffinity(podLabels map[string]string) *corev1.Affinity {
 	return &corev1.Affinity{
 		PodAntiAffinity: &corev1.PodAntiAffinity{
-			RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
-				LabelSelector: &metav1.LabelSelector{MatchLabels: podLabels},
-				TopologyKey:   corev1.LabelHostname,
+			PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{{
+				Weight: preferredAntiAffinityWeight,
+				PodAffinityTerm: corev1.PodAffinityTerm{
+					LabelSelector: &metav1.LabelSelector{MatchLabels: podLabels},
+					TopologyKey:   corev1.LabelHostname,
+				},
 			}},
 		},
 	}
