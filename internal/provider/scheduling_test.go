@@ -1,3 +1,17 @@
+// Copyright (C) 2026 The OpenEverest Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package provider
 
 import (
@@ -37,14 +51,19 @@ func withSchedulingPolicy(component string, policy *commonv1alpha1.SchedulingPol
 }
 
 func TestSyncScheduling(t *testing.T) {
-	t.Run("master and volume require separate nodes by default", func(t *testing.T) {
+	t.Run("master, volume and filer prefer separate nodes by default", func(t *testing.T) {
 		instance := newSyncInstance(validComponents())
 		_, sw := syncSeaweed(t, newSyncClient(t, instance), instance)
 
-		assert.Equal(t, requiredHostnameAntiAffinity(podLabels(instance.Name, common.ComponentMaster)), sw.Spec.Master.Affinity)
-		assert.Equal(t, requiredHostnameAntiAffinity(podLabels(instance.Name, common.ComponentVolume)), sw.Spec.Volume.Affinity)
-		assert.Nil(t, sw.Spec.Filer.Affinity)
+		assert.Equal(t, preferredHostnameAntiAffinity(podLabels(instance.Name, common.ComponentMaster)), sw.Spec.Master.Affinity)
+		assert.Equal(t, preferredHostnameAntiAffinity(podLabels(instance.Name, common.ComponentVolume)), sw.Spec.Volume.Affinity)
+		assert.Equal(t, preferredHostnameAntiAffinity(podLabels(instance.Name, common.ComponentFiler)), sw.Spec.Filer.Affinity)
 		assert.Nil(t, sw.Spec.S3.Affinity)
+		assert.Nil(t, sw.Spec.Admin)
+		assert.Nil(t, sw.Spec.Affinity)
+		assert.Nil(t, sw.Spec.NodeSelector)
+		assert.Empty(t, sw.Spec.Tolerations)
+		assert.Empty(t, sw.Spec.SchedulerName)
 	})
 
 	t.Run("policy is passed through", func(t *testing.T) {

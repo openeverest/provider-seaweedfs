@@ -45,3 +45,11 @@ package provider
 
 // PodDisruptionBudgets the provider creates per component:
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
+
+// Storage classes named on master, volume, or filer. list resolves the default
+// class when storage.size grows and no class is set:
+// +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list
+
+// Volume, filer, and master PVCs. Read during Status to report in-place expansion
+// (operator image 1.0.40 patches these; it does not copy the new size onto Seaweed status):
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch

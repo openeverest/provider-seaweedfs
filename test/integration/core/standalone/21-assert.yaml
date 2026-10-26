@@ -1,0 +1,60 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: test-seaweedfs
+spec:
+  components:
+    volume:
+      schedulingPolicy:
+        affinity:
+          podAntiAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                podAffinityTerm:
+                  topologyKey: kubernetes.io/hostname
+status:
+  phase: Ready
+---
+apiVersion: seaweed.seaweedfs.com/v1
+kind: Seaweed
+metadata:
+  name: test-seaweedfs
+spec:
+  (affinity == null): true
+  master:
+    replicas: 5
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  core.openeverest.io/component: master
+                  core.openeverest.io/instance: test-seaweedfs
+                  core.openeverest.io/provider: provider-seaweedfs
+  volume:
+    replicas: 3
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              topologyKey: kubernetes.io/hostname
+  filer:
+    replicas: 2
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  core.openeverest.io/component: filer
+                  core.openeverest.io/instance: test-seaweedfs
+                  core.openeverest.io/provider: provider-seaweedfs
+  s3:
+    replicas: 2
+    (affinity == null): true

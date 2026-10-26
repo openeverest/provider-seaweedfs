@@ -8,6 +8,7 @@
 - apiGroups:
     - ""
   resources:
+    - persistentvolumeclaims
     - pods
     - services
   verbs:
@@ -107,3 +108,10 @@
     - seaweeds/status
   verbs:
     - get
+- apiGroups:
+    - storage.k8s.io
+  resources:
+    - storageclasses
+  verbs:
+    - get
+    - list
