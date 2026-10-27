@@ -1,0 +1,14 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: e2e-filer-ha
+status:
+  phase: Ready
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: e2e-filer-ha-filer
+status:
+  replicas: 2
+  readyReplicas: 2

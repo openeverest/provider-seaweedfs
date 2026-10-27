@@ -3,8 +3,10 @@
 spec:
   componentTypes:
     seaweedfs:
-      defaultVersion: "4.47"
+      defaultVersion: "4.48"
       versions:
+        - image: chrislusf/seaweedfs:4.48
+          version: "4.48"
         - image: chrislusf/seaweedfs:4.47
           version: "4.47"
   components:
@@ -22,6 +24,9 @@ spec:
         openAPIV3Schema:
           properties:
             masterVolumeSizeLimitMB:
+              format: int32
+              type: integer
+            volumeGrowthCount:
               format: int32
               type: integer
           type: object
@@ -75,7 +80,7 @@ spec:
               type: integer
           type: object
       type: seaweedfs
-  defaultVersion: "4.47"
+  defaultVersion: "4.48"
   release:
     version: 0.1.0
   topologies:
@@ -92,6 +97,19 @@ spec:
               properties:
                 enabled:
                   type: boolean
+              type: object
+            metrics:
+              properties:
+                prometheus:
+                  properties:
+                    enabled:
+                      type: boolean
+                  type: object
+                victoriaMetrics:
+                  properties:
+                    enabled:
+                      type: boolean
+                  type: object
               type: object
             replication:
               type: string
@@ -194,11 +212,14 @@ spec:
                 required: false
             replicas:
               fieldParams:
-                defaultValue: 1
+                defaultValue: 2
                 label: Filer replicas
               path: spec.components.filer.replicas
               uiType: number
               validation:
+                celExpressions:
+                  - celExpr: '!(spec.version == ''4.47'' && spec.components.filer.replicas > 1)'
+                    message: More than one filer requires SeaweedFS 4.48 or newer
                 int: true
                 max: 5
                 min: 1
@@ -357,6 +378,17 @@ spec:
               uiType: select
               validation:
                 required: false
+            volumeGrowthCount:
+              fieldParams:
+                defaultValue: 2
+                helperText: Logical volumes created at once when a bucket needs space. Each takes one slot per data copy on the volume servers. Higher values spread writes wider but use more slots per bucket.
+                label: Volume growth count
+              path: spec.components.master.parameters.volumeGrowthCount
+              uiType: number
+              validation:
+                int: true
+                min: 1
+                required: false
             volumeSizeLimitMB:
               fieldParams:
                 defaultValue: 1024
@@ -370,11 +402,45 @@ spec:
           componentsOrder:
             - replicas
             - volumeSizeLimitMB
+            - volumeGrowthCount
             - replication
             - resources
             - storageClass
           description: Configure the SeaweedFS master servers that coordinate the cluster.
           label: Master
+        monitoring:
+          components:
+            metrics:
+              components:
+                prometheus:
+                  fieldParams:
+                    defaultValue: false
+                    helperText: Create a PodMonitor so the Prometheus Operator scrapes the metrics.
+                    label: Prometheus
+                  path: spec.topology.parameters.metrics.prometheus.enabled
+                  uiType: toggle
+                  validation:
+                    required: false
+                victoriaMetrics:
+                  fieldParams:
+                    defaultValue: false
+                    helperText: Create a VMPodScrape so the VictoriaMetrics Operator scrapes the metrics.
+                    label: VictoriaMetrics
+                  path: spec.topology.parameters.metrics.victoriaMetrics.enabled
+                  uiType: toggle
+                  validation:
+                    required: false
+              componentsOrder:
+                - prometheus
+                - victoriaMetrics
+              description: Serve metrics in the Prometheus format on port 9327 of every master, volume, filer, S3 and admin pod. Switching this on or off restarts the pods.
+              groupType: toggleable
+              label: Expose metrics
+              uiType: group
+          componentsOrder:
+            - metrics
+          description: Monitor the health of your SeaweedFS cluster to detect issues quickly and improve its performance.
+          label: Monitoring
         s3:
           components:
             domainName:
@@ -581,7 +647,7 @@ spec:
                 required: false
             maxVolumeCounts:
               fieldParams:
-                defaultValue: 8
+                helperText: Optional. Empty sizes it automatically from free disk space and the volume size limit, and follows disk expansion.
                 label: Max volumes per disk
               path: spec.components.volume.parameters.maxVolumeCounts
               uiType: number
@@ -675,8 +741,15 @@ spec:
         - filer
         - s3
         - admin
+        - monitoring
         - tls
   versions:
+    - components:
+        filer: "4.48"
+        master: "4.48"
+        s3: "4.48"
+        volume: "4.48"
+      name: "4.48"
     - components:
         filer: "4.47"
         master: "4.47"

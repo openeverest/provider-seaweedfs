@@ -52,7 +52,8 @@ It never manages pods directly — all lifecycle work is delegated to the operat
 
 | provider-seaweedfs | OpenEverest | seaweedfs-operator | Kubernetes |
 |---|---|---|---|
-| `0.1.x` (MVP) | `2.0.0-dev.x` | chart `0.1.45` (image `1.0.42`) | `1.30` – `1.34` |
+| `0.2.x` (MVP) | `2.0.0-dev.x` | chart `0.1.45` (image `1.0.42`) | `1.30` – `1.34` |
+| `0.1.x` (MVP) | `2.0.0-dev.x` | chart `0.1.41` (image `1.0.38`) | `1.30` – `1.34` |
 
 The chart dependency installs `chrislusf/seaweedfs-operator:1.0.42`.
 The provider binary compiles against the Go module pin in
@@ -60,9 +61,11 @@ The provider binary compiles against the Go module pin in
 `b6b3122d9338` (chart tag `seaweedfs-operator-0.1.45`).
 
 Chart `0.1.42` (image `1.0.39`) changes admin startup and ServiceMonitor
-scraping, plus dependencies. This provider sets `spec.admin` (see Admin UI
-below) and does not set `spec.admin.metricsPort`, so it does not create the
-admin ServiceMonitor.
+scraping, plus dependencies. Its ServiceMonitors select only the per-pod
+Services, so they no longer scrape every target twice through the headless
+peer Services. This provider sets `spec.admin` (see Admin UI below), and sets
+`spec.admin.metricsPort` only when metrics are exposed (see
+[Metrics](#metrics-for-prometheus-and-victoriametrics)).
 
 Chart `0.1.43` (image `1.0.40`) changes Instance behavior beyond that. The GitHub release notes for `1.0.40`
 only mention a SeaweedFS library bump. The tag also contains
@@ -115,12 +118,12 @@ an MVP: several capabilities are stubbed or not wired yet.
 | Horizontal scaling | ✅ | Per-component `spec.components.*.replicas` (master must be odd) |
 | Vertical scaling (CPU / memory) | ✅ | `spec.components.*.resources` (requests and limits) is copied onto master, volume, filer, and S3 |
 | Version selection | ✅ | `spec.version` / component image from [definition/versions.yaml](definition/versions.yaml) |
-| High availability | ⚠️ | Replica counts are passed through. Data copies follow `topology.parameters.replication` (`master.defaultReplication`); empty uses `001` with at least 2 volume servers, otherwise `000`. Placements that need another data center or rack are rejected |
+| High availability | ⚠️ | Replica counts are passed through. Data copies follow `topology.parameters.replication` (`master.defaultReplication`); empty uses `001` with at least 2 volume servers, otherwise `000`. Placements that need another data center or rack are rejected. Two filers by default so S3 survives a filer restart or node failure, see [Filer high availability](#filer-high-availability) |
 | Disruption budgets | ✅ | One `PodDisruptionBudget` per component (`<name>-<component>-pdb`) with `maxUnavailable: 1`, so node drains and cluster upgrades evict one master, volume, filer or S3 pod at a time. This keeps master quorum and never blocks a drain outright, even for single-replica components |
-| Custom configuration | ✅ | Master `masterVolumeSizeLimitMB`; topology `replication` and `volumeServerDiskCount`; volume `maxVolumeCounts`; filer `maxMB`; S3 `port` / `domainName` / `https` / Ingress; JWT signing via `topology.parameters.securityConfig` |
+| Custom configuration | ✅ | Master `masterVolumeSizeLimitMB` and `volumeGrowthCount`; topology `replication` and `volumeServerDiskCount`; volume `maxVolumeCounts` (automatic when unset); filer `maxMB`; S3 `port` / `domainName` / `https` / Ingress; JWT signing via `topology.parameters.securityConfig`. See [Volume slots and buckets](#volume-slots-and-buckets) |
 | S3 service exposure | ✅ | `spec.components.s3.service.serviceType`: ClusterIP, NodePort, or LoadBalancer. `loadBalancerService.sourceRanges` is rejected. Only S3 can be exposed |
 | Admin UI | ✅ | Off unless `topology.parameters.admin.enabled` is true. This provider creates Secret `<instance>-admin-credentials` with `adminUser=admin` and a generated `adminPassword` (kept across reconciles). ClusterIP Service `<instance>-admin`, port 23646. Connection details add `adminURL`, `adminUser`, and `adminCredentialsSecret` (the Secret name). Operator image `1.0.40` exits the admin container when `adminPassword` is missing. Workers are not created |
-| Monitoring | ❌ | Not wired through the Instance API. The operator chart can enable `serviceMonitor` on its own (`enabled: false` by default); this provider does not set it |
+| Monitoring | ✅ | Prometheus / VictoriaMetrics metrics on every component via `topology.parameters.metrics`, see [Metrics](#metrics-for-prometheus-and-victoriametrics). OpenEverest `MonitoringConfig` (PMM) is not used |
 | TLS | ✅ | Inter-component gRPC mTLS via `topology.parameters.tls`. The S3 gateway serves HTTPS by default (operator `httpsPort` 8334, `httpsOnly`, Secret `<instance>-s3-https`). Set `components.s3.parameters.https.enabled` to false for plain HTTP. Ingress TLS still publishes `externalEndpointURL=https://…`. The operator rejects `httpsOnly` together with Ingress, so an Ingress keeps the HTTP listener |
 | Status / readiness | ✅ | Maps Seaweed Ready condition; waits for TLS Secret / LoadBalancer / Ingress when configured |
 | Connection details | ✅ | Publishes in-cluster S3 endpoint and admin S3 credentials on Ready; NodePort / LoadBalancer / Ingress add `externalEndpointURL`. Admin UI adds `adminURL`, `adminUser`, and `adminCredentialsSecret` |
@@ -195,8 +198,8 @@ spec:
   components:
     master:
       type: seaweedfs
-      version: "4.47"
-      image: chrislusf/seaweedfs:4.47
+      version: "4.48"
+      image: chrislusf/seaweedfs:4.48
       replicas: 1
     volume:
       type: seaweedfs
@@ -393,9 +396,125 @@ spec:
 
 | Version bundle | Default | seaweedfs |
 |---|---|---|
-| `4.47` | ✅ | `4.47` (`chrislusf/seaweedfs:4.47`) |
+| `4.48` | ✅ | `4.48` (`chrislusf/seaweedfs:4.48`) |
+| `4.47` | | `4.47` (`chrislusf/seaweedfs:4.47`). One filer only, see [Filer high availability](#filer-high-availability) |
 
 Source of truth: [definition/versions.yaml](definition/versions.yaml).
+
+## Filer high availability
+
+The filer holds the metadata for every object, and the S3 gateway cannot serve
+any request without it, so the standalone topology runs **two filers by
+default**. Each filer keeps the full metadata in its own embedded store (leveldb
+on its own volume) and they replicate every change to each other:
+
+- Filers find each other through the master. A new or returning filer copies
+  the existing metadata from its peers, then follows their changes.
+- S3 gateways discover all filers from the master and route each key to the
+  same owner filer, so a write is visible to the next read and listing through
+  any gateway.
+- One `PodDisruptionBudget` per component lets drains take down one filer at a
+  time.
+
+Measured on a 4-node k3d cluster under continuous S3 traffic (PUT, GET and LIST
+of a new object every 0.25s):
+
+| Event | 1 filer | 2 filers |
+|---|---|---|
+| Filer pod restarted (drain, rollout) | All S3 requests fail for ~20s | Reads keep working; some writes stall for up to ~15s |
+| Node hosting a filer stops | S3 down until the node returns or the stuck pod is force-deleted (expected: Kubernetes does not replace StatefulSet pods from an unreachable node; not timed) | One request timed out; the other filer took over in ~10s |
+| Write through one gateway, read through another | — | 500 of 500 consistent |
+
+More than one filer requires SeaweedFS **4.48 or newer**, and the provider
+rejects it on older releases. Before 4.48 a restarting filer dropped up to a
+minute of changes from its metadata change log
+([seaweedfs/seaweedfs#11359](https://github.com/seaweedfs/seaweedfs/pull/11359)).
+A peer filer that was offline at that moment never received them, and S3
+returned 404 for objects it had acknowledged.
+
+Not supported yet: a shared external metadata store (PostgreSQL, Redis, etc.).
+
+## Volume slots and buckets
+
+SeaweedFS stores objects in volumes of up to `masterVolumeSizeLimitMB` (1024 MB by
+default). Every S3 bucket is its own collection with its own volumes, and each volume
+takes one *slot* on every volume server that holds a copy of it. When a server has no
+free slot left, new buckets cannot get a volume and uploads to them fail with
+`InternalError`.
+
+Two settings decide how many buckets fit:
+
+| Setting | Default | Effect |
+|---|---|---|
+| Volume `maxVolumeCounts` | Unset (automatic) | Slots per disk. Unset passes `-max=0`, so every volume server sizes its slots from free disk space divided by the volume size limit, rechecked on each heartbeat. Growing `storage.size` adds slots as soon as the filesystem in the pod grows, with no setting change. CSI drivers that expand only offline need the disk reattached first (for example, by rescheduling the pod to another node). A fixed value caps the slots regardless of disk size |
+| Master `volumeGrowthCount` | `2` | Logical volumes the master creates at once when a bucket needs space (`master.volume_growth` `copy_1`/`copy_2`/`copy_3` in `master.toml`). Upstream defaults are 7, 6 and 3, so with `001` replication every bucket took 12 slots up front |
+
+With the defaults and `001` replication, a new bucket takes 4 slots (2 volumes × 2
+copies), and the filer's own collection takes the first 4. Three volume servers with
+20Gi each get 57 slots, so 13 buckets fit before more disk is needed. With the
+previous fixed 8 slots per server and upstream growth counts, the same cluster fit 1.
+Raise `volumeGrowthCount` for write-heavy buckets that benefit from more parallel
+volumes; lower `masterVolumeSizeLimitMB` for many small buckets on small disks.
+
+Changing either setting on a running instance restarts the affected pods one at a
+time.
+
+## Metrics for Prometheus and VictoriaMetrics
+
+```yaml
+spec:
+  topology:
+    type: standalone
+    parameters:
+      metrics:
+        prometheus:
+          enabled: true
+        victoriaMetrics:
+          enabled: false
+```
+
+| Parameter | Purpose |
+|---|---|
+| `metrics` | Expose metrics on every component; omit to expose none |
+| `metrics.prometheus.enabled` | Create a `PodMonitor` for the Prometheus Operator |
+| `metrics.victoriaMetrics.enabled` | Create a `VMPodScrape` for the VictoriaMetrics Operator |
+
+Setting `metrics` sets `metricsPort: 9327` on the master, volume, filer and S3 gateway, and on
+the admin server when it is enabled. Each pod then serves metrics at `:9327/metrics` on a port
+named `<component>-metrics` (`master-metrics`, `volume-metrics`, …). Adding or removing the
+port changes each component's command line, so the pods restart one at a time. With metrics
+exposed, the S3 `port` cannot be 9327.
+
+The scrape resources are named `<instance>-prometheus` (`PodMonitor`) and
+`<instance>-victoriametrics` (`VMPodScrape`), live next to the Instance, and are removed with
+it. They select the pods by the `core.openeverest.io/instance` label, and every series carries
+the `core_openeverest_io_instance` and `core_openeverest_io_component` labels. Keep in mind:
+
+- The matching operator must be installed; otherwise the Instance fails validation.
+- Prometheus must select the `PodMonitor`. kube-prometheus-stack, for example, selects only
+  `PodMonitor`s labelled with its release unless
+  `prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues=false` is set.
+- seaweedfs-operator creates its own ServiceMonitors (`<instance>-master`, `-volume`, `-filer`,
+  `-s3`, `-admin`) whenever `metricsPort` is set and the Prometheus Operator CRDs are installed.
+  This provider cannot turn them off yet: the operator gains a switch for it in
+  [seaweedfs-operator#435](https://github.com/seaweedfs/seaweedfs-operator/pull/435), which the
+  provider will set once it ships. A Prometheus that selects both them and the `PodMonitor`
+  scrapes every pod twice. The operator checks for the CRD once and caches the answer, so restart it
+  after installing the Prometheus Operator. It removes the S3 ServiceMonitor when metrics are switched
+  off, but keeps the others until the Instance is deleted. They then have no targets.
+- The VictoriaMetrics Operator converts `PodMonitor`s and `ServiceMonitor`s into its own
+  scrape resources by default, so with its converter on VictoriaMetrics may scrape the instance
+  more than once. The converted copies have no owner reference; the provider deletes them
+  (`VMPodScrape` `<instance>-prometheus` and the `VMServiceScrape`s labelled with the instance)
+  when the Instance is deleted, and the `VMPodScrape` also when Prometheus scraping is turned
+  off.
+
+For Grafana, SeaweedFS publishes a Kubernetes dashboard,
+[grafana_seaweedfs_k8s.json](https://github.com/seaweedfs/seaweedfs/blob/master/other/metrics/grafana_seaweedfs_k8s.json),
+that filters by namespace. The bundled operator chart also installs ConfigMap
+`seaweedfs-operator-grafana-dashboard` (labelled `grafana_dashboard: "1"` for the
+kube-prometheus-stack Grafana sidecar). Its panels expect metrics pushed to a Pushgateway, not
+the scraped ones.
 
 ## Configuration
 
@@ -409,7 +528,7 @@ Sync writes replica counts, CPU and memory resources, volume/filer/master
 persistence (including storage class), S3 service type and Ingress, the admin
 server when `topology.parameters.admin.enabled` is true (Secret
 `<instance>-admin-credentials`, user `admin`, generated password), component
-parameters (`masterVolumeSizeLimitMB`, `maxVolumeCounts`, `maxMB`, `port`,
+parameters (`masterVolumeSizeLimitMB`, `volumeGrowthCount`, `maxVolumeCounts`, `maxMB`, `port`,
 `domainName`, S3 `https`), topology `replication` and `volumeServerDiskCount`, optional
 inter-component TLS (`topology.parameters.tls`), JWT signing
 (`topology.parameters.securityConfig`), and pod scheduling (affinity,
@@ -420,7 +539,9 @@ StorageClass already on the Seaweed spec allows expansion. Operator image
 `1.0.40` grows the PVCs (see the capabilities table). Shrinks are rejected.
 Setting master `storage.size` when the master has no disk yet is rejected.
 Changing `storage.storageClass` together with a size increase is rejected.
-Monitoring, backups, and restores are not applied.
+With `topology.parameters.metrics` set, every component's `metricsPort` is set
+and the provider creates the requested `PodMonitor` / `VMPodScrape`.
+Backups and restores are not applied.
 
 ## Development
 
@@ -452,6 +573,7 @@ markers, watches, and code generation are documented once for all providers in
 | `cmd/provider/` | Entry point |
 | `internal/provider/` | `ProviderInterface` implementation, RBAC markers |
 | `internal/common/` | Provider and component name constants |
+| `internal/apis/` | Subset of third-party APIs the provider writes (`VMPodScrape`); DeepCopy is generated by `make generate` |
 | `definition/` | Provider identity, component types, versions, topologies |
 | `charts/provider-seaweedfs/` | Helm chart (`generated/` is produced by `make generate`) |
 | `config/rbac/role.yaml` | Generated `ClusterRole` — do not edit |
@@ -470,7 +592,7 @@ markers, watches, and code generation are documented once for all providers in
   (cd ../openeverest && make build-controller docker-build-controller)
   make load-openeverest-controller-image
   (cd ../openeverest && make deploy-test-controller)
-  make test-integration            # or test-integration-core-standalone / -validation
+  make test-integration            # or test-integration-core-standalone / -validation / -monitoring-metrics
   ```
 
 ## Troubleshooting

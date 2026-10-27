@@ -1,0 +1,35 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: e2e-metrics
+spec:
+  providerRef:
+    name: provider-seaweedfs
+  topology:
+    type: standalone
+    parameters:
+      replication: "000"
+      admin:
+        enabled: true
+      metrics:
+        prometheus:
+          enabled: true
+        victoriaMetrics:
+          enabled: true
+  components:
+    master:
+      type: seaweedfs
+      replicas: 1
+    volume:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 1Gi
+    filer:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 1Gi
+    s3:
+      type: seaweedfs
+      replicas: 1

@@ -24,9 +24,14 @@ package components
 
 type MasterCustomSpec struct {
 	MasterVolumeSizeLimitMB *int32 `json:"masterVolumeSizeLimitMB,omitempty"`
+	// VolumeGrowthCount is the number of logical volumes created at once when
+	// a bucket needs a writable volume. Each uses one slot per data copy.
+	VolumeGrowthCount *int32 `json:"volumeGrowthCount,omitempty"`
 }
 
 type VolumeCustomSpec struct {
+	// MaxVolumeCounts caps volumes per disk. Unset lets SeaweedFS size it
+	// from free disk space and the volume size limit.
 	MaxVolumeCounts *int32 `json:"maxVolumeCounts,omitempty"`
 }
 

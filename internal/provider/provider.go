@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/AlekSi/pointer"
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	corev1alpha1 "github.com/openeverest/openeverest/v2/api/core/v1alpha1"
 	"github.com/openeverest/openeverest/v2/provider-runtime/controller"
 
@@ -40,6 +41,7 @@ import (
 
 	"github.com/openeverest/provider-seaweedfs/definition/components"
 	"github.com/openeverest/provider-seaweedfs/definition/topologies/standalone"
+	vmv1beta1 "github.com/openeverest/provider-seaweedfs/internal/apis/victoriametrics/v1beta1"
 	"github.com/openeverest/provider-seaweedfs/internal/common"
 )
 
@@ -60,6 +62,9 @@ func New() *Provider {
 				seaweedv1.AddToScheme,
 				networkingv1.AddToScheme,
 				policyv1.AddToScheme,
+				// Scrape resources for the exposed metrics.
+				monitoringv1.AddToScheme,
+				vmv1beta1.AddToScheme,
 			},
 			WatchConfigs: []controller.WatchConfig{
 				controller.WatchOwned(&seaweedv1.Seaweed{}),
@@ -228,13 +233,17 @@ func (p *Provider) Sync(c *controller.Context) error {
 		sw.Spec.VolumeServerDiskCount = topo.VolumeServerDiskCount
 	}
 	applyS3Auth(sw.Spec.S3, c.Name(), s3ConfigChecksum)
+	applyMetricsPorts(sw, topo.Metrics)
 	labelPods(c, sw)
 	applyScheduling(c, sw)
 
 	if err := c.Apply(sw); err != nil {
 		return err
 	}
-	return syncPodDisruptionBudgets(c)
+	if err := syncPodDisruptionBudgets(c); err != nil {
+		return err
+	}
+	return reconcileMetricsScrapes(c, topo.Metrics)
 }
 
 // labelPods labels every component's pods so the runtime counts them into
@@ -394,8 +403,12 @@ func (p *Provider) Cleanup(c *controller.Context) error {
 	l := log.FromContext(c.Context())
 	l.Info("Cleaning up instance", "name", c.Name())
 
-	// TODO: Implement cleanup logic if needed.
-	// Resources with owner references set via c.Apply() are automatically
-	// garbage collected. Only implement this if you need custom cleanup.
-	return nil
+	// Resources with owner references set via c.Apply() are garbage
+	// collected, the scrape resources included. The VictoriaMetrics Operator's
+	// copies of the PodMonitor and of seaweedfs-operator's ServiceMonitors
+	// have none.
+	if err := deleteConvertedPodMonitor(c); err != nil {
+		return err
+	}
+	return deleteConvertedServiceMonitors(c)
 }

@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/AlekSi/pointer"
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -40,6 +41,7 @@ import (
 
 	"github.com/openeverest/provider-seaweedfs/definition/components"
 	"github.com/openeverest/provider-seaweedfs/definition/topologies/standalone"
+	vmv1beta1 "github.com/openeverest/provider-seaweedfs/internal/apis/victoriametrics/v1beta1"
 	"github.com/openeverest/provider-seaweedfs/internal/common"
 )
 
@@ -145,6 +147,15 @@ func TestValidateMasterParameters(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "masterVolumeSizeLimitMB must be at least 1")
+
+	require.NoError(t, validateMasterParameters(components.MasterCustomSpec{
+		VolumeGrowthCount: pointer.ToInt32(1),
+	}))
+	err = validateMasterParameters(components.MasterCustomSpec{
+		VolumeGrowthCount: pointer.ToInt32(0),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "volumeGrowthCount must be at least 1")
 }
 
 func TestValidateVolume(t *testing.T) {
@@ -411,6 +422,32 @@ func TestBuildMasterSpec(t *testing.T) {
 		assert.Equal(t, DefaultReplication, *spec.DefaultReplication)
 		assert.Nil(t, spec.Persistence)
 		assert.Nil(t, spec.Service)
+		require.NotNil(t, spec.Config)
+		assert.Equal(t, "[master.volume_growth]\ncopy_1 = 2\ncopy_2 = 2\ncopy_3 = 2\n", *spec.Config)
+	})
+
+	t.Run("custom volume growth count overrides default", func(t *testing.T) {
+		spec := buildMasterSpec(
+			corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(1)},
+			components.MasterCustomSpec{VolumeGrowthCount: pointer.ToInt32(6)},
+			DefaultReplication,
+		)
+		require.NotNil(t, spec.Config)
+		assert.Equal(t, "[master.volume_growth]\ncopy_1 = 6\ncopy_2 = 6\ncopy_3 = 6\n", *spec.Config)
+	})
+
+	t.Run("config checksum annotation rolls masters on change", func(t *testing.T) {
+		build := func(count *int32) *seaweedv1.MasterSpec {
+			return buildMasterSpec(
+				corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(3)},
+				components.MasterCustomSpec{VolumeGrowthCount: count},
+				DefaultReplication,
+			)
+		}
+		defaults := build(nil).Annotations[masterConfigChecksumAnnotation]
+		require.NotEmpty(t, defaults)
+		assert.Equal(t, defaults, build(pointer.ToInt32(DefaultVolumeGrowthCount)).Annotations[masterConfigChecksumAnnotation])
+		assert.NotEqual(t, defaults, build(pointer.ToInt32(3)).Annotations[masterConfigChecksumAnnotation])
 	})
 
 	t.Run("custom volume size limit overrides default", func(t *testing.T) {
@@ -740,15 +777,14 @@ func TestBuildFilerSpec(t *testing.T) {
 func TestBuildVolumeSpec(t *testing.T) {
 	t.Run("defaults when no custom spec", func(t *testing.T) {
 		spec := buildVolumeSpec(corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(2)}, components.VolumeCustomSpec{})
-		require.NotNil(t, spec.MaxVolumeCounts)
-		assert.Equal(t, DefaultMaxVolumeCounts, *spec.MaxVolumeCounts)
+		assert.Nil(t, spec.MaxVolumeCounts, "unset lets the operator pass -max=0 so SeaweedFS sizes slots from free disk")
 		assert.Equal(t, int32(2), spec.Replicas)
 		assert.Nil(t, spec.Requests)
 		assert.Nil(t, spec.StorageClassName)
 		assert.Nil(t, spec.Service)
 	})
 
-	t.Run("custom max volume counts overrides default", func(t *testing.T) {
+	t.Run("custom max volume counts is passed through", func(t *testing.T) {
 		spec := buildVolumeSpec(
 			corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(1)},
 			components.VolumeCustomSpec{MaxVolumeCounts: pointer.ToInt32(16)},
@@ -819,6 +855,17 @@ func validComponents() map[string]corev1alpha1.ComponentSpec {
 	}
 }
 
+func withFilers(image string, filers int32) map[string]corev1alpha1.ComponentSpec {
+	c := validComponents()
+	master := c[common.ComponentMaster]
+	master.Image = image
+	c[common.ComponentMaster] = master
+	filer := c[common.ComponentFiler]
+	filer.Replicas = pointer.ToInt32(filers)
+	c[common.ComponentFiler] = filer
+	return c
+}
+
 func TestValidate(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -829,6 +876,23 @@ func TestValidate(t *testing.T) {
 		{
 			name:       "valid",
 			components: validComponents(),
+		},
+		{
+			name:       "two filers on 4.47 are rejected",
+			components: withFilers("chrislusf/seaweedfs:4.47", 2),
+			expectErr:  `"filer" component: 2 replicas require SeaweedFS 4.48 or newer, got 4.47`,
+		},
+		{
+			name:       "one filer on 4.47 is allowed",
+			components: withFilers("chrislusf/seaweedfs:4.47", 1),
+		},
+		{
+			name:       "two filers on 4.48 are allowed",
+			components: withFilers("chrislusf/seaweedfs:4.48", 2),
+		},
+		{
+			name:       "two filers on an image without a release tag are allowed",
+			components: withFilers("chrislusf/seaweedfs:latest", 2),
 		},
 		{
 			name: "missing master",
@@ -888,6 +952,17 @@ func TestValidate(t *testing.T) {
 				return c
 			}(),
 			expectErr: "masterVolumeSizeLimitMB must be at least 1",
+		},
+		{
+			name: "invalid master volume growth count",
+			components: func() map[string]corev1alpha1.ComponentSpec {
+				c := validComponents()
+				master := c[common.ComponentMaster]
+				master.Parameters = &runtime.RawExtension{Raw: []byte(`{"volumeGrowthCount":0}`)}
+				c[common.ComponentMaster] = master
+				return c
+			}(),
+			expectErr: "volumeGrowthCount must be at least 1",
 		},
 		{
 			name: "missing volume storage",
@@ -1358,6 +1433,8 @@ func TestSyncPassesTLSAndSecurityConfig(t *testing.T) {
 	require.NoError(t, seaweedv1.AddToScheme(scheme))
 	require.NoError(t, corev1.AddToScheme(scheme))
 	require.NoError(t, policyv1.AddToScheme(scheme))
+	require.NoError(t, monitoringv1.AddToScheme(scheme))
+	require.NoError(t, vmv1beta1.AddToScheme(scheme))
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(instance).Build()
 	ctx := controller.NewContext(context.Background(), fakeClient, instance, common.ProviderName)
 
@@ -1457,6 +1534,8 @@ func newSyncClient(t *testing.T, instance *corev1alpha1.Instance, objs ...client
 	require.NoError(t, seaweedv1.AddToScheme(scheme))
 	require.NoError(t, policyv1.AddToScheme(scheme))
 	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, monitoringv1.AddToScheme(scheme))
+	require.NoError(t, vmv1beta1.AddToScheme(scheme))
 	builder := fake.NewClientBuilder().WithScheme(scheme).WithObjects(instance)
 	if len(objs) > 0 {
 		builder = builder.WithObjects(objs...)

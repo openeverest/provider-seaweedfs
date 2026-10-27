@@ -14,7 +14,7 @@ metadata:
   name: test-seaweedfs
   (ownerReferences[?kind == 'Instance' && name == 'test-seaweedfs'] | length(@)): 1
 spec:
-  image: chrislusf/seaweedfs:4.47
+  image: chrislusf/seaweedfs:4.48
   volumeServerDiskCount: 2
   master:
     replicas: 3

@@ -1,0 +1,129 @@
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: metrics
+spec:
+  description: |
+    Expose metrics on a real seaweedfs-operator with the Prometheus Operator
+    and VictoriaMetrics CRDs installed: every component serves metrics on its
+    named port, the operator creates its ServiceMonitors, and the provider
+    creates its PodMonitor and VMPodScrape. Then stop exposing metrics and
+    delete the Instance.
+  # Installing the CRDs restarts the operator, which caches whether the
+  # ServiceMonitor CRD exists. Run alone so other tests do not see it restart.
+  concurrent: false
+  catch:
+    - script:
+        content: |
+          set +e
+          echo '--- test namespace ---'
+          kubectl -n "$NAMESPACE" get instance,sts,deploy,pod,svc -o yaml
+          echo '--- seaweed ---'
+          kubectl -n "$NAMESPACE" get seaweed -o yaml
+          echo '--- scrapes ---'
+          kubectl -n "$NAMESPACE" get servicemonitor,podmonitor,vmpodscrape -o yaml
+          echo '--- provider-system ---'
+          kubectl -n provider-system get deploy,pod -o wide
+    - podLogs:
+        namespace: provider-system
+        selector: app.kubernetes.io/name=provider-seaweedfs
+        tail: 100
+    - podLogs:
+        namespace: provider-system
+        selector: app.kubernetes.io/name=seaweedfs-operator
+        tail: 100
+  steps:
+    - name: provider-operator-installed
+      timeouts:
+        assert: 30s
+      try:
+        - assert:
+            file: 00-assert.yaml
+
+    # Only the CRDs: nothing has to scrape for the resources to be created.
+    # CRDs a cluster already has are left alone, so the suite does not
+    # downgrade an installed operator. The seaweedfs-operator probes for the
+    # ServiceMonitor CRD once and caches the answer, so it is restarted to
+    # pick the CRD up.
+    - name: install-monitoring-crds
+      try:
+        - script:
+            timeout: 5m
+            content: |
+              set -e
+              base=https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.93.1/example/prometheus-operator-crd
+              for kind in servicemonitors podmonitors; do
+                kubectl get crd "$kind.monitoring.coreos.com" >/dev/null 2>&1 || \
+                  kubectl apply --server-side -f "$base/monitoring.coreos.com_$kind.yaml"
+              done
+              kubectl get crd vmpodscrapes.operator.victoriametrics.com >/dev/null 2>&1 || \
+                kubectl apply --server-side -f https://raw.githubusercontent.com/VictoriaMetrics/operator/v0.75.1/config/crd/overlay/crd.descriptionless.yaml
+              kubectl wait --for=condition=Established --timeout=60s \
+                crd/servicemonitors.monitoring.coreos.com \
+                crd/podmonitors.monitoring.coreos.com \
+                crd/vmpodscrapes.operator.victoriametrics.com
+              kubectl -n provider-system rollout restart deployment/seaweedfs-operator
+              kubectl -n provider-system rollout status deployment/seaweedfs-operator --timeout=3m
+
+    - name: expose-metrics
+      try:
+        - apply:
+            file: 10-create-instance.yaml
+        - assert:
+            file: 10-assert.yaml
+
+    # Every component's pod names its metrics port as the scrape resources
+    # expect and serves metrics on it. The API server's pod proxy reaches the
+    # pods without a client pod.
+    - name: components-serve-metrics
+      try:
+        - script:
+            timeout: 2m
+            content: |
+              set -e
+              for component in master volume filer s3 admin; do
+                pod=$(kubectl -n "$NAMESPACE" get pod \
+                  -l core.openeverest.io/instance=e2e-metrics,core.openeverest.io/component=$component \
+                  -o jsonpath='{.items[0].metadata.name}')
+                port=$(kubectl -n "$NAMESPACE" get pod "$pod" \
+                  -o jsonpath="{.spec.containers[*].ports[?(@.name=='$component-metrics')].containerPort}")
+                test "$port" = 9327 || { echo "$pod: no $component-metrics port 9327 (got '$port')"; exit 1; }
+                series=$(kubectl get --raw "/api/v1/namespaces/$NAMESPACE/pods/$pod:9327/proxy/metrics" | grep -c '^# TYPE ')
+                test "$series" -gt 0 || { echo "$pod: no metrics on :9327/metrics"; exit 1; }
+                echo "$component: $pod serves $series metric families"
+              done
+
+    - name: stop-exposing-metrics
+      try:
+        - apply:
+            file: 20-disable-metrics.yaml
+        - assert:
+            file: 20-assert.yaml
+        - error:
+            file: 20-errors.yaml
+
+    - name: delete-instance
+      try:
+        - delete:
+            ref:
+              apiVersion: core.openeverest.io/v1alpha1
+              kind: Instance
+              name: e2e-metrics
+        - wait:
+            apiVersion: core.openeverest.io/v1alpha1
+            kind: Instance
+            name: e2e-metrics
+            timeout: 10m
+            for:
+              deletion: {}
+        - wait:
+            apiVersion: seaweed.seaweedfs.com/v1
+            kind: Seaweed
+            name: e2e-metrics
+            timeout: 10m
+            for:
+              deletion: {}
+        # Copies the VictoriaMetrics Operator's converter made, if it runs.
+        - error:
+            file: 30-errors.yaml

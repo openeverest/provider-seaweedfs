@@ -1,10 +1,23 @@
+// Copyright (C) 2026 The OpenEverest Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package provider
 
 import (
 	"fmt"
 	"maps"
 
-	"github.com/AlekSi/pointer"
 	corev1alpha1 "github.com/openeverest/openeverest/v2/api/core/v1alpha1"
 	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -31,15 +44,14 @@ func validateVolumeParameters(spec components.VolumeCustomSpec) error {
 }
 
 func buildVolumeSpec(comp corev1alpha1.ComponentSpec, volumeCustomSpec components.VolumeCustomSpec) *seaweedv1.VolumeSpec {
+	// Left unset, the operator passes -max=0 and each volume server derives
+	// its slot count from free disk space on every heartbeat, so slots follow
+	// the filesystem size, including after expansion, without a restart.
 	spec := &seaweedv1.VolumeSpec{
 		Replicas: *comp.Replicas,
 		VolumeServerConfig: seaweedv1.VolumeServerConfig{
-			MaxVolumeCounts: pointer.ToInt32(DefaultMaxVolumeCounts),
+			MaxVolumeCounts: volumeCustomSpec.MaxVolumeCounts,
 		},
-	}
-
-	if volumeCustomSpec.MaxVolumeCounts != nil {
-		spec.MaxVolumeCounts = volumeCustomSpec.MaxVolumeCounts
 	}
 
 	if comp.Resources != nil {

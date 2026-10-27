@@ -1,0 +1,86 @@
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: monitoring-metrics
+spec:
+  description: |
+    Metrics exposure lifecycle: expose metrics on every component with
+    Prometheus scraping, switch scraping to VictoriaMetrics, stop exposing
+    metrics, and delete the Instance together with its scrape resources.
+  catch:
+    - script:
+        content: kubectl -n $NAMESPACE get instance,seaweed,podmonitor,vmpodscrape -o yaml
+    - podLogs:
+        namespace: provider-system
+        selector: app.kubernetes.io/name=provider-seaweedfs
+        tail: 100
+  steps:
+    # Only the CRDs are needed: the provider creates the scrape resources,
+    # no monitoring operator has to act on them. CRDs a cluster already has
+    # are left alone, so the suite does not downgrade an installed operator.
+    - name: setup
+      try:
+        - script:
+            timeout: 120s
+            content: |
+              set -e
+              kubectl get crd podmonitors.monitoring.coreos.com >/dev/null 2>&1 || \
+                kubectl apply --server-side -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.93.1/example/prometheus-operator-crd/monitoring.coreos.com_podmonitors.yaml
+              kubectl get crd vmpodscrapes.operator.victoriametrics.com >/dev/null 2>&1 || \
+                kubectl apply --server-side -f https://raw.githubusercontent.com/VictoriaMetrics/operator/v0.75.1/config/crd/overlay/crd.descriptionless.yaml
+              kubectl wait --for=condition=Established --timeout=60s crd/podmonitors.monitoring.coreos.com crd/vmpodscrapes.operator.victoriametrics.com
+        - assert:
+            file: 00-assert.yaml
+
+    - name: expose-metrics-to-prometheus
+      try:
+        - apply:
+            file: 10-create-cluster.yaml
+        - assert:
+            file: 10-assert.yaml
+        - error:
+            file: 10-errors.yaml
+
+    - name: switch-to-victoriametrics
+      try:
+        - apply:
+            file: 20-switch-to-victoriametrics.yaml
+        - assert:
+            file: 20-assert.yaml
+        - error:
+            file: 20-errors.yaml
+
+    - name: stop-exposing-metrics
+      try:
+        - apply:
+            file: 30-disable-metrics.yaml
+        - assert:
+            file: 30-assert.yaml
+        - error:
+            file: 30-errors.yaml
+
+    # Owner references take the scrape resources down with the Instance.
+    - name: delete-cluster
+      try:
+        - apply:
+            file: 20-switch-to-victoriametrics.yaml
+        - assert:
+            file: 20-assert.yaml
+        - delete:
+            ref:
+              apiVersion: core.openeverest.io/v1alpha1
+              kind: Instance
+              name: metrics-seaweedfs
+        - wait:
+            apiVersion: seaweed.seaweedfs.com/v1
+            kind: Seaweed
+            name: metrics-seaweedfs
+            for:
+              deletion: {}
+        - wait:
+            apiVersion: operator.victoriametrics.com/v1beta1
+            kind: VMPodScrape
+            name: metrics-seaweedfs-victoriametrics
+            for:
+              deletion: {}

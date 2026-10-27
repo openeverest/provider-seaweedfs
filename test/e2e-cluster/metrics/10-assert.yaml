@@ -1,0 +1,84 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: e2e-metrics
+status:
+  phase: Ready
+---
+apiVersion: seaweed.seaweedfs.com/v1
+kind: Seaweed
+metadata:
+  name: e2e-metrics
+spec:
+  master:
+    metricsPort: 9327
+  volume:
+    metricsPort: 9327
+  filer:
+    metricsPort: 9327
+  s3:
+    metricsPort: 9327
+  admin:
+    metricsPort: 9327
+# The operator creates one ServiceMonitor per component once the CRD exists.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: e2e-metrics-master
+spec:
+  endpoints:
+    - port: master-metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: e2e-metrics-volume
+spec:
+  endpoints:
+    - port: volume-metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: e2e-metrics-filer
+spec:
+  endpoints:
+    - port: filer-metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: e2e-metrics-s3
+spec:
+  endpoints:
+    - port: s3-metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: e2e-metrics-admin
+spec:
+  endpoints:
+    - port: admin-metrics
+# The provider's scrapes select the pods by the OpenEverest instance label.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: e2e-metrics-prometheus
+  (ownerReferences[?kind == 'Instance' && name == 'e2e-metrics'] | length(@)): 1
+spec:
+  selector:
+    matchLabels:
+      core.openeverest.io/instance: e2e-metrics
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMPodScrape
+metadata:
+  name: e2e-metrics-victoriametrics
+  (ownerReferences[?kind == 'Instance' && name == 'e2e-metrics'] | length(@)): 1
+spec:
+  selector:
+    matchLabels:
+      core.openeverest.io/instance: e2e-metrics
