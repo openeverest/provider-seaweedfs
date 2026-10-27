@@ -370,11 +370,20 @@ ui:
                     uiType: select
                     validation:
                         required: false
+                https:
+                    fieldParams:
+                        defaultValue: true
+                        helperText: Serve the S3 gateway over HTTPS on port 8334. A self-signed certificate is created in Secret <instance>-s3-https. Turn off for plain HTTP. An Ingress keeps HTTP as well, because the operator rejects HTTPS-only with an Ingress.
+                        label: HTTPS
+                    path: spec.components.s3.parameters.https.enabled
+                    uiType: toggle
+                    validation:
+                        required: false
                 port:
                     fieldParams:
                         defaultValue: 8333
-                        helperText: Cannot be changed after creation without breaking existing clients and BackupStorage endpoints.
-                        label: S3 port
+                        helperText: S3 HTTP port. Cannot be changed after creation without breaking existing clients and BackupStorage endpoints. Must not be 8334 while HTTPS is on.
+                        label: HTTP port
                         modes:
                             edit:
                                 disabled: true
@@ -387,6 +396,9 @@ ui:
                         max: 55535
                         min: 1
                         required: false
+                        celExpressions:
+                          - celExpr: "spec.components.s3.parameters.port != 8334 || (has(spec.components.s3.parameters.https) && has(spec.components.s3.parameters.https.enabled) && !spec.components.s3.parameters.https.enabled)"
+                            message: "S3 port cannot be 8334 while HTTPS is on"
                 domainName:
                     fieldParams:
                         helperText: Comma-separated DNS hostnames for virtual-hosted-style buckets (for example s3.example.com).
@@ -395,39 +407,40 @@ ui:
                     uiType: text
                     validation:
                         required: false
-                ingressEnabled:
-                    fieldParams:
-                        defaultValue: false
-                        helperText: Expose S3 through a Kubernetes Ingress. With TLS, external clients get https://<host>.
-                        label: Ingress
-                    path: spec.components.s3.parameters.ingress.enabled
-                    uiType: toggle
-                    validation:
-                        required: false
-                ingressHost:
-                    fieldParams:
-                        helperText: Public hostname for the S3 Ingress (required when Ingress is enabled).
-                        label: Ingress host
-                    path: spec.components.s3.parameters.ingress.host
-                    uiType: text
-                    validation:
-                        required: false
-                ingressClassName:
-                    fieldParams:
-                        helperText: IngressClass name (for example nginx).
-                        label: Ingress class
-                    path: spec.components.s3.parameters.ingress.className
-                    uiType: text
-                    validation:
-                        required: false
-                ingressTLSSecret:
-                    fieldParams:
-                        helperText: kubernetes.io/tls Secret name. Create it by hand or via a cert-manager annotation on the Ingress.
-                        label: Ingress TLS secret
-                    path: spec.components.s3.parameters.ingress.tls.secretName
-                    uiType: text
-                    validation:
-                        required: false
+                ingress:
+                    uiType: group
+                    groupType: toggleable
+                    label: Ingress
+                    description: Expose S3 through a Kubernetes Ingress. With TLS, external clients get https://<host>.
+                    components:
+                        host:
+                            fieldParams:
+                                helperText: Public hostname for the S3 Ingress.
+                                label: Host
+                            path: spec.components.s3.parameters.ingress.host
+                            uiType: text
+                            validation:
+                                required: true
+                        className:
+                            fieldParams:
+                                helperText: IngressClass name (for example nginx).
+                                label: Ingress class
+                            path: spec.components.s3.parameters.ingress.className
+                            uiType: text
+                            validation:
+                                required: false
+                        tlsSecret:
+                            fieldParams:
+                                helperText: kubernetes.io/tls Secret name. Create it by hand or via a cert-manager annotation on the Ingress.
+                                label: TLS secret
+                            path: spec.components.s3.parameters.ingress.tls.secretName
+                            uiType: text
+                            validation:
+                                required: false
+                    componentsOrder:
+                        - host
+                        - className
+                        - tlsSecret
                 resources:
                     components:
                         cpu:
@@ -463,12 +476,10 @@ ui:
                 - replicas
                 - resources
                 - serviceType
-                - port
                 - domainName
-                - ingressEnabled
-                - ingressHost
-                - ingressClassName
-                - ingressTLSSecret
+                - https
+                - port
+                - ingress
             description: Configure the S3-compatible gateway for object access.
             label: S3
         admin:
@@ -535,7 +546,7 @@ ui:
             componentsOrder:
                 - enabled
                 - customIssuer
-            description: Encrypt traffic between SeaweedFS components (gRPC mTLS). S3 clients still use HTTP unless you terminate TLS at an Ingress or LoadBalancer.
+            description: Encrypt gRPC between SeaweedFS components. S3 client HTTPS is the gateway HTTPS setting, not this toggle.
             label: TLS
     sectionsOrder:
         - basicInfo
