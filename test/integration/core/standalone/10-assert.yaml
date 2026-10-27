@@ -124,8 +124,8 @@ metadata:
   (ownerReferences[?kind == 'Instance' && name == 'test-seaweedfs'] | length(@)): 1
 type: kubernetes.io/tls
 data:
-  (starts_with(base64_decode(tls.crt), '-----BEGIN CERTIFICATE-----')): true
-  (starts_with(base64_decode(tls.key), '-----BEGIN')): true
+  (starts_with(base64_decode("tls.crt"), '-----BEGIN CERTIFICATE-----')): true
+  (starts_with(base64_decode("tls.key"), '-----BEGIN')): true
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
