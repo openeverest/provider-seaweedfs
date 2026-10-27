@@ -1,3 +1,17 @@
+// Copyright (C) 2026 The OpenEverest Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package provider
 
 import (
@@ -57,6 +71,41 @@ func TestBuildConnectionDetailsFromService(t *testing.T) {
 		assert.Equal(t, "false", details.AdditionalProperties["verifyTLS"])
 		assert.Equal(t, defaultS3Region, details.AdditionalProperties["region"])
 		assert.NotContains(t, details.AdditionalProperties, "externalEndpointURL")
+	})
+
+	t.Run("HTTPS port is the in-cluster endpoint", func(t *testing.T) {
+		svc := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "sw-s3", Namespace: "ns"},
+			Spec: corev1.ServiceSpec{
+				Type: corev1.ServiceTypeClusterIP,
+				Ports: []corev1.ServicePort{
+					{Name: "s3-http", Port: 8333},
+					{Name: "s3-https", Port: 8334},
+				},
+			},
+		}
+
+		details, err := buildConnectionDetailsFromService(ctx, svc, nil, emptyParams)
+		require.NoError(t, err)
+		assert.Equal(t, "8334", details.Port)
+		assert.Equal(t, "https://sw-s3.ns.svc:8334", details.URI)
+		assert.Equal(t, "https://sw-s3.ns.svc:8334", details.AdditionalProperties["endpointURL"])
+		assert.Equal(t, "false", details.AdditionalProperties["verifyTLS"])
+	})
+
+	t.Run("user TLS secret defaults verifyTLS to true", func(t *testing.T) {
+		svc := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "sw-s3", Namespace: "ns"},
+			Spec: corev1.ServiceSpec{
+				Ports: []corev1.ServicePort{{Name: "s3-https", Port: 8334}},
+			},
+		}
+		params := components.S3CustomSpec{HTTPS: &components.S3HTTPSSpec{SecretName: "my-s3-tls"}}
+
+		details, err := buildConnectionDetailsFromService(ctx, svc, nil, params)
+		require.NoError(t, err)
+		assert.Equal(t, "https://sw-s3.ns.svc:8334", details.AdditionalProperties["endpointURL"])
+		assert.Equal(t, "true", details.AdditionalProperties["verifyTLS"])
 	})
 
 	t.Run("LoadBalancer with hostname ingress", func(t *testing.T) {
@@ -244,6 +293,12 @@ func TestBuildConnectionDetailsFromService(t *testing.T) {
 }
 
 func TestServiceS3Port(t *testing.T) {
+	assert.Equal(t, int32(8334), serviceS3Port(&corev1.Service{
+		Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{
+			{Name: "s3-http", Port: 8333},
+			{Name: "s3-https", Port: 8334},
+		}},
+	}))
 	assert.Equal(t, int32(8333), serviceS3Port(&corev1.Service{
 		Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "s3-http", Port: 8333}}},
 	}))
@@ -255,7 +310,13 @@ func TestServiceS3Port(t *testing.T) {
 
 func TestBuildS3IngressSpec(t *testing.T) {
 	assert.Nil(t, buildS3IngressSpec(nil))
-	assert.Nil(t, buildS3IngressSpec(&components.S3IngressSpec{Enabled: false, Host: "x"}))
+	assert.Nil(t, buildS3IngressSpec(&components.S3IngressSpec{Enabled: false}))
+
+	// Host alone enables Ingress (UI toggleable group omits enabled).
+	hostOnly := buildS3IngressSpec(&components.S3IngressSpec{Host: "s3.example.com"})
+	require.NotNil(t, hostOnly)
+	assert.True(t, hostOnly.Enabled)
+	assert.Equal(t, "s3.example.com", hostOnly.Host)
 
 	class := "nginx"
 	spec := buildS3IngressSpec(&components.S3IngressSpec{

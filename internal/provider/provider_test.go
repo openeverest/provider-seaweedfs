@@ -562,6 +562,33 @@ func TestValidateS3Parameters(t *testing.T) {
 			TLS:     &components.S3IngressTLS{SecretName: "s3-tls"},
 		},
 	}))
+	// UI toggleable group sends host without enabled.
+	require.NoError(t, validateS3Parameters(components.S3CustomSpec{
+		Ingress: &components.S3IngressSpec{Host: "s3.example.com"},
+	}))
+	require.NoError(t, validateS3Parameters(components.S3CustomSpec{
+		Port:  pointer.ToInt32(defaultS3HTTPSPort),
+		HTTPS: &components.S3HTTPSSpec{Enabled: pointer.ToBool(false)},
+	}))
+
+	err = validateS3Parameters(components.S3CustomSpec{
+		Port: pointer.ToInt32(defaultS3HTTPSPort),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), fmt.Sprintf("S3 port cannot be %d while HTTPS is on", defaultS3HTTPSPort))
+
+	err = validateS3Parameters(components.S3CustomSpec{
+		Port:  pointer.ToInt32(defaultS3HTTPSPort),
+		HTTPS: &components.S3HTTPSSpec{Enabled: pointer.ToBool(true)},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), fmt.Sprintf("S3 port cannot be %d while HTTPS is on", defaultS3HTTPSPort))
+
+	err = validateS3Parameters(components.S3CustomSpec{
+		HTTPS: &components.S3HTTPSSpec{SecretName: "Not_A_Name"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "https.secretName")
 
 	err = validateS3Parameters(components.S3CustomSpec{
 		Ingress: &components.S3IngressSpec{Enabled: true},
@@ -582,7 +609,7 @@ func TestValidateS3Parameters(t *testing.T) {
 
 func TestBuildS3Spec(t *testing.T) {
 	t.Run("replicas only", func(t *testing.T) {
-		spec := buildS3Spec(corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(2)}, components.S3CustomSpec{})
+		spec := buildS3Spec(corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(2)}, components.S3CustomSpec{}, "")
 		assert.Equal(t, int32(2), spec.Replicas)
 		assert.Nil(t, spec.Port)
 		assert.Nil(t, spec.DomainName)
@@ -595,7 +622,7 @@ func TestBuildS3Spec(t *testing.T) {
 		spec := buildS3Spec(corev1alpha1.ComponentSpec{
 			Replicas: pointer.ToInt32(1),
 			Service:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeLoadBalancer},
-		}, components.S3CustomSpec{})
+		}, components.S3CustomSpec{}, "")
 		require.NotNil(t, spec.Service)
 		assert.Equal(t, corev1.ServiceTypeLoadBalancer, spec.Service.Type)
 		assert.Nil(t, spec.Service.Annotations)
@@ -608,6 +635,7 @@ func TestBuildS3Spec(t *testing.T) {
 				Port:       pointer.ToInt32(9000),
 				DomainName: pointer.To("s3.example.com"),
 			},
+			"",
 		)
 		require.NotNil(t, spec.Port)
 		assert.Equal(t, int32(9000), *spec.Port)
@@ -626,9 +654,35 @@ func TestBuildS3Spec(t *testing.T) {
 					corev1.ResourceMemory: resource.MustParse("512Mi"),
 				},
 			},
-		}, components.S3CustomSpec{})
+		}, components.S3CustomSpec{}, "")
 		assert.Equal(t, resource.MustParse("100m"), spec.Requests[corev1.ResourceCPU])
 		assert.Equal(t, resource.MustParse("512Mi"), spec.Limits[corev1.ResourceMemory])
+	})
+
+	t.Run("https is on when a tls secret name is set", func(t *testing.T) {
+		spec := buildS3Spec(
+			corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(1)},
+			components.S3CustomSpec{},
+			"sw-s3-https",
+		)
+		require.NotNil(t, spec.HTTPSPort)
+		assert.Equal(t, defaultS3HTTPSPort, *spec.HTTPSPort)
+		require.NotNil(t, spec.TLSSecret)
+		assert.Equal(t, "sw-s3-https", spec.TLSSecret.Name)
+		assert.True(t, spec.HTTPSOnly)
+	})
+
+	t.Run("ingress keeps the HTTP listener", func(t *testing.T) {
+		spec := buildS3Spec(
+			corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(1)},
+			components.S3CustomSpec{
+				Ingress: &components.S3IngressSpec{Enabled: true, Host: "s3.example.com"},
+			},
+			"sw-s3-https",
+		)
+		require.NotNil(t, spec.HTTPSPort)
+		assert.False(t, spec.HTTPSOnly)
+		require.NotNil(t, spec.Ingress)
 	})
 }
 
@@ -874,6 +928,17 @@ func TestValidate(t *testing.T) {
 				return c
 			}(),
 			expectErr: fmt.Sprintf("port must be between 1 and %d", MaxS3Port),
+		},
+		{
+			name: "s3 port collides with HTTPS while HTTPS is on",
+			components: func() map[string]corev1alpha1.ComponentSpec {
+				c := validComponents()
+				s3 := c[common.ComponentS3]
+				s3.Parameters = &runtime.RawExtension{Raw: []byte(`{"port":8334}`)}
+				c[common.ComponentS3] = s3
+				return c
+			}(),
+			expectErr: fmt.Sprintf("S3 port cannot be %d while HTTPS is on", defaultS3HTTPSPort),
 		},
 		{
 			name: "invalid s3 domainName",
@@ -1426,6 +1491,16 @@ func TestSync(t *testing.T) {
 		assert.Equal(t, podLabels(instance.Name, common.ComponentVolume), sw.Spec.Volume.Labels)
 		assert.Equal(t, podLabels(instance.Name, common.ComponentFiler), sw.Spec.Filer.Labels)
 		assert.Equal(t, podLabels(instance.Name, common.ComponentS3), sw.Spec.S3.Labels)
+		require.NotNil(t, sw.Spec.S3.HTTPSPort)
+		assert.Equal(t, defaultS3HTTPSPort, *sw.Spec.S3.HTTPSPort)
+		assert.True(t, sw.Spec.S3.HTTPSOnly)
+		require.NotNil(t, sw.Spec.S3.TLSSecret)
+		assert.Equal(t, s3HTTPSSecretName(instance.Name), sw.Spec.S3.TLSSecret.Name)
+		sec := &corev1.Secret{}
+		require.NoError(t, ctx.Get(sec, s3HTTPSSecretName(instance.Name)))
+		assert.Equal(t, corev1.SecretTypeTLS, sec.Type)
+		assert.NotEmpty(t, sec.Data[corev1.TLSCertKey])
+		assert.NotEmpty(t, sec.Data[corev1.TLSPrivateKeyKey])
 		assert.Nil(t, sw.Spec.Admin)
 		assert.ElementsMatch(t,
 			[]string{common.ComponentMaster, common.ComponentVolume, common.ComponentFiler, common.ComponentS3},
@@ -1455,6 +1530,30 @@ func TestSync(t *testing.T) {
 		_, sw := syncSeaweed(t, newSyncClient(t, instance), instance)
 		require.NotNil(t, sw.Spec.Master.DefaultReplication)
 		assert.Equal(t, "000", *sw.Spec.Master.DefaultReplication)
+	})
+
+	t.Run("https disabled leaves the gateway on HTTP", func(t *testing.T) {
+		comps := validComponents()
+		s3 := comps[common.ComponentS3]
+		s3.Parameters = &runtime.RawExtension{Raw: []byte(`{"https":{"enabled":false}}`)}
+		comps[common.ComponentS3] = s3
+		instance := newSyncInstance(comps)
+		_, sw := syncSeaweed(t, newSyncClient(t, instance), instance)
+		assert.Nil(t, sw.Spec.S3.HTTPSPort)
+		assert.Nil(t, sw.Spec.S3.TLSSecret)
+		assert.False(t, sw.Spec.S3.HTTPSOnly)
+	})
+
+	t.Run("s3 https secret is kept across reconciles", func(t *testing.T) {
+		instance := newSyncInstance(validComponents())
+		cl := newSyncClient(t, instance)
+		ctx, _ := syncSeaweed(t, cl, instance)
+		sec := &corev1.Secret{}
+		require.NoError(t, ctx.Get(sec, s3HTTPSSecretName(instance.Name)))
+		first := append([]byte(nil), sec.Data[corev1.TLSCertKey]...)
+		syncSeaweed(t, cl, instance)
+		require.NoError(t, ctx.Get(sec, s3HTTPSSecretName(instance.Name)))
+		assert.Equal(t, first, sec.Data[corev1.TLSCertKey])
 	})
 
 	t.Run("one volume server defaults replication to 000", func(t *testing.T) {
