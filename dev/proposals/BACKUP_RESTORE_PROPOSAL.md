@@ -1,0 +1,152 @@
+Backup and Restore seaweed docs [here](https://github.com/seaweedfs/seaweedfs-operator/blob/master/BACKUP_SUPPORT.md)
+
+# Proposal
+
+The SeaweedFS operator already has `SeaweedBackup` and `SeaweedRestore`. A restore into the cluster that is already running is a `SeaweedRestore` pointed at that same cluster. This uses the current OpenEverest v2 types (`backup.openeverest.io`): `BackupClass`, `Backup`, `Restore`, and `BackupStorage`. `BackupStorage` on that API is S3 only.
+
+A backup here is a filer metadata snapshot (`fs.meta.save` / `fs.meta.load`). It is not a copy of the file bytes, and it is not point-in-time recovery. For an S3 storage the snapshot Job does not upload the catalog. It writes `/.seaweedfs-operator/backups/<name>/filer.meta.gz` on the filer. Restore reads that filer path back with `weed filer.cat`. It does not read the bucket.
+
+## What maps to what
+
+| OpenEverest | SeaweedFS operator |
+|---|---|
+| `BackupClass` | One class, `executionMode: ProviderManaged`, `supportsPITR: false`. The provider creates the SeaweedFS objects. OpenEverest does not run the backup Job itself. |
+| `BackupStorage` | One entry in `Seaweed.spec.backup.storages`, keyed by the `BackupStorage` name. Type `s3`. |
+| `Instance.spec.backup.storages[].schedules` | `Seaweed.spec.backup.schedule` |
+| `Backup` (on demand) | `SeaweedBackup` created by the provider |
+| Scheduled `SeaweedBackup` | Mirrored back as a `Backup` with `spec.scheduleName` set. The provider does not create these. |
+| `Restore` into an existing `Instance` | `SeaweedRestore` with `backupSource` (not `backupName`) |
+
+`Backup.spec.storageRef` must already be one of the storages registered on the Instance. The operator only accepts a storage listed on the `Seaweed`.
+
+For S3, `storageRef` does not choose where the catalog is written. Every object-store snapshot is staged at the same filer path, `/.seaweedfs-operator/backups/<SeaweedBackup name>/filer.meta.gz`. Every data mirror copies that file. `storageName` is still set on the `SeaweedBackup` and on `backupSource`, because the restore Job uses the storage type to decide to read the filer instead of a PVC.
+
+## Backup
+
+The provider writes this onto the `Seaweed` when backup is enabled:
+
+```yaml
+spec:
+  backup:
+    storages:
+      my-s3:                       # BackupStorage.metadata.name
+        type: s3
+        s3:
+          bucket: my-bucket        # BackupStorage.spec.s3.bucket
+          region: us-west-2        # BackupStorage.spec.s3.region
+          endpoint: https://s3.example.com
+          directory: /
+          forcePathStyle: false    # the BackupStorage value, including false
+        credentialsSecret: my-s3-creds
+    schedule:
+      - name: nightly              # schedule name
+        schedule: "0 2 * * *"      # schedule.cron
+        storageName: my-s3
+        keep: 7                    # retention type count, count 7
+        filerPath: /               # schedule.parameters.filerPath, default /
+        suspend: false             # enabled: false becomes suspend: true
+```
+
+`dataMirror` is not in that example. It is opt-in. See below.
+
+Field mapping for S3:
+
+| `BackupStorage.spec.s3` | `Seaweed` storage |
+|---|---|
+| `bucket` | `s3.bucket` |
+| `region` | `s3.region` |
+| `endpointURL` | `s3.endpoint` |
+| `forcePathStyle` | `s3.forcePathStyle` |
+| `credentialsSecretRef.name` | `credentialsSecret` |
+
+The Secret keys are the same on both sides: `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
+
+OpenEverest defaults `forcePathStyle` to false. The operator defaults it to true when the field is omitted. The provider passes the `BackupStorage` value through, so false stays false. An in-cluster MinIO or SeaweedFS endpoint needs `forcePathStyle: true` on the `BackupStorage`.
+
+`verifyTLS: false` is rejected. The operator's S3 storage has no such field, so dropping it would make the mirror fail. The default `verifyTLS: true` is left unset on the `Seaweed`.
+
+An on-demand `Backup` becomes a `SeaweedBackup`:
+
+```yaml
+apiVersion: seaweed.seaweedfs.com/v1
+kind: SeaweedBackup
+metadata:
+  name: adhoc-1
+spec:
+  clusterName: seaweed-sample
+  storageName: my-s3
+  filerPath: /
+```
+
+That runs `fs.meta.save` once and stages the catalog on the filer. `Completed` means that Job finished. Nothing checks that a mirror copied the file to the bucket, or that a mirror is running.
+
+`SyncBackup` creates a `SeaweedBackup` for an on-demand `Backup` only. It does not create one for a `Backup` with `spec.scheduleName` set, and it does not create one again when the `Backup` is already `Succeeded`. Otherwise a pruned `SeaweedBackup` would be recreated under the old name, a new snapshot would run, and `keep` would prune it again.
+
+Scheduled backups stay on the SeaweedFS scheduler. The provider mirrors each scheduler-created `SeaweedBackup` back as an OpenEverest `Backup` with `spec.scheduleName` set and `deletionPolicy: Retain`. When `keep` deletes the `SeaweedBackup`, the provider deletes that mirrored `Backup`.
+
+Status maps as `Pending` → `Pending`, `Running` → `Running`, `Completed` → `Succeeded`, `Failed` → `Failed`. `Succeeded` means the catalog is on the filer. It does not mean the bucket has it. `status.operatorBackupRef` points at the `SeaweedBackup`.
+
+`filerPath` is the only backup parameter that changes the snapshot. It defaults to `/`.
+
+Retention maps only for a count. `retention: {type: count, count: 7}` becomes `keep: 7`. Omitting retention becomes `keep: 0`, which keeps every `SeaweedBackup`. Time retention (`30d`, `4w`, `2m`) is rejected with a condition on the Instance, the same way PSMDB does. It is not ignored.
+
+`keep` deletes old `SeaweedBackup` objects and their Jobs. It does not delete `filer.meta.gz`.
+
+`deletionPolicy: Delete` is the OpenEverest default. Cleanup either deletes `/.seaweedfs-operator/backups/<name>` from the filer (the S3 copy stays) or rejects `Delete`. Which of those two is decided at implementation. Mirrored scheduled backups are created with `Retain`.
+
+Storage and schedule names must be lowercase RFC 1123 labels of at most 50 characters. That is what the operator accepts as `spec.backup.storages` keys and schedule names.
+
+### Data mirror
+
+Off unless the user opts in. One mirror per registered storage is a continuous `weed filer.backup -initialSnapshot` Deployment. It copies every file under the mirrored path, not just the catalog, and it re-walks that tree on every pod start. Restore does not read it. The mirror is also the only thing that carries the catalog off the cluster. With it left off, the catalog stays on the filer.
+
+When it is on, the provider adds:
+
+```yaml
+dataMirror:
+  - storageName: my-s3
+    filerPath: /
+```
+
+`filerPath` is `/` so the hidden backup directory is included. How the user opts in is decided at implementation.
+
+## Restore into the existing cluster
+
+```yaml
+apiVersion: seaweed.seaweedfs.com/v1
+kind: SeaweedRestore
+metadata:
+  name: restore-1
+spec:
+  clusterName: seaweed-sample
+  backupSource:
+    storageName: my-s3
+    metaPath: /.seaweedfs-operator/backups/adhoc-1/filer.meta.gz
+  filerPath: /
+```
+
+`backupName` is not used. It needs the `SeaweedBackup` to still exist and be `Completed`, and `keep` deletes that object. `backupSource` only needs the catalog file, which `keep` does not delete.
+
+`Restore.spec.instanceRef` is the cluster that already exists. The provider does not create a new `Seaweed`. `dataSource.type` must be `Backup`. `PointInTime` is rejected because this class does not support PITR.
+
+`fs.meta.load` uses `CreateEntry`. On a path that already exists, that deletes chunks that are on the current entry and not on the restored one. On a live filer:
+
+- A file changed since the backup loses its current chunks, and the restored entry points at chunks that are already gone.
+- A file deleted since the backup comes back, but its chunks are gone.
+- A file created since the backup is left in place. The load does not roll the cluster back.
+
+Restore is only safe when the filer's metadata is empty or lost and the volume data is still on this cluster. The provider gates it, either with an explicit metadata-only disaster recovery parameter or by refusing a filer that is not empty. Which gate is decided at implementation.
+
+The operator's restore Job does not stop the S3 gateway. Whether this provider stops client traffic during `fs.meta.load` is decided at implementation. Writes during the load race with `CreateEntry`.
+
+Only one restore per Instance runs at a time.
+
+`Instance.spec.dataSource` (a new Instance from a backup) is rejected. The file bytes are on the source cluster's volumes, so a new cluster cannot be seeded from this backup.
+
+## What does not map
+
+- **Data mirror is not PITR.** The mirror is a continuous copy of file bytes, and restore does not use it. `supportsPITR` stays false, and `Instance.spec.backup.storages[].pitr` is rejected.
+- **`Backup.origin.type: External` is not mapped.** A path inside the bucket is not something `SeaweedRestore` can load. `supportsImport` stays false.
+- **`BackupStorage.spec.s3.verifyTLS: false` is rejected.** There is nowhere to put it.
+- **Time retention is rejected.** The operator only has `keep`.
+- **Google Cloud Storage, Azure, Backblaze B2, and a PVC** exist on the operator and do not exist on `BackupStorage`, whose type is `s3` only.
