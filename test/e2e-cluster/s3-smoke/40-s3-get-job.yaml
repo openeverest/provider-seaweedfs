@@ -23,7 +23,11 @@ spec:
                   addressing_style = path
               EOF
               printf '%s' 'e2e-smoke' > /tmp/payload
-              aws s3 cp s3://e2e-smoke/obj /tmp/downloaded --endpoint-url "$ENDPOINT"
+              tls_flag=
+              if [ "$VERIFY_TLS" = "false" ]; then
+                tls_flag=--no-verify-ssl
+              fi
+              aws $tls_flag s3 cp s3://e2e-smoke/obj /tmp/downloaded --endpoint-url "$ENDPOINT"
               expected=$(sha256sum /tmp/payload | awk '{print $1}')
               actual=$(sha256sum /tmp/downloaded | awk '{print $1}')
               test "$expected" = "$actual"
@@ -52,3 +56,8 @@ spec:
                 secretKeyRef:
                   name: e2e-seaweedfs-conn
                   key: endpointURL
+            - name: VERIFY_TLS
+              valueFrom:
+                secretKeyRef:
+                  name: e2e-seaweedfs-conn
+                  key: verifyTLS
