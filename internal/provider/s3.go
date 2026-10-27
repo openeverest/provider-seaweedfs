@@ -1,3 +1,17 @@
+// Copyright (C) 2026 The OpenEverest Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package provider
 
 import (
@@ -6,6 +20,7 @@ import (
 
 	corev1alpha1 "github.com/openeverest/openeverest/v2/api/core/v1alpha1"
 	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/openeverest/provider-seaweedfs/definition/components"
@@ -19,9 +34,30 @@ func validateS3(comp corev1alpha1.ComponentSpec, present bool) error {
 	return validateService(common.ComponentS3, comp.Service)
 }
 
+func s3HTTPSEnabled(spec components.S3CustomSpec) bool {
+	if spec.HTTPS == nil || spec.HTTPS.Enabled == nil {
+		return true
+	}
+	return *spec.HTTPS.Enabled
+}
+
 func validateS3Parameters(spec components.S3CustomSpec) error {
 	if spec.Port != nil && (*spec.Port < 1 || *spec.Port > MaxS3Port) {
 		return fmt.Errorf("port must be between 1 and %d", MaxS3Port)
+	}
+	if s3HTTPSEnabled(spec) {
+		port := int32(defaultS3Port)
+		if spec.Port != nil {
+			port = *spec.Port
+		}
+		if port == defaultS3HTTPSPort {
+			return fmt.Errorf("S3 port cannot be %d while HTTPS is on", defaultS3HTTPSPort)
+		}
+	}
+	if spec.HTTPS != nil && spec.HTTPS.SecretName != "" {
+		if errs := validation.IsDNS1123Subdomain(spec.HTTPS.SecretName); len(errs) > 0 {
+			return fmt.Errorf("https.secretName %q is invalid: %s", spec.HTTPS.SecretName, strings.Join(errs, "; "))
+		}
 	}
 	if err := validateS3DomainName(spec.DomainName); err != nil {
 		return err
@@ -32,8 +68,15 @@ func validateS3Parameters(spec components.S3CustomSpec) error {
 	return nil
 }
 
+// s3IngressEnabled is true when Ingress is turned on explicitly or when a host
+// is set. The UI toggleable Ingress group omits enabled and only sends nested
+// fields while the group is on.
+func s3IngressEnabled(ing *components.S3IngressSpec) bool {
+	return ing != nil && (ing.Enabled || ing.Host != "")
+}
+
 func validateS3Ingress(ing *components.S3IngressSpec) error {
-	if ing == nil || !ing.Enabled {
+	if !s3IngressEnabled(ing) {
 		return nil
 	}
 	if ing.Host == "" {
@@ -67,7 +110,7 @@ func validateS3DomainName(domainName *string) error {
 	return nil
 }
 
-func buildS3Spec(comp corev1alpha1.ComponentSpec, s3CustomSpec components.S3CustomSpec) *seaweedv1.S3GatewaySpec {
+func buildS3Spec(comp corev1alpha1.ComponentSpec, s3CustomSpec components.S3CustomSpec, tlsSecretName string) *seaweedv1.S3GatewaySpec {
 	spec := &seaweedv1.S3GatewaySpec{
 		Replicas:   *comp.Replicas,
 		Port:       s3CustomSpec.Port,
@@ -80,11 +123,23 @@ func buildS3Spec(comp corev1alpha1.ComponentSpec, s3CustomSpec components.S3Cust
 		spec.ResourceRequirements = *comp.Resources
 	}
 
+	// seaweedfs-operator requires httpsPort and tlsSecret together. It does
+	// not create the Secret. httpsOnly drops the HTTP listener; the CRD
+	// rejects that together with Ingress, which routes to the HTTP port.
+	if tlsSecretName != "" {
+		httpsPort := defaultS3HTTPSPort
+		spec.HTTPSPort = &httpsPort
+		spec.TLSSecret = &corev1.LocalObjectReference{Name: tlsSecretName}
+		if spec.Ingress == nil {
+			spec.HTTPSOnly = true
+		}
+	}
+
 	return spec
 }
 
 func buildS3IngressSpec(ing *components.S3IngressSpec) *seaweedv1.IngressSpec {
-	if ing == nil || !ing.Enabled {
+	if !s3IngressEnabled(ing) {
 		return nil
 	}
 	out := &seaweedv1.IngressSpec{

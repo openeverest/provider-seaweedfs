@@ -199,6 +199,11 @@ func (p *Provider) Sync(c *controller.Context) error {
 		return err
 	}
 
+	s3TLSSecret, err := ensureS3ServerTLS(c, s3CustomSpec)
+	if err != nil {
+		return err
+	}
+
 	adminSecretName, err := ensureAdminCredentials(c, topo)
 	if err != nil {
 		return err
@@ -212,7 +217,7 @@ func (p *Provider) Sync(c *controller.Context) error {
 			Master:                buildMasterSpec(master, masterCustomSpec, effectiveReplication(topo.Replication, *volume.Replicas)),
 			Volume:                buildVolumeSpec(volume, volumeCustomSpec),
 			Filer:                 buildFilerSpec(filer, filerCustomSpec),
-			S3:                    buildS3Spec(s3, s3CustomSpec),
+			S3:                    buildS3Spec(s3, s3CustomSpec, s3TLSSecret),
 			Admin:                 buildAdminSpec(adminSecretName),
 			TLS:                   buildTLSSpec(topo),
 			SecurityConfig:        buildSecurityConfigSpec(topo),

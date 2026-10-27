@@ -36,8 +36,15 @@ const (
 	// Default S3 HTTP port used by seaweedfs-operator when Spec.S3.Port is unset.
 	defaultS3Port = 8333
 
+	// Default S3 HTTPS port. seaweedfs-operator has no default, 8334 is the
+	// port its documentation uses, and it must differ from the HTTP port.
+	defaultS3HTTPSPort int32 = 8334
+
 	// Name of the S3 HTTP port on the operator-managed S3 Service.
 	s3HTTPPortName = "s3-http"
+
+	// Name of the S3 HTTPS port on the operator-managed S3 Service.
+	s3HTTPSPortName = "s3-https"
 
 	// Default region for S3-compatible clients. SeaweedFS ignores it, but
 	// OpenEverest BackupStorage and AWS SDKs require a non-empty value.
@@ -59,22 +66,26 @@ func buildConnectionDetailsFromService(
 	s3Params components.S3CustomSpec,
 ) (controller.ConnectionDetails, error) {
 	host := fmt.Sprintf("%s.%s.svc", svc.Name, svc.Namespace)
-	port := serviceS3Port(svc)
+	port, https := serviceS3Listen(svc)
 	portStr := fmt.Sprintf("%d", port)
-	// In-cluster endpoint stays HTTP: the S3 Service never speaks TLS. BackupStorage
-	// and in-cluster clients should use this URL.
-	endpoint := fmt.Sprintf("http://%s:%d", host, port)
+	scheme := "http"
+	verifyTLS := "false"
+	if https {
+		scheme = "https"
+		verifyTLS = strconv.FormatBool(s3VerifyTLS(s3Params))
+	}
+	endpoint := s3URL(scheme, host, port)
 
 	props := map[string]string{
 		"endpointURL":    endpoint,
 		"forcePathStyle": "true",
-		"verifyTLS":      "false",
+		"verifyTLS":      verifyTLS,
 		"region":         defaultS3Region,
 	}
 
 	// Host stays in-cluster (BackupStorage needs it). For NodePort/LoadBalancer,
 	// also surface an external endpoint so clients outside the cluster can connect.
-	externalURL, err := externalS3EndpointURL(c, svc, port, sw)
+	externalURL, err := externalS3EndpointURL(c, svc, port, https, sw)
 	if err != nil {
 		return controller.ConnectionDetails{}, err
 	}
@@ -96,6 +107,16 @@ func buildConnectionDetailsFromService(
 	}, nil
 }
 
+// s3VerifyTLS is the client hint for the gateway's own HTTPS listener.
+// The provider-created certificate is self-signed, so the default is false.
+// A user-supplied secretName defaults to true.
+func s3VerifyTLS(spec components.S3CustomSpec) bool {
+	if spec.HTTPS != nil && spec.HTTPS.VerifyTLS != nil {
+		return *spec.HTTPS.VerifyTLS
+	}
+	return spec.HTTPS != nil && spec.HTTPS.SecretName != ""
+}
+
 func externalHTTPSVerifyTLS(s3Params components.S3CustomSpec) bool {
 	if s3Params.Ingress != nil && s3Params.Ingress.TLS != nil && s3Params.Ingress.TLS.VerifyTLS != nil {
 		return *s3Params.Ingress.TLS.VerifyTLS
@@ -103,13 +124,18 @@ func externalHTTPSVerifyTLS(s3Params components.S3CustomSpec) bool {
 	return true
 }
 
-// externalS3EndpointURL prefers an S3 Ingress URL when configured otherwise
-// falls back to LoadBalancer / NodePort HTTP URLs.
-func externalS3EndpointURL(c *controller.Context, svc *corev1.Service, port int32, sw *seaweedv1.Seaweed) (string, error) {
+// externalS3EndpointURL prefers an S3 Ingress URL when configured. Otherwise
+// it uses the LoadBalancer or NodePort address on the same scheme as the
+// in-cluster listener.
+func externalS3EndpointURL(c *controller.Context, svc *corev1.Service, port int32, https bool, sw *seaweedv1.Seaweed) (string, error) {
 	if url, ok := s3IngressExternalURL(sw); ok {
 		return url, nil
 	}
 
+	scheme := "http"
+	if https {
+		scheme = "https"
+	}
 	switch svc.Spec.Type {
 	case corev1.ServiceTypeLoadBalancer:
 		if ing := svc.Status.LoadBalancer.Ingress; len(ing) > 0 {
@@ -118,11 +144,11 @@ func externalS3EndpointURL(c *controller.Context, svc *corev1.Service, port int3
 				extHost = ing[0].IP
 			}
 			if extHost != "" {
-				return s3HTTPURL(extHost, port), nil
+				return s3URL(scheme, extHost, port), nil
 			}
 		}
 	case corev1.ServiceTypeNodePort:
-		nodePort := serviceS3NodePort(svc)
+		nodePort := serviceS3NodePort(svc, https)
 		if nodePort == 0 {
 			return "", nil
 		}
@@ -130,7 +156,7 @@ func externalS3EndpointURL(c *controller.Context, svc *corev1.Service, port int3
 		if err != nil || hostIP == "" {
 			return "", err
 		}
-		return s3HTTPURL(hostIP, nodePort), nil
+		return s3URL(scheme, hostIP, nodePort), nil
 	}
 	return "", nil
 }
@@ -176,29 +202,52 @@ func s3PodHostIP(c *controller.Context, svc *corev1.Service) (string, error) {
 	return "", nil
 }
 
-func s3HTTPURL(host string, port int32) string {
-	return "http://" + net.JoinHostPort(host, strconv.Itoa(int(port)))
+func s3URL(scheme, host string, port int32) string {
+	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(int(port)))
 }
 
-func serviceS3NodePort(svc *corev1.Service) int32 {
+func serviceS3NodePort(svc *corev1.Service, https bool) int32 {
+	name := s3HTTPPortName
+	if https {
+		name = s3HTTPSPortName
+	}
 	for _, p := range svc.Spec.Ports {
-		if p.Name == s3HTTPPortName {
+		if p.Name == name {
 			return p.NodePort
 		}
 	}
 	return 0
 }
 
-func serviceS3Port(svc *corev1.Service) int32 {
+// serviceS3Listen prefers the HTTPS port when the Service has one. HTTPS-only
+// gateways do not publish s3-http.
+func serviceS3Listen(svc *corev1.Service) (port int32, https bool) {
+	var httpPort int32
 	for _, p := range svc.Spec.Ports {
-		if p.Name == s3HTTPPortName || p.Port == defaultS3Port {
-			return p.Port
+		switch p.Name {
+		case s3HTTPSPortName:
+			return p.Port, true
+		case s3HTTPPortName:
+			httpPort = p.Port
+		}
+	}
+	if httpPort != 0 {
+		return httpPort, false
+	}
+	for _, p := range svc.Spec.Ports {
+		if p.Port == defaultS3Port {
+			return p.Port, false
 		}
 	}
 	if len(svc.Spec.Ports) > 0 {
-		return svc.Spec.Ports[0].Port
+		return svc.Spec.Ports[0].Port, false
 	}
-	return defaultS3Port
+	return defaultS3Port, false
+}
+
+func serviceS3Port(svc *corev1.Service) int32 {
+	port, _ := serviceS3Listen(svc)
+	return port
 }
 
 func waitingForS3Ingress(c *controller.Context, sw *seaweedv1.Seaweed) (bool, error) {
