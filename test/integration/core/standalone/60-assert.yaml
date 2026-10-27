@@ -10,6 +10,10 @@ spec:
       name: test-ca-issuer
       kind: ClusterIssuer
   s3:
+    httpsPort: 8334
+    tlsSecret:
+      name: test-seaweedfs-s3-https
+    (httpsOnly != true): true
     ingress:
       enabled: true
       host: s3.example.com

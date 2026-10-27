@@ -98,6 +98,10 @@ spec:
   s3:
     replicas: 1
     port: 8333
+    httpsPort: 8334
+    httpsOnly: true
+    tlsSecret:
+      name: test-seaweedfs-s3-https
     domainName: s3.example.com
     labels:
       core.openeverest.io/component: s3
@@ -112,6 +116,16 @@ spec:
     (length(annotations."seaweedfs.openeverest.io/s3-config-checksum")): 64
   # Admin UI stays off unless topology.parameters.admin.enabled is true.
   (admin == null): true
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: test-seaweedfs-s3-https
+  (ownerReferences[?kind == 'Instance' && name == 'test-seaweedfs'] | length(@)): 1
+type: kubernetes.io/tls
+data:
+  (starts_with(base64_decode(tls.crt), '-----BEGIN CERTIFICATE-----')): true
+  (starts_with(base64_decode(tls.key), '-----BEGIN')): true
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget

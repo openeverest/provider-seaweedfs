@@ -11,5 +11,5 @@ metadata:
   name: test-seaweedfs-conn
 data:
   (base64_decode(host) == join('', ['test-seaweedfs-s3.', $namespace, '.svc'])): true
-  (starts_with(base64_decode(externalEndpointURL), 'http://')): true
+  (starts_with(base64_decode(externalEndpointURL), 'https://')): true
   (ends_with(base64_decode(externalEndpointURL), ':30333')): true

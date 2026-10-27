@@ -12,4 +12,4 @@ metadata:
 data:
   # Host stays in-cluster; the LB address is published separately.
   (base64_decode(host) == join('', ['test-seaweedfs-s3.', $namespace, '.svc'])): true
-  (base64_decode(externalEndpointURL)): http://203.0.113.10:8333
+  (base64_decode(externalEndpointURL)): https://203.0.113.10:8334
