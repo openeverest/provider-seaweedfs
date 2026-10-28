@@ -13,3 +13,5 @@ data:
   (base64_decode(host) == join('', ['test-seaweedfs-s3.', $namespace, '.svc'])): true
   (starts_with(base64_decode(externalEndpointURL), 'https://')): true
   (ends_with(base64_decode(externalEndpointURL), ':30333')): true
+  # NodePort hits the gateway self-signed cert; do not advertise verifyTLS=true.
+  (base64_decode(externalVerifyTLS)): "false"

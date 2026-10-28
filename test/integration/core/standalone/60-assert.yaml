@@ -13,7 +13,8 @@ spec:
     httpsPort: 8334
     tlsSecret:
       name: test-seaweedfs-s3-https
-    (httpsOnly != true): true
+    # SSA drops httpsOnly when Ingress is on (false is omitempty).
+    (httpsOnly == null): true
     ingress:
       enabled: true
       host: s3.example.com
