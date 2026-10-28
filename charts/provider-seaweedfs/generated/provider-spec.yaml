@@ -508,7 +508,7 @@ spec:
               uiType: number
               validation:
                 celExpressions:
-                  - celExpr: spec.components.s3.parameters.port != 8334 || (has(spec.components.s3.parameters.https) && has(spec.components.s3.parameters.https.enabled) && !spec.components.s3.parameters.https.enabled)
+                  - celExpr: '!has(spec.components.s3.parameters.port) || spec.components.s3.parameters.port != 8334 || (has(spec.components.s3.parameters.https) && has(spec.components.s3.parameters.https.enabled) && !spec.components.s3.parameters.https.enabled)'
                     message: S3 port cannot be 8334 while HTTPS is on
                 int: true
                 max: 55535
