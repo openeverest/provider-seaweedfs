@@ -204,6 +204,11 @@ func (p *Provider) Sync(c *controller.Context) error {
 		return err
 	}
 
+	s3TLSSecret, err := ensureS3ServerTLS(c, s3CustomSpec)
+	if err != nil {
+		return err
+	}
+
 	adminSecretName, err := ensureAdminCredentials(c, topo)
 	if err != nil {
 		return err
@@ -217,7 +222,7 @@ func (p *Provider) Sync(c *controller.Context) error {
 			Master:                buildMasterSpec(master, masterCustomSpec, effectiveReplication(topo.Replication, *volume.Replicas)),
 			Volume:                buildVolumeSpec(volume, volumeCustomSpec),
 			Filer:                 buildFilerSpec(filer, filerCustomSpec),
-			S3:                    buildS3Spec(s3, s3CustomSpec),
+			S3:                    buildS3Spec(s3, s3CustomSpec, s3TLSSecret),
 			Admin:                 buildAdminSpec(adminSecretName),
 			TLS:                   buildTLSSpec(topo),
 			SecurityConfig:        buildSecurityConfigSpec(topo),
@@ -302,6 +307,21 @@ func (p *Provider) Status(c *controller.Context) (controller.Status, error) {
 		return controller.Status{}, err
 	}
 
+	var s3Params components.S3CustomSpec
+	if s3Comp, ok := c.Instance().Spec.Components[common.ComponentS3]; ok {
+		c.TryDecodeComponentParameters(s3Comp, &s3Params)
+	}
+	// Surface a missing user-supplied S3 HTTPS Secret before a generic pod
+	// not-ready message from a failed volume mount.
+	waitingS3TLS, err := waitingForS3HTTPSSecret(c, s3Params)
+	if err != nil {
+		return controller.Status{}, err
+	}
+	if waitingS3TLS {
+		return controller.Provisioning(fmt.Sprintf(
+			"Waiting for S3 HTTPS TLS Secret %q (tls.crt and tls.key)", s3Params.HTTPS.SecretName)), nil
+	}
+
 	if cond := meta.FindStatusCondition(sw.Status.Conditions, "Ready"); cond != nil {
 		if cond.Status == metav1.ConditionTrue {
 			// Inter-component mTLS: the operator has no TLSReady condition and
@@ -344,10 +364,6 @@ func (p *Provider) Status(c *controller.Context) (controller.Status, error) {
 				return controller.Provisioning("Waiting for S3 credentials Secret " + s3ConfigSecretName(c.Name())), nil
 			}
 
-			var s3Params components.S3CustomSpec
-			if s3Comp, ok := c.Instance().Spec.Components[common.ComponentS3]; ok {
-				c.TryDecodeComponentParameters(s3Comp, &s3Params)
-			}
 			details, err := buildConnectionDetailsFromService(c, svc, sw, s3Params)
 			if err != nil {
 				return controller.Status{}, err

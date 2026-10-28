@@ -16,9 +16,9 @@ data:
   (base64_decode(type)): s3
   (base64_decode(provider)): provider-seaweedfs
   (base64_decode(host) == join('', ['e2e-seaweedfs-s3.', $namespace, '.svc'])): true
-  (base64_decode(port)): "8333"
-  (base64_decode(uri) == join('', ['http://e2e-seaweedfs-s3.', $namespace, '.svc:8333'])): true
-  (base64_decode(endpointURL) == join('', ['http://e2e-seaweedfs-s3.', $namespace, '.svc:8333'])): true
+  (base64_decode(port)): "8334"
+  (base64_decode(uri) == join('', ['https://e2e-seaweedfs-s3.', $namespace, '.svc:8334'])): true
+  (base64_decode(endpointURL) == join('', ['https://e2e-seaweedfs-s3.', $namespace, '.svc:8334'])): true
   (base64_decode(region)): us-east-1
   (base64_decode(forcePathStyle)): "true"
   (base64_decode(verifyTLS)): "false"

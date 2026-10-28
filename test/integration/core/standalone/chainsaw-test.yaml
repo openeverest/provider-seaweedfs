@@ -69,9 +69,9 @@ spec:
                   app.kubernetes.io/instance: test-seaweedfs
                   app.kubernetes.io/component: s3
                 ports:
-                  - name: s3-http
-                    port: 8333
-                    targetPort: 8333
+                  - name: s3-https
+                    port: 8334
+                    targetPort: 8334
               EOF
               kubectl patch seaweed/test-seaweedfs --subresource status -n $NAMESPACE --type=merge -p '{"status":{
                 "conditions":[{"type":"Ready","status":"True","reason":"ClusterReady","message":"","lastTransitionTime":"2026-01-01T00:00:00Z"}],
@@ -145,7 +145,7 @@ spec:
             content: |
               kubectl patch service/test-seaweedfs-s3 -n $NAMESPACE --type=merge -p '{"spec":{
                 "type":"NodePort",
-                "ports":[{"name":"s3-http","port":8333,"targetPort":8333,"nodePort":30333}]}}'
+                "ports":[{"name":"s3-https","port":8334,"targetPort":8334,"nodePort":30333}]}}'
         - assert:
             file: 41-assert.yaml
 
@@ -157,7 +157,7 @@ spec:
             content: |
               kubectl patch service/test-seaweedfs-s3 -n $NAMESPACE --type=merge -p '{"spec":{
                 "type":"ClusterIP",
-                "ports":[{"name":"s3-http","port":8333,"targetPort":8333}]}}'
+                "ports":[{"name":"s3-https","port":8334,"targetPort":8334}]}}'
         - assert:
             file: 50-assert.yaml
 
