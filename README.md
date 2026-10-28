@@ -52,14 +52,13 @@ It never manages pods directly — all lifecycle work is delegated to the operat
 
 | provider-seaweedfs | OpenEverest | seaweedfs-operator | Kubernetes |
 |---|---|---|---|
-| `0.2.x` (MVP) | `2.0.0-dev.x` | chart `0.1.43` (image `1.0.40`) | `1.30` – `1.34` |
+| `0.2.x` (MVP) | `2.0.0-dev.x` | chart `0.1.45` (image `1.0.42`) | `1.30` – `1.34` |
 | `0.1.x` (MVP) | `2.0.0-dev.x` | chart `0.1.41` (image `1.0.38`) | `1.30` – `1.34` |
 
-The chart dependency installs `chrislusf/seaweedfs-operator:1.0.40`.
-The provider binary still compiles against the Go module pin in
-[go.mod](go.mod) (`v0.0.0-20260904022014-736537efa750`, commit time
-2026-09-04). That pin was not moved with the chart. The fields this provider
-writes on `Seaweed` are already in that module.
+The chart dependency installs `chrislusf/seaweedfs-operator:1.0.42`.
+The provider binary compiles against the Go module pin in
+[go.mod](go.mod) (`v0.0.0-20261025200953-b6b3122d9338`), commit
+`b6b3122d9338` (chart tag `seaweedfs-operator-0.1.45`).
 
 Chart `0.1.42` (image `1.0.39`) changes admin startup and ServiceMonitor
 scraping, plus dependencies. Its ServiceMonitors select only the per-pod
@@ -106,7 +105,7 @@ The `1.0.27` GitHub release notes only mention a SeaweedFS library bump; the
 CRDs are in that chart's manifest anyway.
 
 **Minimum for the full set is chart `0.1.30` / operator image `1.0.27`.**
-The dependency above (`0.1.43` / `1.0.40`) is past that floor.
+The dependency above (`0.1.45` / `1.0.42`) is past that floor.
 
 ## Capabilities
 
@@ -121,11 +120,11 @@ an MVP: several capabilities are stubbed or not wired yet.
 | Version selection | ✅ | `spec.version` / component image from [definition/versions.yaml](definition/versions.yaml) |
 | High availability | ⚠️ | Replica counts are passed through. Data copies follow `topology.parameters.replication` (`master.defaultReplication`); empty uses `001` with at least 2 volume servers, otherwise `000`. Placements that need another data center or rack are rejected. Two filers by default so S3 survives a filer restart or node failure, see [Filer high availability](#filer-high-availability) |
 | Disruption budgets | ✅ | One `PodDisruptionBudget` per component (`<name>-<component>-pdb`) with `maxUnavailable: 1`, so node drains and cluster upgrades evict one master, volume, filer or S3 pod at a time. This keeps master quorum and never blocks a drain outright, even for single-replica components |
-| Custom configuration | ✅ | Master `masterVolumeSizeLimitMB` and `volumeGrowthCount`; topology `replication` and `volumeServerDiskCount`; volume `maxVolumeCounts` (automatic when unset); filer `maxMB`; S3 `port` / `domainName` / Ingress; JWT signing via `topology.parameters.securityConfig`. See [Volume slots and buckets](#volume-slots-and-buckets) |
+| Custom configuration | ✅ | Master `masterVolumeSizeLimitMB` and `volumeGrowthCount`; topology `replication` and `volumeServerDiskCount`; volume `maxVolumeCounts` (automatic when unset); filer `maxMB`; S3 `port` / `domainName` / `https` / Ingress; JWT signing via `topology.parameters.securityConfig`. See [Volume slots and buckets](#volume-slots-and-buckets) |
 | S3 service exposure | ✅ | `spec.components.s3.service.serviceType`: ClusterIP, NodePort, or LoadBalancer. `loadBalancerService.sourceRanges` is rejected. Only S3 can be exposed |
 | Admin UI | ✅ | Off unless `topology.parameters.admin.enabled` is true. This provider creates Secret `<instance>-admin-credentials` with `adminUser=admin` and a generated `adminPassword` (kept across reconciles). ClusterIP Service `<instance>-admin`, port 23646. Connection details add `adminURL`, `adminUser`, and `adminCredentialsSecret` (the Secret name). Operator image `1.0.40` exits the admin container when `adminPassword` is missing. Workers are not created |
 | Monitoring | ✅ | Prometheus / VictoriaMetrics metrics on every component via `topology.parameters.metrics`, see [Metrics](#metrics-for-prometheus-and-victoriametrics). OpenEverest `MonitoringConfig` (PMM) is not used |
-| TLS | ✅ | Inter-component gRPC mTLS via `topology.parameters.tls`. Client HTTPS via S3 Ingress TLS (`components.s3.parameters.ingress`) → `externalEndpointURL=https://…`. Native S3 HTTPS on the gateway is not supported by the operator yet ([seaweedfs-operator#411](https://github.com/seaweedfs/seaweedfs-operator/issues/411)) |
+| TLS | ✅ | Inter-component gRPC mTLS via `topology.parameters.tls`. The S3 gateway serves HTTPS by default (operator `httpsPort` 8334, `httpsOnly`, Secret `<instance>-s3-https`). Set `components.s3.parameters.https.enabled` to false for plain HTTP. Ingress TLS still publishes `externalEndpointURL=https://…`. The operator rejects `httpsOnly` together with Ingress, so an Ingress keeps the HTTP listener |
 | Status / readiness | ✅ | Maps Seaweed Ready condition; waits for TLS Secret / LoadBalancer / Ingress when configured |
 | Connection details | ✅ | Publishes in-cluster S3 endpoint and admin S3 credentials on Ready; NodePort / LoadBalancer / Ingress add `externalEndpointURL`. Admin UI adds `adminURL`, `adminUser`, and `adminCredentialsSecret` |
 | S3 authentication | ✅ | Always on. The provider generates an admin access key pair in Secret `<name>-s3-config` and starts the gateway with it, so anonymous requests are denied from the first boot. See [S3 credentials](#s3-credentials) |
@@ -238,8 +237,9 @@ spec:
         #   kind: ClusterIssuer
 ```
 
-Expose S3 outside the cluster (NodePort / LoadBalancer), or terminate client HTTPS
-at an Ingress — see [examples/seaweedfs-standalone-s3-ingress.yaml](examples/seaweedfs-standalone-s3-ingress.yaml):
+The S3 gateway is HTTPS on port 8334 unless `parameters.https.enabled` is
+false. Expose it outside the cluster (NodePort / LoadBalancer), or terminate
+a public name at an Ingress — see [examples/seaweedfs-standalone-s3-ingress.yaml](examples/seaweedfs-standalone-s3-ingress.yaml):
 
 ```yaml
 spec:
@@ -267,22 +267,38 @@ kubectl get seaweed -A
 > [!NOTE]
 > When the Instance is Ready, connection details are published to Secret
 > `<instance-name>-conn` from the operator-managed S3 Service
-> (`<name>-s3`). They include host, port, URI, the admin S3 credentials, and
-> `forcePathStyle=true` / `verifyTLS=false` hints for S3 clients.
+> (`<name>-s3`). They include host, port 8334, an `https://` URI, the admin
+> S3 credentials, and `forcePathStyle=true` / `verifyTLS=false` (the default
+> certificate is self-signed).
 >
 > **TLS note:** `topology.parameters.tls.enabled` turns on **gRPC mTLS between
-> SeaweedFS components** (master/volume/filer/S3 gRPC). The S3 Service stays
-> plain HTTP — in-cluster `endpointURL` remains `http://…` with `verifyTLS=false`.
+> SeaweedFS components** (master/volume/filer/S3 gRPC). That is separate from
+> client HTTPS.
 >
-> For **client-facing HTTPS**, enable S3 Ingress TLS
-> (`spec.components.s3.parameters.ingress`). Connection details then publish
-> `externalEndpointURL=https://<host>` and `externalVerifyTLS` (default `true`).
-> See [examples/seaweedfs-standalone-s3-ingress.yaml](examples/seaweedfs-standalone-s3-ingress.yaml).
+> The S3 gateway serves **HTTPS by default**. This provider writes
+> `spec.s3.httpsPort=8334`, `spec.s3.httpsOnly=true`, and `spec.s3.tlsSecret`
+> on the Seaweed CR. seaweedfs-operator mounts that Secret at `/etc/sw-s3-tls`
+> and does not create it, so this provider creates Secret
+> `<instance>-s3-https` (`kubernetes.io/tls`, self-signed, DNS names for
+> `<instance>-s3.<namespace>.svc`). The certificate is kept across reconciles.
+> Set `components.s3.parameters.https.enabled: false` for plain HTTP on port
+> 8333. `https.secretName` uses an existing Secret instead; `https.verifyTLS`
+> then defaults to true. An existing Instance picks this up on the next
+> reconcile, and the S3 Service drops the HTTP port.
 >
-> NodePort and LoadBalancer also publish `externalEndpointURL` (HTTP) when the
-> service is assigned. The Instance stays Provisioning until a LoadBalancer
-> ingress address appears (or until the TLS Secret / Ingress exists when those
-> are enabled).
+> An Ingress cannot be HTTPS-only: the operator rejects `httpsOnly` together
+> with `spec.s3.ingress`. Enabling an Ingress keeps the HTTP listener and
+> still serves HTTPS on 8334. Ingress TLS publishes
+> `externalEndpointURL=https://<host>` and `externalVerifyTLS` (default
+> `true`). See
+> [examples/seaweedfs-standalone-s3-ingress.yaml](examples/seaweedfs-standalone-s3-ingress.yaml).
+>
+> NodePort and LoadBalancer publish `externalEndpointURL` on the same scheme
+> as the in-cluster endpoint, with `externalVerifyTLS` matching the gateway
+> cert hint (`false` for the provider-generated certificate). Ingress TLS
+> uses `ingress.tls.verifyTLS` instead. The Instance stays Provisioning until
+> a LoadBalancer ingress address appears (or until the TLS Secret / Ingress /
+> user-supplied `https.secretName` exists when those are enabled).
 >
 > Inter-component mTLS requires cert-manager; without it the Instance stays
 > Provisioning until the `<name>-server-tls` Secret appears. seaweedfs-operator
@@ -365,7 +381,7 @@ spec:
   s3:
     bucket: seaweedfs-standalone-backups
     region: us-east-1
-    endpointURL: http://seaweedfs-standalone-s3.default.svc:8333
+    endpointURL: https://seaweedfs-standalone-s3.default.svc:8334
     forcePathStyle: true
     verifyTLS: false
     credentialsSecretRef:
@@ -515,7 +531,7 @@ persistence (including storage class), S3 service type and Ingress, the admin
 server when `topology.parameters.admin.enabled` is true (Secret
 `<instance>-admin-credentials`, user `admin`, generated password), component
 parameters (`masterVolumeSizeLimitMB`, `volumeGrowthCount`, `maxVolumeCounts`, `maxMB`, `port`,
-`domainName`), topology `replication` and `volumeServerDiskCount`, optional
+`domainName`, S3 `https`), topology `replication` and `volumeServerDiskCount`, optional
 inter-component TLS (`topology.parameters.tls`), JWT signing
 (`topology.parameters.securityConfig`), and pod scheduling (affinity,
 nodeSelector, tolerations, schedulerName) onto the upstream `Seaweed` CR.

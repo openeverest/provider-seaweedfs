@@ -23,18 +23,23 @@ spec:
                   addressing_style = path
               EOF
               printf '%s' 'e2e-smoke' > /tmp/payload
-              aws s3 mb s3://e2e-smoke --endpoint-url "$ENDPOINT"
-              aws s3 cp /tmp/payload s3://e2e-smoke/obj --endpoint-url "$ENDPOINT"
-              aws s3 cp s3://e2e-smoke/obj /tmp/downloaded --endpoint-url "$ENDPOINT"
+              # The default gateway certificate is self-signed (verifyTLS=false).
+              tls_flag=
+              if [ "$VERIFY_TLS" = "false" ]; then
+                tls_flag=--no-verify-ssl
+              fi
+              aws $tls_flag s3 mb s3://e2e-smoke --endpoint-url "$ENDPOINT"
+              aws $tls_flag s3 cp /tmp/payload s3://e2e-smoke/obj --endpoint-url "$ENDPOINT"
+              aws $tls_flag s3 cp s3://e2e-smoke/obj /tmp/downloaded --endpoint-url "$ENDPOINT"
               expected=$(sha256sum /tmp/payload | awk '{print $1}')
               actual=$(sha256sum /tmp/downloaded | awk '{print $1}')
               test "$expected" = "$actual"
               # The gateway must reject unsigned requests.
-              if aws s3 cp s3://e2e-smoke/obj /tmp/anon --endpoint-url "$ENDPOINT" --no-sign-request; then
+              if aws $tls_flag s3 cp s3://e2e-smoke/obj /tmp/anon --endpoint-url "$ENDPOINT" --no-sign-request; then
                 echo "anonymous read was allowed" >&2
                 exit 1
               fi
-              if aws s3 cp /tmp/payload s3://e2e-smoke/anon --endpoint-url "$ENDPOINT" --no-sign-request; then
+              if aws $tls_flag s3 cp /tmp/payload s3://e2e-smoke/anon --endpoint-url "$ENDPOINT" --no-sign-request; then
                 echo "anonymous write was allowed" >&2
                 exit 1
               fi
@@ -63,3 +68,8 @@ spec:
                 secretKeyRef:
                   name: e2e-seaweedfs-conn
                   key: endpointURL
+            - name: VERIFY_TLS
+              valueFrom:
+                secretKeyRef:
+                  name: e2e-seaweedfs-conn
+                  key: verifyTLS

@@ -10,6 +10,11 @@ spec:
       name: test-ca-issuer
       kind: ClusterIssuer
   s3:
+    httpsPort: 8334
+    tlsSecret:
+      name: test-seaweedfs-s3-https
+    # SSA drops httpsOnly when Ingress is on (false is omitempty).
+    (httpsOnly == null): true
     ingress:
       enabled: true
       host: s3.example.com

@@ -43,18 +43,47 @@ type S3CustomSpec struct {
 	Port       *int32  `json:"port,omitempty"`
 	DomainName *string `json:"domainName,omitempty"`
 
+	// HTTPS serves the S3 gateway over TLS (seaweedfs-operator httpsPort and
+	// tlsSecret). Nil, or enabled left unset, means HTTPS-only on port 8334.
+	// Set enabled to false for plain HTTP. An Ingress keeps the HTTP listener:
+	// the operator rejects HTTPS-only together with Ingress.
+	// +optional
+	HTTPS *S3HTTPSSpec `json:"https,omitempty"`
+
 	// Ingress exposes the S3 gateway via a Kubernetes Ingress. With TLS,
-	// clients reach the API at https://<host>; the in-cluster Service stays HTTP.
+	// clients reach the API at https://<host>.
 	// +optional
 	Ingress *S3IngressSpec `json:"ingress,omitempty"`
 }
 
+// S3HTTPSSpec is native TLS on the standalone S3 gateway.
+type S3HTTPSSpec struct {
+	// Enabled defaults to true. Set false to serve plain HTTP on port.
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// SecretName is an existing kubernetes.io/tls Secret (tls.crt and tls.key).
+	// Empty means this provider creates Secret <instance>-s3-https.
+	// +optional
+	SecretName string `json:"secretName,omitempty"`
+
+	// VerifyTLS is the hint for clients of the in-cluster HTTPS endpoint.
+	// Defaults to false for the provider-created certificate, and true when
+	// secretName is set.
+	// +optional
+	VerifyTLS *bool `json:"verifyTLS,omitempty"`
+}
+
 // S3IngressSpec mirrors seaweedfs-operator IngressSpec for the standalone S3 gateway.
 type S3IngressSpec struct {
-	// Enabled turns on Ingress generation. Host is required when enabled.
-	Enabled bool `json:"enabled,omitempty"`
+	// Enabled turns on Ingress generation. Nil means "on when Host is set" so
+	// the UI toggleable Ingress group can omit this field and only send nested
+	// values. Explicit false disables Ingress even if Host is set.
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
 
-	// Host is the hostname the Ingress listens on.
+	// Host is the hostname the Ingress listens on. Required when Ingress is on;
+	// a non-empty host also enables Ingress when Enabled is omitted.
 	Host string `json:"host,omitempty"`
 
 	// ClassName is the IngressClassName (e.g. nginx).
