@@ -594,7 +594,7 @@ markers, watches, and code generation are documented once for all providers in
   (cd ../openeverest && make build-controller docker-build-controller)
   make load-openeverest-controller-image
   (cd ../openeverest && make deploy-test-controller)
-  make test-integration            # or test-integration-core-standalone / -validation / -monitoring-metrics
+  make test-integration            # or test-integration-core-standalone / -validation / -monitoring-metrics / -backup-on-demand
   ```
 
 ## Troubleshooting

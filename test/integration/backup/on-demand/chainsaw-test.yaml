@@ -1,0 +1,115 @@
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: backup-on-demand
+spec:
+  description: |
+    On-demand filer-metadata backup lifecycle: register an S3 BackupStorage on
+    the Instance, create a Backup, map SeaweedBackup status through
+    Pending → Running → Succeeded, honour filerPath parameters, map Failed,
+    and delete the SeaweedBackup when the Backup CR is removed.
+  catch:
+    - script:
+        content: kubectl -n $NAMESPACE get instance,seaweed,backup,backupstorage,seaweedbackup,secret -o yaml
+    - podLogs:
+        namespace: provider-system
+        selector: app.kubernetes.io/name=provider-seaweedfs
+        tail: 100
+  steps:
+    - name: provider-operator-installed
+      try:
+        - assert:
+            file: 00-assert.yaml
+
+    - name: enable-backup-on-instance
+      try:
+        - apply:
+            file: 10-setup.yaml
+        - apply:
+            file: 10-create-cluster.yaml
+        - assert:
+            file: 10-assert.yaml
+
+    - name: create-on-demand-backup
+      try:
+        - apply:
+            file: 20-create-backup.yaml
+        - assert:
+            file: 20-assert.yaml
+
+    # The seaweedfs-operator is scaled to 0, so the tests stand in for it by
+    # patching SeaweedBackup status.
+    - name: backup-running
+      try:
+        - script:
+            content: |
+              kubectl patch seaweedbackup/adhoc-1 --subresource status -n $NAMESPACE --type=merge \
+                -p '{"status":{"phase":"Running","startTime":"2026-01-01T00:00:00Z"}}'
+        - assert:
+            file: 21-assert.yaml
+
+    - name: backup-succeeded
+      try:
+        - script:
+            content: |
+              kubectl patch seaweedbackup/adhoc-1 --subresource status -n $NAMESPACE --type=merge \
+                -p '{"status":{"phase":"Completed","startTime":"2026-01-01T00:00:00Z","completionTime":"2026-01-01T00:01:00Z"}}'
+        - assert:
+            file: 22-assert.yaml
+
+    - name: create-backup-with-filer-path
+      try:
+        - apply:
+            file: 30-create-backup-filerpath.yaml
+        - assert:
+            file: 30-assert.yaml
+
+    - name: backup-failed
+      try:
+        - script:
+            content: |
+              kubectl patch seaweedbackup/adhoc-filerpath --subresource status -n $NAMESPACE --type=merge \
+                -p '{"status":{"phase":"Failed","conditions":[{"type":"Complete","status":"False","reason":"JobFailed","message":"snapshot job failed","lastTransitionTime":"2026-01-01T00:02:00Z"}]}}'
+        - assert:
+            file: 31-assert.yaml
+
+    - name: delete-backup-cleans-seaweedbackup
+      try:
+        - delete:
+            ref:
+              apiVersion: backup.openeverest.io/v1alpha1
+              kind: Backup
+              name: adhoc-1
+        - wait:
+            apiVersion: backup.openeverest.io/v1alpha1
+            kind: Backup
+            name: adhoc-1
+            for:
+              deletion: {}
+        - wait:
+            apiVersion: seaweed.seaweedfs.com/v1
+            kind: SeaweedBackup
+            name: adhoc-1
+            for:
+              deletion: {}
+
+    - name: delete-cluster
+      try:
+        - delete:
+            ref:
+              apiVersion: core.openeverest.io/v1alpha1
+              kind: Instance
+              name: backup-seaweedfs
+        - wait:
+            apiVersion: seaweed.seaweedfs.com/v1
+            kind: Seaweed
+            name: backup-seaweedfs
+            for:
+              deletion: {}
+        - wait:
+            apiVersion: seaweed.seaweedfs.com/v1
+            kind: SeaweedBackup
+            name: adhoc-filerpath
+            for:
+              deletion: {}
