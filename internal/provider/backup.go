@@ -15,19 +15,26 @@
 package provider
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/AlekSi/pointer"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	backupv1alpha1 "github.com/openeverest/openeverest/v2/api/backup/v1alpha1"
+	commonv1alpha1 "github.com/openeverest/openeverest/v2/api/common/v1alpha1"
 	corev1alpha1 "github.com/openeverest/openeverest/v2/api/core/v1alpha1"
 	"github.com/openeverest/openeverest/v2/provider-runtime/controller"
 
 	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
+
+	seaweedfsfilermeta "github.com/openeverest/provider-seaweedfs/definition/backupclasses/seaweedfs-filer-meta"
 )
 
 // Compile-time interface checks.
@@ -161,17 +168,164 @@ func validateSeaweedBackupStorageName(name string) error {
 	return nil
 }
 
-// SyncBackup creates or updates the operator's backup resource, sets a controller
-// reference from the Backup CR to enable owner-based watches, and maps operator
-// status to OpenEverest states.
+const seaweedBackupKind = "SeaweedBackup"
+
+// SyncBackup creates a SeaweedBackup for on-demand Backups and maps operator
+// status. Scheduled Backups (spec.scheduleName set) are observed only — the
+// seaweedfs-operator scheduler owns those SeaweedBackups.
 func (p *Provider) SyncBackup(c *controller.Context, backup *backupv1alpha1.Backup) (controller.BackupExecutionStatus, error) {
 	l := log.FromContext(c.Context())
 	l.Info("Syncing backup", "name", backup.Name)
 
-	// TODO: Implement backup sync logic.
-	return controller.BackupExecutionStatus{
-		State: backupv1alpha1.BackupStatePending,
-	}, nil
+	if backup.Spec.ScheduleName != "" {
+		return observeSeaweedBackup(c, backup)
+	}
+
+	// Do not recreate a pruned SeaweedBackup under the same name; keep would
+	// delete it again and we would snapshot forever.
+	if backup.Status.State == backupv1alpha1.BackupStateSucceeded {
+		return preserveSucceededBackup(backup), nil
+	}
+
+	sw := &seaweedv1.Seaweed{}
+	if err := c.Get(sw, c.Name()); err != nil {
+		if apierrors.IsNotFound(err) {
+			return controller.BackupExecutionStatus{
+				State:   backupv1alpha1.BackupStatePending,
+				Message: "Waiting for Seaweed cluster to exist",
+			}, nil
+		}
+		return controller.BackupExecutionStatus{}, fmt.Errorf("get Seaweed: %w", err)
+	}
+
+	storageName := backup.Spec.StorageRef.Name
+	if sw.Spec.Backup == nil {
+		return controller.BackupExecutionStatus{
+			State:   backupv1alpha1.BackupStatePending,
+			Message: "Waiting for backup storages to be registered on Seaweed cluster",
+		}, nil
+	}
+	if _, ok := sw.Spec.Backup.Storages[storageName]; !ok {
+		return controller.BackupExecutionStatus{
+			State:   backupv1alpha1.BackupStatePending,
+			Message: fmt.Sprintf("Waiting for storage %q to be registered on Seaweed cluster", storageName),
+		}, nil
+	}
+
+	params, err := decodeBackupParameters(backup.Spec.Parameters)
+	if err != nil {
+		return controller.BackupExecutionStatus{}, err
+	}
+	filerPath := params.FilerPath
+	if filerPath == "" {
+		filerPath = "/"
+	}
+
+	sb := &seaweedv1.SeaweedBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      backup.Name,
+			Namespace: backup.Namespace,
+		},
+	}
+	if _, err := controllerutil.CreateOrUpdate(c.Context(), c.Client(), sb, func() error {
+		// clusterName and storageName are immutable on SeaweedBackup.
+		if sb.CreationTimestamp.IsZero() {
+			sb.Spec = seaweedv1.SeaweedBackupSpec{
+				ClusterName: c.Name(),
+				StorageName: storageName,
+				FilerPath:   filerPath,
+			}
+		}
+		return controllerutil.SetControllerReference(backup, sb, c.Client().Scheme())
+	}); err != nil {
+		return controller.BackupExecutionStatus{}, fmt.Errorf("create or update SeaweedBackup: %w", err)
+	}
+
+	return mapSeaweedBackupStatus(sb), nil
+}
+
+// observeSeaweedBackup maps status for a scheduler-created SeaweedBackup
+// without creating or mutating the operator object.
+func observeSeaweedBackup(c *controller.Context, backup *backupv1alpha1.Backup) (controller.BackupExecutionStatus, error) {
+	sb := &seaweedv1.SeaweedBackup{}
+	if err := c.Get(sb, backup.Name); err != nil {
+		if apierrors.IsNotFound(err) {
+			return controller.BackupExecutionStatus{
+				State:   backupv1alpha1.BackupStatePending,
+				Message: fmt.Sprintf("Waiting for scheduled SeaweedBackup %q", backup.Name),
+			}, nil
+		}
+		return controller.BackupExecutionStatus{}, fmt.Errorf("get SeaweedBackup: %w", err)
+	}
+	return mapSeaweedBackupStatus(sb), nil
+}
+
+func preserveSucceededBackup(backup *backupv1alpha1.Backup) controller.BackupExecutionStatus {
+	exec := controller.BackupExecutionStatus{
+		State:       backupv1alpha1.BackupStateSucceeded,
+		StartedAt:   backup.Status.StartedAt,
+		CompletedAt: backup.Status.CompletedAt,
+		Message:     backup.Status.Message,
+	}
+	if backup.Status.OperatorBackupRef != nil {
+		exec.OperatorBackupRef = backup.Status.OperatorBackupRef
+	} else {
+		ref := seaweedBackupRef(backup.Name)
+		exec.OperatorBackupRef = &ref
+	}
+	return exec
+}
+
+func mapSeaweedBackupStatus(sb *seaweedv1.SeaweedBackup) controller.BackupExecutionStatus {
+	ref := seaweedBackupRef(sb.Name)
+	exec := controller.BackupExecutionStatus{
+		OperatorBackupRef: &ref,
+		StartedAt:         sb.Status.StartTime,
+		CompletedAt:       sb.Status.CompletionTime,
+		State:             backupv1alpha1.BackupStatePending,
+	}
+	switch sb.Status.Phase {
+	case seaweedv1.BackupPhaseCompleted:
+		exec.State = backupv1alpha1.BackupStateSucceeded
+	case seaweedv1.BackupPhaseRunning:
+		exec.State = backupv1alpha1.BackupStateRunning
+	case seaweedv1.BackupPhaseFailed:
+		exec.State = backupv1alpha1.BackupStateFailed
+		exec.Message = failedBackupMessage(sb)
+	case seaweedv1.BackupPhasePending, "":
+		exec.State = backupv1alpha1.BackupStatePending
+	default:
+		exec.State = backupv1alpha1.BackupStatePending
+	}
+	return exec
+}
+
+func seaweedBackupRef(name string) commonv1alpha1.TypedObjectRef {
+	return commonv1alpha1.TypedObjectRef{
+		Group: seaweedv1.GroupVersion.Group,
+		Kind:  seaweedBackupKind,
+		Name:  name,
+	}
+}
+
+func failedBackupMessage(sb *seaweedv1.SeaweedBackup) string {
+	for _, cond := range sb.Status.Conditions {
+		if cond.Type == seaweedv1.BackupConditionComplete && cond.Status == metav1.ConditionFalse && cond.Message != "" {
+			return cond.Message
+		}
+	}
+	return "SeaweedBackup failed"
+}
+
+func decodeBackupParameters(raw *runtime.RawExtension) (seaweedfsfilermeta.SeaweedfsFilerMetaBackupParameters, error) {
+	var cfg seaweedfsfilermeta.SeaweedfsFilerMetaBackupParameters
+	if raw == nil || len(raw.Raw) == 0 {
+		return cfg, nil
+	}
+	if err := json.Unmarshal(raw.Raw, &cfg); err != nil {
+		return cfg, fmt.Errorf("decode backup parameters: %w", err)
+	}
+	return cfg, nil
 }
 
 // SyncRestore resolves the source Backup CR, creates or updates the operator's
@@ -187,15 +341,26 @@ func (p *Provider) SyncRestore(c *controller.Context, restore *backupv1alpha1.Re
 	}, nil
 }
 
-// CleanupBackup deletes the operator backup resource. For DeletionPolicy: Retain,
-// remove storage-protection finalizers before deletion to preserve backup data.
-// Return true only when fully deleted, false to requeue.
+// CleanupBackup deletes the SeaweedBackup CR. Delete and Retain both remove
+// only the CR; the filer catalog at /.seaweedfs-operator/backups/<name> is left
+// (same as operator keep). Return true when fully gone.
 func (p *Provider) CleanupBackup(c *controller.Context, backup *backupv1alpha1.Backup) (bool, error) {
 	l := log.FromContext(c.Context())
 	l.Info("Cleaning up backup", "name", backup.Name)
 
-	// TODO: Implement backup cleanup logic.
-	return true, nil
+	sb := &seaweedv1.SeaweedBackup{}
+	if err := c.Get(sb, backup.Name); err != nil {
+		if apierrors.IsNotFound(err) {
+			return true, nil
+		}
+		return false, fmt.Errorf("get SeaweedBackup: %w", err)
+	}
+	if sb.DeletionTimestamp.IsZero() {
+		if err := c.Delete(sb); err != nil {
+			return false, fmt.Errorf("delete SeaweedBackup: %w", err)
+		}
+	}
+	return false, nil
 }
 
 // CleanupRestore deletes the operator restore resource. Return true when fully
@@ -208,16 +373,14 @@ func (p *Provider) CleanupRestore(c *controller.Context, restore *backupv1alpha1
 	return true, nil
 }
 
-// BackupWatches implements controller.BackupWatcher. Register watches so operator
-// backup status changes trigger reconciliation. Use WatchOwned for resources with
-// controller references set by SyncBackup.
+// BackupWatches implements controller.BackupWatcher.
 func (p *Provider) BackupWatches() []controller.WatchConfig {
-	return []controller.WatchConfig{}
+	return []controller.WatchConfig{
+		controller.WatchOwned(&seaweedv1.SeaweedBackup{}),
+	}
 }
 
-// RestoreWatches implements controller.RestoreWatcher. Register watches so operator
-// restore status changes trigger reconciliation. Use WatchOwned for resources with
-// controller references set by SyncRestore.
+// RestoreWatches implements controller.RestoreWatcher.
 func (p *Provider) RestoreWatches() []controller.WatchConfig {
 	return []controller.WatchConfig{}
 }
