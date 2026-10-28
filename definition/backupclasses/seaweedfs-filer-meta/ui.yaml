@@ -1,0 +1,28 @@
+# UI rendering hints for this BackupClass.
+# Inlined verbatim under spec.uiSchema in the generated manifest; treated as
+# opaque by the runtime. The recommended shape groups fields by the modal
+# that renders them:
+#   backup  — on-demand backup modal (fields backed by parametersSchema.openAPIV3Schema).
+#   pitr    — per-storage PITR sub-form (unused; this class does not support PITR).
+#   restore — restore modal (fields backed by restoreParametersSchema.openAPIV3Schema).
+
+backup:
+  label: Backup Configuration
+  components:
+    filerPath:
+      path: filerPath
+      uiType: text
+      fieldParams:
+        label: Filer path
+        description: Filer subtree to snapshot. Defaults to /.
+        defaultValue: /
+  componentsOrder:
+    - filerPath
+pitr:
+  label: PITR Configuration
+  components: {}
+  componentsOrder: []
+restore:
+  label: Restore Configuration
+  components: {}
+  componentsOrder: []
