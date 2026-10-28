@@ -294,9 +294,11 @@ kubectl get seaweed -A
 > [examples/seaweedfs-standalone-s3-ingress.yaml](examples/seaweedfs-standalone-s3-ingress.yaml).
 >
 > NodePort and LoadBalancer publish `externalEndpointURL` on the same scheme
-> as the in-cluster endpoint. The Instance stays Provisioning until a
-> LoadBalancer ingress address appears (or until the TLS Secret / Ingress
-> exists when those are enabled).
+> as the in-cluster endpoint, with `externalVerifyTLS` matching the gateway
+> cert hint (`false` for the provider-generated certificate). Ingress TLS
+> uses `ingress.tls.verifyTLS` instead. The Instance stays Provisioning until
+> a LoadBalancer ingress address appears (or until the TLS Secret / Ingress /
+> user-supplied `https.secretName` exists when those are enabled).
 >
 > Inter-component mTLS requires cert-manager; without it the Instance stays
 > Provisioning until the `<name>-server-tls` Secret appears. seaweedfs-operator
