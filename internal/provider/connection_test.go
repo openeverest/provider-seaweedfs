@@ -148,6 +148,27 @@ func TestBuildConnectionDetailsFromService(t *testing.T) {
 		assert.Equal(t, "http://203.0.113.10:8333", details.AdditionalProperties["externalEndpointURL"])
 	})
 
+	t.Run("LoadBalancer HTTPS uses gateway verifyTLS hint", func(t *testing.T) {
+		svc := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "sw-s3", Namespace: "ns"},
+			Spec: corev1.ServiceSpec{
+				Type:  corev1.ServiceTypeLoadBalancer,
+				Ports: []corev1.ServicePort{{Name: "s3-https", Port: 8334}},
+			},
+			Status: corev1.ServiceStatus{
+				LoadBalancer: corev1.LoadBalancerStatus{
+					Ingress: []corev1.LoadBalancerIngress{{IP: "203.0.113.10"}},
+				},
+			},
+		}
+
+		details, err := buildConnectionDetailsFromService(ctx, svc, nil, emptyParams)
+		require.NoError(t, err)
+		assert.Equal(t, "https://203.0.113.10:8334", details.AdditionalProperties["externalEndpointURL"])
+		assert.Equal(t, "false", details.AdditionalProperties["verifyTLS"])
+		assert.Equal(t, "false", details.AdditionalProperties["externalVerifyTLS"])
+	})
+
 	t.Run("LoadBalancer with IPv6 ingress", func(t *testing.T) {
 		svc := &corev1.Service{
 			ObjectMeta: metav1.ObjectMeta{Name: "sw-s3", Namespace: "ns"},
@@ -191,7 +212,7 @@ func TestBuildConnectionDetailsFromService(t *testing.T) {
 		}
 		params := components.S3CustomSpec{
 			Ingress: &components.S3IngressSpec{
-				Enabled: true,
+				Enabled: pointer.ToBool(true),
 				Host:    "s3.example.com",
 				TLS: &components.S3IngressTLS{
 					SecretName: "s3-tls",
@@ -229,7 +250,7 @@ func TestBuildConnectionDetailsFromService(t *testing.T) {
 		}
 		params := components.S3CustomSpec{
 			Ingress: &components.S3IngressSpec{
-				Enabled: true,
+				Enabled: pointer.ToBool(true),
 				Host:    "s3.example.com",
 				TLS: &components.S3IngressTLS{
 					SecretName: "s3-tls",
@@ -310,7 +331,12 @@ func TestServiceS3Port(t *testing.T) {
 
 func TestBuildS3IngressSpec(t *testing.T) {
 	assert.Nil(t, buildS3IngressSpec(nil))
-	assert.Nil(t, buildS3IngressSpec(&components.S3IngressSpec{Enabled: false}))
+	assert.Nil(t, buildS3IngressSpec(&components.S3IngressSpec{Enabled: pointer.ToBool(false)}))
+	// Explicit false wins over a leftover host (API/YAML users).
+	assert.Nil(t, buildS3IngressSpec(&components.S3IngressSpec{
+		Enabled: pointer.ToBool(false),
+		Host:    "s3.example.com",
+	}))
 
 	// Host alone enables Ingress (UI toggleable group omits enabled).
 	hostOnly := buildS3IngressSpec(&components.S3IngressSpec{Host: "s3.example.com"})
@@ -320,7 +346,7 @@ func TestBuildS3IngressSpec(t *testing.T) {
 
 	class := "nginx"
 	spec := buildS3IngressSpec(&components.S3IngressSpec{
-		Enabled:   true,
+		Enabled:   pointer.ToBool(true),
 		Host:      "s3.example.com",
 		ClassName: &class,
 		Annotations: map[string]string{

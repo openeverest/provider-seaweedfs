@@ -92,7 +92,13 @@ func buildConnectionDetailsFromService(
 	if externalURL != "" {
 		props["externalEndpointURL"] = externalURL
 		if strings.HasPrefix(externalURL, "https://") {
-			props["externalVerifyTLS"] = strconv.FormatBool(externalHTTPSVerifyTLS(s3Params))
+			// Ingress TLS uses its own verify hint. LB/NodePort hit the gateway
+			// cert (self-signed by default), so reuse the in-cluster hint.
+			verify := s3VerifyTLS(s3Params)
+			if _, fromIngress := s3IngressExternalURL(sw); fromIngress {
+				verify = externalHTTPSVerifyTLS(s3Params)
+			}
+			props["externalVerifyTLS"] = strconv.FormatBool(verify)
 		}
 	}
 	addAdminConnectionDetails(c, sw, props)
