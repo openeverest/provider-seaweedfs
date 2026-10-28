@@ -21,6 +21,15 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	corev1alpha1 "github.com/openeverest/openeverest/v2/api/core/v1alpha1"
+	"github.com/openeverest/openeverest/v2/provider-runtime/controller"
+
+	"github.com/openeverest/provider-seaweedfs/definition/components"
 )
 
 func TestGenerateS3ServerCert(t *testing.T) {
@@ -38,4 +47,61 @@ func TestGenerateS3ServerCert(t *testing.T) {
 		"sw-s3.ns.svc",
 		"sw-s3.ns.svc.cluster.local",
 	}, parsed.DNSNames)
+}
+
+func TestWaitingForS3HTTPSSecret(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, corev1alpha1.AddToScheme(scheme))
+
+	inst := &corev1alpha1.Instance{
+		ObjectMeta: metav1.ObjectMeta{Name: "sw", Namespace: "ns"},
+	}
+	newCtx := func(objs ...runtime.Object) *controller.Context {
+		cl := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(append(objs, inst)...).Build()
+		return controller.NewContext(t.Context(), cl, inst, "test")
+	}
+
+	t.Run("provider-managed cert does not wait", func(t *testing.T) {
+		waiting, err := waitingForS3HTTPSSecret(newCtx(), components.S3CustomSpec{})
+		require.NoError(t, err)
+		assert.False(t, waiting)
+	})
+
+	t.Run("missing user secret waits", func(t *testing.T) {
+		waiting, err := waitingForS3HTTPSSecret(newCtx(), components.S3CustomSpec{
+			HTTPS: &components.S3HTTPSSpec{SecretName: "my-s3-tls"},
+		})
+		require.NoError(t, err)
+		assert.True(t, waiting)
+	})
+
+	t.Run("secret missing keys waits", func(t *testing.T) {
+		sec := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "my-s3-tls", Namespace: "ns"},
+			Type:       corev1.SecretTypeTLS,
+			Data:       map[string][]byte{corev1.TLSCertKey: []byte("cert")},
+		}
+		waiting, err := waitingForS3HTTPSSecret(newCtx(sec), components.S3CustomSpec{
+			HTTPS: &components.S3HTTPSSpec{SecretName: "my-s3-tls"},
+		})
+		require.NoError(t, err)
+		assert.True(t, waiting)
+	})
+
+	t.Run("complete user secret is ready", func(t *testing.T) {
+		sec := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "my-s3-tls", Namespace: "ns"},
+			Type:       corev1.SecretTypeTLS,
+			Data: map[string][]byte{
+				corev1.TLSCertKey:       []byte("cert"),
+				corev1.TLSPrivateKeyKey: []byte("key"),
+			},
+		}
+		waiting, err := waitingForS3HTTPSSecret(newCtx(sec), components.S3CustomSpec{
+			HTTPS: &components.S3HTTPSSpec{SecretName: "my-s3-tls"},
+		})
+		require.NoError(t, err)
+		assert.False(t, waiting)
+	})
 }

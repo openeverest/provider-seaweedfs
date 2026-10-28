@@ -49,8 +49,9 @@ func s3HTTPSSecretName(instanceName string) string {
 
 // ensureS3ServerTLS returns the Secret name to set on spec.s3.tlsSecret.
 // An empty name leaves the gateway on HTTP. A user-supplied secretName is
-// used as-is. Otherwise the provider creates Secret <instance>-s3-https
-// once and keeps whatever certificate is already there.
+// passed through; Status waits until that Secret exists with tls.crt/tls.key.
+// Otherwise the provider creates Secret <instance>-s3-https once and keeps
+// whatever certificate is already there.
 func ensureS3ServerTLS(c *controller.Context, spec components.S3CustomSpec) (string, error) {
 	if !s3HTTPSEnabled(spec) {
 		return "", nil
@@ -91,6 +92,26 @@ func ensureS3ServerTLS(c *controller.Context, spec components.S3CustomSpec) (str
 		return "", fmt.Errorf("creating S3 TLS Secret %q: %w", name, err)
 	}
 	return name, nil
+}
+
+// waitingForS3HTTPSSecret is true when the user named an HTTPS Secret that is
+// missing or lacks tls.crt/tls.key. Without this the S3 pods sit in
+// ContainerCreating and the Instance only shows a generic not-ready message.
+func waitingForS3HTTPSSecret(c *controller.Context, spec components.S3CustomSpec) (bool, error) {
+	if !s3HTTPSEnabled(spec) || spec.HTTPS == nil || spec.HTTPS.SecretName == "" {
+		return false, nil
+	}
+	sec := &corev1.Secret{}
+	if err := c.Get(sec, spec.HTTPS.SecretName); err != nil {
+		if controller.IsNotFound(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	if len(sec.Data[corev1.TLSCertKey]) == 0 || len(sec.Data[corev1.TLSPrivateKeyKey]) == 0 {
+		return true, nil
+	}
+	return false, nil
 }
 
 func generateS3ServerCert(instanceName, namespace string) (certPEM, keyPEM []byte, err error) {

@@ -594,7 +594,7 @@ func TestValidateS3Parameters(t *testing.T) {
 
 	require.NoError(t, validateS3Parameters(components.S3CustomSpec{
 		Ingress: &components.S3IngressSpec{
-			Enabled: true,
+			Enabled: pointer.ToBool(true),
 			Host:    "s3.example.com",
 			TLS:     &components.S3IngressTLS{SecretName: "s3-tls"},
 		},
@@ -602,6 +602,10 @@ func TestValidateS3Parameters(t *testing.T) {
 	// UI toggleable group sends host without enabled.
 	require.NoError(t, validateS3Parameters(components.S3CustomSpec{
 		Ingress: &components.S3IngressSpec{Host: "s3.example.com"},
+	}))
+	// Explicit false disables Ingress even with a host.
+	require.NoError(t, validateS3Parameters(components.S3CustomSpec{
+		Ingress: &components.S3IngressSpec{Enabled: pointer.ToBool(false), Host: "s3.example.com"},
 	}))
 	require.NoError(t, validateS3Parameters(components.S3CustomSpec{
 		Port:  pointer.ToInt32(defaultS3HTTPSPort),
@@ -628,14 +632,14 @@ func TestValidateS3Parameters(t *testing.T) {
 	assert.Contains(t, err.Error(), "https.secretName")
 
 	err = validateS3Parameters(components.S3CustomSpec{
-		Ingress: &components.S3IngressSpec{Enabled: true},
+		Ingress: &components.S3IngressSpec{Enabled: pointer.ToBool(true)},
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ingress.host is required")
 
 	err = validateS3Parameters(components.S3CustomSpec{
 		Ingress: &components.S3IngressSpec{
-			Enabled: true,
+			Enabled: pointer.ToBool(true),
 			Host:    "s3.example.com",
 			TLS:     &components.S3IngressTLS{},
 		},
@@ -713,7 +717,7 @@ func TestBuildS3Spec(t *testing.T) {
 		spec := buildS3Spec(
 			corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(1)},
 			components.S3CustomSpec{
-				Ingress: &components.S3IngressSpec{Enabled: true, Host: "s3.example.com"},
+				Ingress: &components.S3IngressSpec{Enabled: pointer.ToBool(true), Host: "s3.example.com"},
 			},
 			"sw-s3-https",
 		)
