@@ -15,18 +15,151 @@
 package provider
 
 import (
-	backupv1alpha1 "github.com/openeverest/openeverest/v2/api/backup/v1alpha1"
-	"github.com/openeverest/openeverest/v2/provider-runtime/controller"
+	"fmt"
+	"strings"
+
+	"github.com/AlekSi/pointer"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	backupv1alpha1 "github.com/openeverest/openeverest/v2/api/backup/v1alpha1"
+	corev1alpha1 "github.com/openeverest/openeverest/v2/api/core/v1alpha1"
+	"github.com/openeverest/openeverest/v2/provider-runtime/controller"
+
+	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
 )
 
-// TODO: If your operator supports backups and restores, implement the backup interfaces
-// to enable OpenEverest's backup management. All backup interfaces are optional.
-//
 // Compile-time interface checks.
 var _ controller.BackupProvider = (*Provider)(nil)
 var _ controller.BackupWatcher = (*Provider)(nil)
 var _ controller.RestoreWatcher = (*Provider)(nil)
+
+// seaweedBackupStorageNameMax is the max length the seaweedfs-operator webhook
+// accepts for spec.backup.storages map keys (and schedule names). Stricter than
+// validation.DNS1123LabelMaxLength (63).
+const seaweedBackupStorageNameMax = 50
+
+// defaultBackupDirectory is the sink prefix OpenEverest BackupStorage has no
+// field for. The proposal and operator examples use "/".
+const defaultBackupDirectory = "/"
+
+func buildBackupSpec(c *controller.Context) (*seaweedv1.BackupSpec, error) {
+	cfg := c.Instance().Spec.Backup
+	if cfg == nil || !cfg.Enabled {
+		return nil, nil
+	}
+	if len(cfg.Storages) == 0 {
+		return nil, nil
+	}
+
+	storages, err := buildSeaweedStorages(c, cfg.Storages)
+	if err != nil {
+		return nil, err
+	}
+	return &seaweedv1.BackupSpec{Storages: storages}, nil
+}
+
+func buildSeaweedStorages(
+	c *controller.Context,
+	entries []corev1alpha1.InstanceBackupStorage,
+) (map[string]seaweedv1.BackupStorageSpec, error) {
+	out := make(map[string]seaweedv1.BackupStorageSpec, len(entries))
+	for _, entry := range entries {
+		name := entry.StorageRef.Name
+		if err := validateSeaweedBackupStorageName(name); err != nil {
+			return nil, &controller.BackupConfigError{
+				Reason:  "InvalidStorageName",
+				Message: err.Error(),
+			}
+		}
+		if _, exists := out[name]; exists {
+			return nil, &controller.BackupConfigError{
+				Reason:  "DuplicateStorage",
+				Message: fmt.Sprintf("backup storage %q is registered more than once", name),
+			}
+		}
+		if entry.PITR != nil && entry.PITR.Enabled {
+			return nil, &controller.BackupConfigError{
+				Reason:  controller.PITRConfigInvalidReason,
+				Message: fmt.Sprintf("storage %q: PITR is not supported for SeaweedFS filer metadata backups", name),
+			}
+		}
+
+		bs, err := c.BackupStorage(name)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil, controller.WaitFor(fmt.Sprintf("BackupStorage %q not yet present", name))
+			}
+			return nil, err
+		}
+
+		spec, err := mapBackupStorageToSeaweed(bs)
+		if err != nil {
+			return nil, err
+		}
+		out[name] = *spec
+	}
+	return out, nil
+}
+
+// mapBackupStorageToSeaweed translates one OpenEverest BackupStorage into the
+// operator's BackupStorageSpec. Only type s3 is supported.
+func mapBackupStorageToSeaweed(bs *backupv1alpha1.BackupStorage) (*seaweedv1.BackupStorageSpec, error) {
+	if bs.Spec.Type != backupv1alpha1.BackupStorageTypeS3 || bs.Spec.S3 == nil {
+		return nil, &controller.BackupConfigError{
+			Reason:  "UnsupportedStorageType",
+			Message: fmt.Sprintf("BackupStorage %q: only type s3 is supported", bs.Name),
+		}
+	}
+
+	s3 := bs.Spec.S3
+	// OpenEverest defaults verifyTLS to true. The operator has no equivalent
+	// field; false would silently become verified TLS on the mirror/sink.
+	if s3.VerifyTLS != nil && !*s3.VerifyTLS {
+		return nil, &controller.BackupConfigError{
+			Reason:  "VerifyTLSUnsupported",
+			Message: fmt.Sprintf("BackupStorage %q: verifyTLS false is not supported (seaweedfs-operator has no insecure TLS option)", bs.Name),
+		}
+	}
+
+	credName := s3.CredentialsSecretRef.Name
+	if credName == "" {
+		return nil, &controller.BackupConfigError{
+			Reason:  "MissingCredentialsSecret",
+			Message: fmt.Sprintf("BackupStorage %q: credentialsSecretRef.name is required", bs.Name),
+		}
+	}
+
+	// OpenEverest defaults forcePathStyle to false; the operator defaults the
+	// omitted field to true. Always set the pointer so false stays false.
+	forcePath := false
+	if s3.ForcePathStyle != nil {
+		forcePath = *s3.ForcePathStyle
+	}
+
+	return &seaweedv1.BackupStorageSpec{
+		Type: seaweedv1.BackupStorageS3,
+		S3: &seaweedv1.S3BackupStore{
+			Bucket:         s3.Bucket,
+			Region:         s3.Region,
+			Endpoint:       s3.EndpointURL,
+			Directory:      defaultBackupDirectory,
+			ForcePathStyle: pointer.To(forcePath),
+		},
+		CredentialsSecret: pointer.To(credName),
+	}, nil
+}
+
+func validateSeaweedBackupStorageName(name string) error {
+	if errs := validation.IsDNS1123Label(name); len(errs) > 0 {
+		return fmt.Errorf("backup storage name %q must be a lowercase RFC 1123 label: %s", name, strings.Join(errs, "; "))
+	}
+	if len(name) > seaweedBackupStorageNameMax {
+		return fmt.Errorf("backup storage name %q must be at most %d characters (seaweedfs-operator limit)", name, seaweedBackupStorageNameMax)
+	}
+	return nil
+}
 
 // SyncBackup creates or updates the operator's backup resource, sets a controller
 // reference from the Backup CR to enable owner-based watches, and maps operator
@@ -36,49 +169,6 @@ func (p *Provider) SyncBackup(c *controller.Context, backup *backupv1alpha1.Back
 	l.Info("Syncing backup", "name", backup.Name)
 
 	// TODO: Implement backup sync logic.
-	// Typical pattern:
-	//   1. Create or update the operator backup CR
-	//   2. Set the backup spec (storage, cluster name, etc.)
-	//   3. Set controller reference so the Backup owns the operator resource
-	//   4. Map operator backup status to BackupExecutionStatus
-	//
-	// Example:
-	//   ob := &operatorv1.MyDatabaseBackup{}
-	//   if err := c.Get(ob, c.Name()); err != nil {
-	//       return controller.BackupExecutionStatus{
-	//           State:   backupv1alpha1.BackupStatePending,
-	//           Message: "Waiting for backup to exist",
-	//       }, nil
-	//   }
-	//
-	//   if _, err := controllerutil.CreateOrUpdate(c.Context(), c.Client(), ob, func() error {
-	//       // Set spec fields here
-	//       return controllerutil.SetControllerReference(backup, ob, c.Client().Scheme())
-	//   }); err != nil {
-	//       return controller.BackupExecutionStatus{}, err
-	//   }
-	//
-	//   exec := controller.BackupExecutionStatus{
-	//       OperatorBackupRef: &common.TypedObjectRef{
-	//           Group: operatorv1.SchemeGroupVersion.Group,
-	//           Kind:  "MyDatabaseBackup",
-	//           Name:  ob.Name,
-	//       },
-	//       State: backupv1alpha1.BackupStatePending,
-	//   }
-	//
-	//   switch ob.Status.State {
-	//   case "ready":
-	//       exec.State = backupv1alpha1.BackupStateSucceeded
-	//       exec.CompletedAt = pointer.To(metav1.Now())
-	//   case "error":
-	//       exec.State = backupv1alpha1.BackupStateFailed
-	//       exec.Message = ob.Status.Error
-	//   case "running":
-	//       exec.State = backupv1alpha1.BackupStateRunning
-	//   }
-	//   return exec, nil
-
 	return controller.BackupExecutionStatus{
 		State: backupv1alpha1.BackupStatePending,
 	}, nil
@@ -92,53 +182,6 @@ func (p *Provider) SyncRestore(c *controller.Context, restore *backupv1alpha1.Re
 	l.Info("Syncing restore", "name", restore.Name)
 
 	// TODO: Implement restore sync logic.
-	// Typical pattern:
-	//   1. Get the source Backup CR
-	//   2. Create or update the operator restore CR
-	//   3. Set the restore spec (backup reference, cluster name, etc.)
-	//   4. Set controller reference so the Restore owns the operator resource
-	//   5. Map operator restore status to RestoreExecutionStatus
-	//
-	// Example:
-	//   backup := &backupv1alpha1.Backup{}
-	//   if err := c.Get(backup, restore.Spec.DataSource.Backup.BackupRef.Name); err != nil {
-	//       return controller.RestoreExecutionStatus{
-	//           State:   backupv1alpha1.RestoreStateFailed,
-	//           Message: fmt.Sprintf("source Backup %q not found", restore.Spec.DataSource.Backup.BackupRef.Name),
-	//       }, nil
-	//   }
-	//
-	//   or := &operatorv1.MyDatabaseRestore{
-	//       ObjectMeta: metav1.ObjectMeta{Name: restore.Name, Namespace: restore.Namespace},
-	//   }
-	//   if _, err := controllerutil.CreateOrUpdate(c.Context(), c.Client(), or, func() error {
-	//       // Set spec fields here
-	//       return controllerutil.SetControllerReference(restore, or, c.Client().Scheme())
-	//   }); err != nil {
-	//       return controller.RestoreExecutionStatus{}, err
-	//   }
-	//
-	//   exec := controller.RestoreExecutionStatus{
-	//       OperatorRestoreRef: &common.TypedObjectRef{
-	//           Group: operatorv1.SchemeGroupVersion.Group,
-	//           Kind:  "MyDatabaseRestore",
-	//           Name:  or.Name,
-	//       },
-	//       State: backupv1alpha1.RestoreStatePending,
-	//   }
-	//
-	//   switch or.Status.State {
-	//   case "ready":
-	//       exec.State = backupv1alpha1.RestoreStateSucceeded
-	//       exec.CompletedAt = pointer.To(metav1.Now())
-	//   case "error":
-	//       exec.State = backupv1alpha1.RestoreStateFailed
-	//       exec.Message = or.Status.Error
-	//   case "running":
-	//       exec.State = backupv1alpha1.RestoreStateRunning
-	//   }
-	//   return exec, nil
-
 	return controller.RestoreExecutionStatus{
 		State: backupv1alpha1.RestoreStatePending,
 	}, nil
@@ -152,31 +195,6 @@ func (p *Provider) CleanupBackup(c *controller.Context, backup *backupv1alpha1.B
 	l.Info("Cleaning up backup", "name", backup.Name)
 
 	// TODO: Implement backup cleanup logic.
-	// Typical pattern:
-	//   1. Get the operator backup CR
-	//   2. If DeletionPolicy is Retain, remove storage protection finalizers
-	//   3. Delete the operator backup CR
-	//   4. Return true when fully deleted, false to requeue
-	//
-	// Example:
-	//   ob := &operatorv1.MyDatabaseBackup{}
-	//   err := c.Get(ob, backup.Name)
-	//   if apierrors.IsNotFound(err) {
-	//       return true, nil
-	//   }
-	//   if err != nil {
-	//       return false, err
-	//   }
-	//
-	//   if backup.Spec.DeletionPolicy == backupv1alpha1.BackupDeletionPolicyRetain {
-	//       // TODO: remove storage protection finalizer
-	//   }
-	//
-	//   if ob.DeletionTimestamp.IsZero() {
-	//       return false, c.Delete(ob)
-	//   }
-	//   return false, nil
-
 	return true, nil
 }
 
@@ -187,25 +205,6 @@ func (p *Provider) CleanupRestore(c *controller.Context, restore *backupv1alpha1
 	l.Info("Cleaning up restore", "name", restore.Name)
 
 	// TODO: Implement restore cleanup logic.
-	// Typical pattern:
-	//   1. Get the operator restore CR
-	//   2. Delete the operator restore CR
-	//   3. Return true when fully deleted, false to requeue
-	//
-	// Example:
-	//   or := &operatorv1.MyDatabaseRestore{}
-	//   err := c.Get(or, restore.Name)
-	//   if apierrors.IsNotFound(err) {
-	//       return true, nil
-	//   }
-	//   if err != nil {
-	//       return false, err
-	//   }
-	//   if or.DeletionTimestamp.IsZero() {
-	//       return false, c.Delete(or)
-	//   }
-	//   return false, nil
-
 	return true, nil
 }
 
@@ -213,11 +212,6 @@ func (p *Provider) CleanupRestore(c *controller.Context, restore *backupv1alpha1
 // backup status changes trigger reconciliation. Use WatchOwned for resources with
 // controller references set by SyncBackup.
 func (p *Provider) BackupWatches() []controller.WatchConfig {
-	// TODO: Register watches for your operator backup resource.
-	// Example:
-	//   return []controller.WatchConfig{
-	//       controller.WatchOwned(&operatorv1.MyDatabaseBackup{}),
-	//   }
 	return []controller.WatchConfig{}
 }
 
@@ -225,10 +219,5 @@ func (p *Provider) BackupWatches() []controller.WatchConfig {
 // restore status changes trigger reconciliation. Use WatchOwned for resources with
 // controller references set by SyncRestore.
 func (p *Provider) RestoreWatches() []controller.WatchConfig {
-	// TODO: Register watches for your operator restore resource.
-	// Example:
-	//   return []controller.WatchConfig{
-	//       controller.WatchOwned(&operatorv1.MyDatabaseRestore{}),
-	//   }
 	return []controller.WatchConfig{}
 }
