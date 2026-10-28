@@ -68,11 +68,16 @@ func validateS3Parameters(spec components.S3CustomSpec) error {
 	return nil
 }
 
-// s3IngressEnabled is true when Ingress is turned on explicitly or when a host
-// is set. The UI toggleable Ingress group omits enabled and only sends nested
-// fields while the group is on.
+// s3IngressEnabled is true when Ingress is turned on explicitly, or when enabled
+// is omitted and a host is set (UI toggleable group). Explicit false wins over host.
 func s3IngressEnabled(ing *components.S3IngressSpec) bool {
-	return ing != nil && (ing.Enabled || ing.Host != "")
+	if ing == nil {
+		return false
+	}
+	if ing.Enabled != nil {
+		return *ing.Enabled
+	}
+	return ing.Host != ""
 }
 
 func validateS3Ingress(ing *components.S3IngressSpec) error {

@@ -76,9 +76,11 @@ type S3HTTPSSpec struct {
 
 // S3IngressSpec mirrors seaweedfs-operator IngressSpec for the standalone S3 gateway.
 type S3IngressSpec struct {
-	// Enabled turns on Ingress generation. Optional when Host is set: the UI
-	// toggleable Ingress group omits this field and only sends nested values.
-	Enabled bool `json:"enabled,omitempty"`
+	// Enabled turns on Ingress generation. Nil means "on when Host is set" so
+	// the UI toggleable Ingress group can omit this field and only send nested
+	// values. Explicit false disables Ingress even if Host is set.
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
 
 	// Host is the hostname the Ingress listens on. Required when Ingress is on;
 	// a non-empty host also enables Ingress when Enabled is omitted.
