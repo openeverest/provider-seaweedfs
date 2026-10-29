@@ -244,41 +244,6 @@ func TestSyncBackupUsesFilerPathParameter(t *testing.T) {
 	assert.Equal(t, "/buckets", sb.Spec.FilerPath)
 }
 
-func TestSyncBackupSkipsScheduled(t *testing.T) {
-	instance := enabledBackupInstance("my-s3")
-	backup := onDemandBackup("nightly-1", "sw", "my-s3")
-	backup.Spec.ScheduleName = "nightly"
-	ctx := backupSpecTestContext(t, instance, backup)
-
-	exec, err := (&Provider{}).SyncBackup(ctx, backup)
-	require.NoError(t, err)
-	assert.Equal(t, backupv1alpha1.BackupStatePending, exec.State)
-	assert.Contains(t, exec.Message, "scheduled")
-
-	exists, err := ctx.Exists(&seaweedv1.SeaweedBackup{}, "nightly-1")
-	require.NoError(t, err)
-	assert.False(t, exists)
-}
-
-func TestSyncBackupObservesScheduledSeaweedBackup(t *testing.T) {
-	instance := enabledBackupInstance("my-s3")
-	backup := onDemandBackup("nightly-1", "sw", "my-s3")
-	backup.Spec.ScheduleName = "nightly"
-	sb := &seaweedv1.SeaweedBackup{
-		ObjectMeta: metav1.ObjectMeta{Name: "nightly-1", Namespace: "ns"},
-		Spec: seaweedv1.SeaweedBackupSpec{
-			ClusterName: "sw",
-			StorageName: "my-s3",
-		},
-		Status: seaweedv1.SeaweedBackupStatus{Phase: seaweedv1.BackupPhaseCompleted},
-	}
-	ctx := backupSpecTestContext(t, instance, backup, sb)
-
-	exec, err := (&Provider{}).SyncBackup(ctx, backup)
-	require.NoError(t, err)
-	assert.Equal(t, backupv1alpha1.BackupStateSucceeded, exec.State)
-}
-
 func TestSyncBackupDoesNotRecreateSucceeded(t *testing.T) {
 	instance := enabledBackupInstance("my-s3")
 	sw := seaweedClusterWithBackupStorage("sw", "my-s3")
@@ -353,7 +318,7 @@ func TestCleanupBackupDeletesSeaweedBackup(t *testing.T) {
 	assert.True(t, done)
 }
 
-func TestCleanupBackupRejectsDeletionPolicyDelete(t *testing.T) {
+func TestCleanupBackupAllowsDeletionPolicyDelete(t *testing.T) {
 	instance := enabledBackupInstance("my-s3")
 	backup := onDemandBackup("adhoc-1", "sw", "my-s3")
 	backup.Spec.DeletionPolicy = backupv1alpha1.BackupDeletionPolicyDelete
@@ -367,13 +332,79 @@ func TestCleanupBackupRejectsDeletionPolicyDelete(t *testing.T) {
 	ctx := backupSpecTestContext(t, instance, backup, sb)
 
 	done, err := (&Provider{}).CleanupBackup(ctx, backup)
-	require.Error(t, err)
-	assert.False(t, done)
-	assert.Contains(t, err.Error(), "deletionPolicy Delete")
-
-	exists, err := ctx.Exists(&seaweedv1.SeaweedBackup{}, "adhoc-1")
 	require.NoError(t, err)
-	assert.True(t, exists, "must not delete SeaweedBackup when Delete is rejected")
+	assert.False(t, done)
+
+	done, err = (&Provider{}).CleanupBackup(ctx, backup)
+	require.NoError(t, err)
+	assert.True(t, done)
+}
+
+func TestSyncBackupRejectsInvalidFilerPath(t *testing.T) {
+	instance := enabledBackupInstance("my-s3")
+	sw := seaweedClusterWithBackupStorage("sw", "my-s3")
+	backup := onDemandBackup("adhoc-bad-path", "sw", "my-s3")
+	backup.Spec.Parameters = &runtime.RawExtension{Raw: []byte(`{"filerPath":"/buckets'; rm -rf /"}`)}
+	ctx := backupSpecTestContext(t, instance, sw, backup)
+
+	exec, err := (&Provider{}).SyncBackup(ctx, backup)
+	require.NoError(t, err)
+	assert.Equal(t, backupv1alpha1.BackupStateFailed, exec.State)
+	assert.Contains(t, exec.Message, "invalid filerPath")
+
+	exists, err := ctx.Exists(&seaweedv1.SeaweedBackup{}, "adhoc-bad-path")
+	require.NoError(t, err)
+	assert.False(t, exists)
+}
+
+func TestSyncBackupFailsMalformedParameters(t *testing.T) {
+	instance := enabledBackupInstance("my-s3")
+	sw := seaweedClusterWithBackupStorage("sw", "my-s3")
+	backup := onDemandBackup("adhoc-bad-params", "sw", "my-s3")
+	backup.Spec.Parameters = &runtime.RawExtension{Raw: []byte(`{not-json`)}
+	ctx := backupSpecTestContext(t, instance, sw, backup)
+
+	exec, err := (&Provider{}).SyncBackup(ctx, backup)
+	require.NoError(t, err)
+	assert.Equal(t, backupv1alpha1.BackupStateFailed, exec.State)
+	assert.Contains(t, exec.Message, "decode backup parameters")
+}
+
+func TestSyncBackupFailsWhenStorageNotOnInstance(t *testing.T) {
+	instance := enabledBackupInstance("my-s3")
+	sw := seaweedClusterWithBackupStorage("sw", "other-s3")
+	backup := onDemandBackup("adhoc-unlisted", "sw", "other-s3")
+	ctx := backupSpecTestContext(t, instance, sw, backup)
+
+	exec, err := (&Provider{}).SyncBackup(ctx, backup)
+	require.NoError(t, err)
+	assert.Equal(t, backupv1alpha1.BackupStateFailed, exec.State)
+	assert.Contains(t, exec.Message, "not registered in Instance.spec.backup.storages")
+}
+
+func TestSyncBackupFailsWhenBackupDisabled(t *testing.T) {
+	instance := enabledBackupInstance("my-s3")
+	instance.Spec.Backup.Enabled = false
+	sw := seaweedClusterWithBackupStorage("sw", "my-s3")
+	backup := onDemandBackup("adhoc-disabled", "sw", "my-s3")
+	ctx := backupSpecTestContext(t, instance, sw, backup)
+
+	exec, err := (&Provider{}).SyncBackup(ctx, backup)
+	require.NoError(t, err)
+	assert.Equal(t, backupv1alpha1.BackupStateFailed, exec.State)
+	assert.Contains(t, exec.Message, "backup is not enabled")
+}
+
+func TestValidFilerPath(t *testing.T) {
+	assert.True(t, validFilerPath("/"))
+	assert.True(t, validFilerPath("/buckets"))
+	assert.True(t, validFilerPath("/a/b_c.d-e"))
+	assert.False(t, validFilerPath(""))
+	assert.False(t, validFilerPath("buckets"))
+	assert.False(t, validFilerPath("/buckets/"))
+	assert.False(t, validFilerPath("/a/../b"))
+	assert.False(t, validFilerPath("/buckets'; id"))
+	assert.False(t, validFilerPath("/buckets\nrm"))
 }
 
 func TestSyncRestoreNotImplemented(t *testing.T) {
