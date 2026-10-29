@@ -170,6 +170,13 @@ func validateSeaweedBackupStorageName(name string) error {
 
 const seaweedBackupKind = "SeaweedBackup"
 
+// deletionPolicyDeleteUnsupported is returned when Backup.spec.deletionPolicy
+// is Delete (the OpenEverest default). The operator does not purge
+// filer.meta.gz when a SeaweedBackup is deleted, and this provider does not
+// remove the filer catalog either, so Delete would silently leave data behind.
+// Require Retain until filer-catalog purge is implemented.
+const deletionPolicyDeleteUnsupported = "deletionPolicy Delete is not supported: filer catalog purge is not implemented; set deletionPolicy: Retain"
+
 // SyncBackup creates a SeaweedBackup for on-demand Backups and maps operator
 // status. Scheduled Backups (spec.scheduleName set) are observed only — the
 // seaweedfs-operator scheduler owns those SeaweedBackups.
@@ -185,6 +192,13 @@ func (p *Provider) SyncBackup(c *controller.Context, backup *backupv1alpha1.Back
 	// delete it again and we would snapshot forever.
 	if backup.Status.State == backupv1alpha1.BackupStateSucceeded {
 		return preserveSucceededBackup(backup), nil
+	}
+
+	if err := requireRetainDeletionPolicy(backup); err != nil {
+		return controller.BackupExecutionStatus{
+			State:   backupv1alpha1.BackupStateFailed,
+			Message: err.Error(),
+		}, nil
 	}
 
 	sw := &seaweedv1.Seaweed{}
@@ -328,25 +342,29 @@ func decodeBackupParameters(raw *runtime.RawExtension) (seaweedfsfilermeta.Seawe
 	return cfg, nil
 }
 
-// SyncRestore resolves the source Backup CR, creates or updates the operator's
-// restore resource with a controller reference, and maps operator status to
-// OpenEverest states.
+// SyncRestore is not implemented yet. Return Failed so Restore CRs do not
+// sit in Pending and requeue forever.
 func (p *Provider) SyncRestore(c *controller.Context, restore *backupv1alpha1.Restore) (controller.RestoreExecutionStatus, error) {
 	l := log.FromContext(c.Context())
 	l.Info("Syncing restore", "name", restore.Name)
 
-	// TODO: Implement restore sync logic.
 	return controller.RestoreExecutionStatus{
-		State: backupv1alpha1.RestoreStatePending,
+		State:   backupv1alpha1.RestoreStateFailed,
+		Message: "restore is not implemented for seaweedfs-filer-meta",
 	}, nil
 }
 
-// CleanupBackup deletes the SeaweedBackup CR. Delete and Retain both remove
-// only the CR; the filer catalog at /.seaweedfs-operator/backups/<name> is left
-// (same as operator keep). Return true when fully gone.
+// CleanupBackup deletes the SeaweedBackup CR when deletionPolicy is Retain.
+// Delete is rejected: this provider does not purge
+// /.seaweedfs-operator/backups/<name>/filer.meta.gz from the filer.
+// Return true when fully gone.
 func (p *Provider) CleanupBackup(c *controller.Context, backup *backupv1alpha1.Backup) (bool, error) {
 	l := log.FromContext(c.Context())
 	l.Info("Cleaning up backup", "name", backup.Name)
+
+	if err := requireRetainDeletionPolicy(backup); err != nil {
+		return false, err
+	}
 
 	sb := &seaweedv1.SeaweedBackup{}
 	if err := c.Get(sb, backup.Name); err != nil {
@@ -363,14 +381,20 @@ func (p *Provider) CleanupBackup(c *controller.Context, backup *backupv1alpha1.B
 	return false, nil
 }
 
-// CleanupRestore deletes the operator restore resource. Return true when fully
-// deleted, false to requeue.
+// CleanupRestore has nothing to delete until SyncRestore creates a
+// SeaweedRestore. Return true so the Restore finalizer can be removed.
 func (p *Provider) CleanupRestore(c *controller.Context, restore *backupv1alpha1.Restore) (bool, error) {
 	l := log.FromContext(c.Context())
 	l.Info("Cleaning up restore", "name", restore.Name)
 
-	// TODO: Implement restore cleanup logic.
 	return true, nil
+}
+
+func requireRetainDeletionPolicy(backup *backupv1alpha1.Backup) error {
+	if backup.Spec.DeletionPolicy == backupv1alpha1.BackupDeletionPolicyRetain {
+		return nil
+	}
+	return fmt.Errorf("%s", deletionPolicyDeleteUnsupported)
 }
 
 // BackupWatches implements controller.BackupWatcher.

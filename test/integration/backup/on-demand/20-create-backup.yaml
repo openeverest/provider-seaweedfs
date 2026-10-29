@@ -11,3 +11,5 @@ spec:
     name: seaweedfs-filer-meta
   storageRef:
     name: test-s3
+  # Delete would require purging filer.meta.gz; rejected until that lands.
+  deletionPolicy: Retain

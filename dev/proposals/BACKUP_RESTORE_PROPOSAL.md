@@ -92,7 +92,7 @@ That runs `fs.meta.save` once and stages the catalog on the filer. `Completed` m
 
 `SyncBackup` creates a `SeaweedBackup` for an on-demand `Backup` only. It does not create one for a `Backup` with `spec.scheduleName` set (those are observed only), and it does not create one again when the `Backup` is already `Succeeded`. Otherwise a pruned `SeaweedBackup` would be recreated under the old name, a new snapshot would run, and `keep` would prune it again.
 
-`CleanupBackup` deletes the `SeaweedBackup` CR for both `deletionPolicy: Delete` and `Retain`. It does not remove `filer.meta.gz` from the filer.
+`deletionPolicy: Delete` is rejected (`SyncBackup` → `Failed`, `CleanupBackup` errors). The provider does not purge `filer.meta.gz` from the filer, so Delete would silently leave data behind. Use `deletionPolicy: Retain`. `CleanupBackup` then deletes only the `SeaweedBackup` CR and leaves the filer catalog (same as operator `keep`).
 
 Scheduled backups stay on the SeaweedFS scheduler. The provider mirrors each scheduler-created `SeaweedBackup` back as an OpenEverest `Backup` with `spec.scheduleName` set and `deletionPolicy: Retain`. When `keep` deletes the `SeaweedBackup`, the provider deletes that mirrored `Backup`.
 
@@ -104,7 +104,7 @@ Retention maps only for a count. `retention: {type: count, count: 7}` becomes `k
 
 `keep` deletes old `SeaweedBackup` objects and their Jobs. It does not delete `filer.meta.gz`.
 
-`deletionPolicy: Delete` is the OpenEverest default. Cleanup either deletes `/.seaweedfs-operator/backups/<name>` from the filer (the S3 copy stays) or rejects `Delete`. Which of those two is decided at implementation. Mirrored scheduled backups are created with `Retain`.
+`deletionPolicy: Delete` is the OpenEverest default but is rejected until filer-catalog purge is implemented. On-demand and mirrored scheduled backups must use `Retain`. Mirrored scheduled backups are created with `Retain`.
 
 Storage and schedule names must be lowercase RFC 1123 labels of at most 50 characters. That is what the operator accepts as `spec.backup.storages` keys and schedule names.
 

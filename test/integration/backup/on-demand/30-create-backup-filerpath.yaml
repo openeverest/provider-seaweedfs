@@ -11,5 +11,6 @@ spec:
     name: seaweedfs-filer-meta
   storageRef:
     name: test-s3
+  deletionPolicy: Retain
   parameters:
     filerPath: /buckets
