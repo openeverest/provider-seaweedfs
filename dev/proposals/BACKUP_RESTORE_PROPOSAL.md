@@ -10,7 +10,7 @@ A backup here is a filer metadata snapshot (`fs.meta.save` / `fs.meta.load`). It
 
 | OpenEverest | SeaweedFS operator |
 |---|---|
-| `BackupClass` | One class, `executionMode: ProviderManaged`, `supportsPITR: false`. The provider creates the SeaweedFS objects. OpenEverest does not run the backup Job itself. |
+| `BackupClass` | One class, `seaweedfs-filer-meta`, `executionMode: ProviderManaged`, `supportsPITR: false`, `maxPITREnabledStorages: 0`. The provider creates the SeaweedFS objects. OpenEverest does not run the backup Job itself. |
 | `BackupStorage` | One entry in `Seaweed.spec.backup.storages`, keyed by the `BackupStorage` name. Type `s3`. |
 | `Instance.spec.backup.storages[].schedules` | `Seaweed.spec.backup.schedule` |
 | `Backup` (on demand) | `SeaweedBackup` created by the provider |
@@ -23,7 +23,7 @@ For S3, `storageRef` does not choose where the catalog is written. Every object-
 
 ## Backup
 
-The provider writes this onto the `Seaweed` when backup is enabled:
+The provider writes this onto the `Seaweed` when backup is enabled.
 
 ```yaml
 spec:
@@ -35,9 +35,17 @@ spec:
           bucket: my-bucket        # BackupStorage.spec.s3.bucket
           region: us-west-2        # BackupStorage.spec.s3.region
           endpoint: https://s3.example.com
-          directory: /
-          forcePathStyle: false    # the BackupStorage value, including false
+          directory: /             # fixed; BackupStorage has no directory field
+          forcePathStyle: false    # always set; false must not become the operator default true
         credentialsSecret: my-s3-creds
+    # Not written by Sync yet (later slices):
+    # schedule: [...]
+    # dataMirror: [...]
+```
+
+Target shape once schedules land:
+
+```yaml
     schedule:
       - name: nightly              # schedule name
         schedule: "0 2 * * *"      # schedule.cron
@@ -47,7 +55,7 @@ spec:
         suspend: false             # enabled: false becomes suspend: true
 ```
 
-`dataMirror` is not in that example. It is opt-in. See below.
+`dataMirror` is opt-in. See below.
 
 Field mapping for S3:
 
@@ -61,9 +69,11 @@ Field mapping for S3:
 
 The Secret keys are the same on both sides: `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
 
-OpenEverest defaults `forcePathStyle` to false. The operator defaults it to true when the field is omitted. The provider passes the `BackupStorage` value through, so false stays false. An in-cluster MinIO or SeaweedFS endpoint needs `forcePathStyle: true` on the `BackupStorage`.
+OpenEverest defaults `forcePathStyle` to false. The operator defaults it to true when the field is omitted. The provider always sets `forcePathStyle` on the `Seaweed` storage (nil/`false` → `false`), so false stays false. An in-cluster MinIO or SeaweedFS endpoint needs `forcePathStyle: true` on the `BackupStorage`.
 
-`verifyTLS: false` is rejected. The operator's S3 storage has no such field, so dropping it would make the mirror fail. The default `verifyTLS: true` is left unset on the `Seaweed`.
+`verifyTLS: false` is rejected with a `BackupConfigured` condition (`VerifyTLSUnsupported`). The operator's S3 storage has no such field, so dropping it would make the mirror fail. The default `verifyTLS: true` is left unset on the `Seaweed`.
+
+Storage map keys must pass the operator webhook: lowercase RFC 1123 label, at most 50 characters. Invalid names become `BackupConfigured`=`InvalidStorageName`. PITR on a storage is rejected (`PITRConfigInvalid`). A missing `BackupStorage` requeues Sync until it appears.
 
 An on-demand `Backup` becomes a `SeaweedBackup`:
 
@@ -80,7 +90,9 @@ spec:
 
 That runs `fs.meta.save` once and stages the catalog on the filer. `Completed` means that Job finished. Nothing checks that a mirror copied the file to the bucket, or that a mirror is running.
 
-`SyncBackup` creates a `SeaweedBackup` for an on-demand `Backup` only. It does not create one for a `Backup` with `spec.scheduleName` set, and it does not create one again when the `Backup` is already `Succeeded`. Otherwise a pruned `SeaweedBackup` would be recreated under the old name, a new snapshot would run, and `keep` would prune it again.
+`SyncBackup` creates a `SeaweedBackup` for an on-demand `Backup` only. It does not create one for a `Backup` with `spec.scheduleName` set (those are observed only), and it does not create one again when the `Backup` is already `Succeeded`. Otherwise a pruned `SeaweedBackup` would be recreated under the old name, a new snapshot would run, and `keep` would prune it again.
+
+`deletionPolicy: Delete` is rejected (`SyncBackup` → `Failed`, `CleanupBackup` errors). The provider does not purge `filer.meta.gz` from the filer, so Delete would silently leave data behind. Use `deletionPolicy: Retain`. `CleanupBackup` then deletes only the `SeaweedBackup` CR and leaves the filer catalog (same as operator `keep`).
 
 Scheduled backups stay on the SeaweedFS scheduler. The provider mirrors each scheduler-created `SeaweedBackup` back as an OpenEverest `Backup` with `spec.scheduleName` set and `deletionPolicy: Retain`. When `keep` deletes the `SeaweedBackup`, the provider deletes that mirrored `Backup`.
 
@@ -92,7 +104,7 @@ Retention maps only for a count. `retention: {type: count, count: 7}` becomes `k
 
 `keep` deletes old `SeaweedBackup` objects and their Jobs. It does not delete `filer.meta.gz`.
 
-`deletionPolicy: Delete` is the OpenEverest default. Cleanup either deletes `/.seaweedfs-operator/backups/<name>` from the filer (the S3 copy stays) or rejects `Delete`. Which of those two is decided at implementation. Mirrored scheduled backups are created with `Retain`.
+`deletionPolicy: Delete` is the OpenEverest default but is rejected until filer-catalog purge is implemented. On-demand and mirrored scheduled backups must use `Retain`. Mirrored scheduled backups are created with `Retain`.
 
 Storage and schedule names must be lowercase RFC 1123 labels of at most 50 characters. That is what the operator accepts as `spec.backup.storages` keys and schedule names.
 

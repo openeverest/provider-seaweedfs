@@ -1,0 +1,33 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: backup-seaweedfs
+spec:
+  providerRef:
+    name: provider-seaweedfs
+  topology:
+    type: standalone
+  backup:
+    enabled: true
+    classRef:
+      name: seaweedfs-filer-meta
+    storages:
+      - storageRef:
+          name: test-s3
+  components:
+    master:
+      type: seaweedfs
+      replicas: 1
+    volume:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 1Gi
+    filer:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 1Gi
+    s3:
+      type: seaweedfs
+      replicas: 1

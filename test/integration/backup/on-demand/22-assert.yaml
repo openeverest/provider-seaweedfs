@@ -1,0 +1,13 @@
+apiVersion: backup.openeverest.io/v1alpha1
+kind: Backup
+metadata:
+  name: adhoc-1
+status:
+  state: Succeeded
+  executionMode: ProviderManaged
+  startedAt: "2026-01-01T00:00:00Z"
+  completedAt: "2026-01-01T00:01:00Z"
+  operatorBackupRef:
+    group: seaweed.seaweedfs.com
+    kind: SeaweedBackup
+    (starts_with(name, 'adhoc-1-')): true
