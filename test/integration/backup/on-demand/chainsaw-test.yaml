@@ -8,7 +8,8 @@ spec:
     On-demand filer-metadata backup lifecycle: register an S3 BackupStorage on
     the Instance, create a Backup, map SeaweedBackup status through
     Pending → Running → Succeeded, honour filerPath parameters, map Failed,
-    and delete the SeaweedBackup when the Backup CR is removed.
+    delete the SeaweedBackup when the Backup CR is removed, and confirm a
+    deletionPolicy Delete Backup fails at create then deletes without sticking.
   catch:
     - script:
         content: kubectl -n $NAMESPACE get instance,seaweed,backup,backupstorage,seaweedbackup,secret -o yaml
@@ -91,6 +92,26 @@ spec:
             apiVersion: seaweed.seaweedfs.com/v1
             kind: SeaweedBackup
             name: adhoc-1
+            for:
+              deletion: {}
+
+    # Delete-policy Backups fail at create (no SeaweedBackup). Cleanup must
+    # still remove the finalizer so deletion is not stuck forever.
+    - name: delete-policy-backup-fails-and-deletes
+      try:
+        - apply:
+            file: 40-create-backup-delete-policy.yaml
+        - assert:
+            file: 40-assert.yaml
+        - delete:
+            ref:
+              apiVersion: backup.openeverest.io/v1alpha1
+              kind: Backup
+              name: adhoc-delete-policy
+        - wait:
+            apiVersion: backup.openeverest.io/v1alpha1
+            kind: Backup
+            name: adhoc-delete-policy
             for:
               deletion: {}
 
