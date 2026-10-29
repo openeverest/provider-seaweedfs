@@ -64,7 +64,94 @@ func buildBackupSpec(c *controller.Context) (*seaweedv1.BackupSpec, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &seaweedv1.BackupSpec{Storages: storages}, nil
+	schedules, err := buildSeaweedSchedules(cfg.Storages)
+	if err != nil {
+		return nil, err
+	}
+	return &seaweedv1.BackupSpec{Storages: storages, Schedule: schedules}, nil
+}
+
+func buildSeaweedSchedules(entries []corev1alpha1.InstanceBackupStorage) ([]seaweedv1.BackupScheduleSpec, error) {
+	var out []seaweedv1.BackupScheduleSpec
+	// schedule name -> storage that registered it
+	seen := make(map[string]string)
+	for _, entry := range entries {
+		storageName := entry.StorageRef.Name
+		for _, sched := range entry.Schedules {
+			if err := validateSeaweedBackupLabelName("backup schedule", sched.Name); err != nil {
+				return nil, &controller.BackupConfigError{
+					Reason:  "InvalidScheduleName",
+					Message: err.Error(),
+				}
+			}
+			if prev, ok := seen[sched.Name]; ok {
+				return nil, &controller.BackupConfigError{
+					Reason: "DuplicateSchedule",
+					Message: fmt.Sprintf(
+						"backup schedule %q is registered more than once (storages %q and %q)",
+						sched.Name, prev, storageName,
+					),
+				}
+			}
+			seen[sched.Name] = storageName
+
+			keep, err := mapScheduleKeep(sched)
+			if err != nil {
+				return nil, err
+			}
+
+			params, err := decodeBackupParameters(sched.Parameters)
+			if err != nil {
+				return nil, &controller.BackupConfigError{
+					Reason:  "InvalidScheduleParameters",
+					Message: err.Error(),
+				}
+			}
+			filerPath := params.FilerPath
+			if filerPath == "" {
+				filerPath = "/"
+			}
+
+			out = append(out, seaweedv1.BackupScheduleSpec{
+				Name:        sched.Name,
+				Schedule:    sched.Cron,
+				StorageName: storageName,
+				Keep:        keep,
+				FilerPath:   filerPath,
+				Suspend:     !sched.Enabled,
+			})
+		}
+	}
+	return out, nil
+}
+
+func mapScheduleKeep(sched corev1alpha1.InstanceBackupSchedule) (int32, error) {
+	if sched.Retention == nil {
+		return 0, nil
+	}
+	switch sched.Retention.Type {
+	case corev1alpha1.BackupScheduleRetentionTypeCount:
+		if sched.Retention.Count == nil {
+			return 0, &controller.BackupConfigError{
+				Reason:  "InvalidRetention",
+				Message: fmt.Sprintf("schedule %q: retention type count requires count", sched.Name),
+			}
+		}
+		return *sched.Retention.Count, nil
+	case corev1alpha1.BackupScheduleRetentionTypeTime:
+		return 0, &controller.BackupConfigError{
+			Reason: "UnsupportedRetention",
+			Message: fmt.Sprintf(
+				"schedule %q: time retention is not supported (seaweedfs-operator only supports keep count); use retention type count",
+				sched.Name,
+			),
+		}
+	default:
+		return 0, &controller.BackupConfigError{
+			Reason:  "InvalidRetention",
+			Message: fmt.Sprintf("schedule %q: unknown retention type %q", sched.Name, sched.Retention.Type),
+		}
+	}
 }
 
 func buildSeaweedStorages(
@@ -159,11 +246,17 @@ func mapBackupStorageToSeaweed(bs *backupv1alpha1.BackupStorage) (*seaweedv1.Bac
 }
 
 func validateSeaweedBackupStorageName(name string) error {
+	return validateSeaweedBackupLabelName("backup storage", name)
+}
+
+// validateSeaweedBackupLabelName enforces the seaweedfs-operator webhook rule for
+// spec.backup.storages keys and schedule names: lowercase RFC 1123, ≤50 chars.
+func validateSeaweedBackupLabelName(what, name string) error {
 	if errs := validation.IsDNS1123Label(name); len(errs) > 0 {
-		return fmt.Errorf("backup storage name %q must be a lowercase RFC 1123 label: %s", name, strings.Join(errs, "; "))
+		return fmt.Errorf("%s name %q must be a lowercase RFC 1123 label: %s", what, name, strings.Join(errs, "; "))
 	}
 	if len(name) > seaweedBackupStorageNameMax {
-		return fmt.Errorf("backup storage name %q must be at most %d characters (seaweedfs-operator limit)", name, seaweedBackupStorageNameMax)
+		return fmt.Errorf("%s name %q must be at most %d characters (seaweedfs-operator limit)", what, name, seaweedBackupStorageNameMax)
 	}
 	return nil
 }
