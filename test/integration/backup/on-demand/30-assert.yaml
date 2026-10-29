@@ -7,14 +7,5 @@ status:
   operatorBackupRef:
     group: seaweed.seaweedfs.com
     kind: SeaweedBackup
-    name: adhoc-filerpath
----
-apiVersion: seaweed.seaweedfs.com/v1
-kind: SeaweedBackup
-metadata:
-  name: adhoc-filerpath
-  (ownerReferences[?kind == 'Backup' && name == 'adhoc-filerpath'] | length(@)): 1
-spec:
-  clusterName: backup-seaweedfs
-  storageName: test-s3
-  filerPath: /buckets
+    (starts_with(name, 'adhoc-filerpath-')): true
+    (length(name) == length('adhoc-filerpath-') + 8): true

@@ -10,6 +10,8 @@ spec:
     Pending → Running → Succeeded, honour filerPath parameters, map Failed,
     delete the SeaweedBackup when the Backup CR is removed, and confirm a
     deletionPolicy Delete Backup fails at create then deletes without sticking.
+    SeaweedBackup names are UID-derived so Retain recreates do not overwrite
+    the previous filer catalog path.
   catch:
     - script:
         content: kubectl -n $NAMESPACE get instance,seaweed,backup,backupstorage,seaweedbackup,secret -o yaml
@@ -38,6 +40,15 @@ spec:
             file: 20-create-backup.yaml
         - assert:
             file: 20-assert.yaml
+        - script:
+            content: |
+              SB=$(kubectl get backup/adhoc-1 -n "$NAMESPACE" -o jsonpath='{.status.operatorBackupRef.name}')
+              test -n "$SB"
+              test "$SB" != "adhoc-1"
+              test "$(kubectl get seaweedbackup/"$SB" -n "$NAMESPACE" -o jsonpath='{.spec.clusterName}')" = "backup-seaweedfs"
+              test "$(kubectl get seaweedbackup/"$SB" -n "$NAMESPACE" -o jsonpath='{.spec.storageName}')" = "test-s3"
+              test "$(kubectl get seaweedbackup/"$SB" -n "$NAMESPACE" -o jsonpath='{.spec.filerPath}')" = "/"
+              test "$(kubectl get seaweedbackup/"$SB" -n "$NAMESPACE" -o jsonpath='{.metadata.ownerReferences[0].name}')" = "adhoc-1"
 
     # The seaweedfs-operator is scaled to 0, so the tests stand in for it by
     # patching SeaweedBackup status.
@@ -45,7 +56,8 @@ spec:
       try:
         - script:
             content: |
-              kubectl patch seaweedbackup/adhoc-1 --subresource status -n $NAMESPACE --type=merge \
+              SB=$(kubectl get backup/adhoc-1 -n "$NAMESPACE" -o jsonpath='{.status.operatorBackupRef.name}')
+              kubectl patch seaweedbackup/"$SB" --subresource status -n "$NAMESPACE" --type=merge \
                 -p '{"status":{"phase":"Running","startTime":"2026-01-01T00:00:00Z"}}'
         - assert:
             file: 21-assert.yaml
@@ -54,7 +66,8 @@ spec:
       try:
         - script:
             content: |
-              kubectl patch seaweedbackup/adhoc-1 --subresource status -n $NAMESPACE --type=merge \
+              SB=$(kubectl get backup/adhoc-1 -n "$NAMESPACE" -o jsonpath='{.status.operatorBackupRef.name}')
+              kubectl patch seaweedbackup/"$SB" --subresource status -n "$NAMESPACE" --type=merge \
                 -p '{"status":{"phase":"Completed","startTime":"2026-01-01T00:00:00Z","completionTime":"2026-01-01T00:01:00Z"}}'
         - assert:
             file: 22-assert.yaml
@@ -65,35 +78,32 @@ spec:
             file: 30-create-backup-filerpath.yaml
         - assert:
             file: 30-assert.yaml
+        - script:
+            content: |
+              SB=$(kubectl get backup/adhoc-filerpath -n "$NAMESPACE" -o jsonpath='{.status.operatorBackupRef.name}')
+              test -n "$SB"
+              test "$(kubectl get seaweedbackup/"$SB" -n "$NAMESPACE" -o jsonpath='{.spec.filerPath}')" = "/buckets"
+              test "$(kubectl get seaweedbackup/"$SB" -n "$NAMESPACE" -o jsonpath='{.metadata.ownerReferences[0].name}')" = "adhoc-filerpath"
 
     - name: backup-failed
       try:
         - script:
             content: |
-              kubectl patch seaweedbackup/adhoc-filerpath --subresource status -n $NAMESPACE --type=merge \
+              SB=$(kubectl get backup/adhoc-filerpath -n "$NAMESPACE" -o jsonpath='{.status.operatorBackupRef.name}')
+              kubectl patch seaweedbackup/"$SB" --subresource status -n "$NAMESPACE" --type=merge \
                 -p '{"status":{"phase":"Failed","conditions":[{"type":"Complete","status":"False","reason":"JobFailed","message":"snapshot job failed","lastTransitionTime":"2026-01-01T00:02:00Z"}]}}'
         - assert:
             file: 31-assert.yaml
 
     - name: delete-backup-cleans-seaweedbackup
       try:
-        - delete:
-            ref:
-              apiVersion: backup.openeverest.io/v1alpha1
-              kind: Backup
-              name: adhoc-1
-        - wait:
-            apiVersion: backup.openeverest.io/v1alpha1
-            kind: Backup
-            name: adhoc-1
-            for:
-              deletion: {}
-        - wait:
-            apiVersion: seaweed.seaweedfs.com/v1
-            kind: SeaweedBackup
-            name: adhoc-1
-            for:
-              deletion: {}
+        - script:
+            content: |
+              SB=$(kubectl get backup/adhoc-1 -n "$NAMESPACE" -o jsonpath='{.status.operatorBackupRef.name}')
+              test -n "$SB"
+              kubectl delete backup/adhoc-1 -n "$NAMESPACE"
+              kubectl wait --for=delete backup/adhoc-1 -n "$NAMESPACE" --timeout=60s
+              kubectl wait --for=delete "seaweedbackup/$SB" -n "$NAMESPACE" --timeout=60s
 
     # Delete-policy Backups fail at create (no SeaweedBackup). Cleanup must
     # still remove the finalizer so deletion is not stuck forever.
@@ -117,20 +127,10 @@ spec:
 
     - name: delete-cluster
       try:
-        - delete:
-            ref:
-              apiVersion: core.openeverest.io/v1alpha1
-              kind: Instance
-              name: backup-seaweedfs
-        - wait:
-            apiVersion: seaweed.seaweedfs.com/v1
-            kind: Seaweed
-            name: backup-seaweedfs
-            for:
-              deletion: {}
-        - wait:
-            apiVersion: seaweed.seaweedfs.com/v1
-            kind: SeaweedBackup
-            name: adhoc-filerpath
-            for:
-              deletion: {}
+        - script:
+            content: |
+              SB=$(kubectl get backup/adhoc-filerpath -n "$NAMESPACE" -o jsonpath='{.status.operatorBackupRef.name}')
+              test -n "$SB"
+              kubectl delete instance/backup-seaweedfs -n "$NAMESPACE"
+              kubectl wait --for=delete seaweed/backup-seaweedfs -n "$NAMESPACE" --timeout=120s
+              kubectl wait --for=delete "seaweedbackup/$SB" -n "$NAMESPACE" --timeout=120s
