@@ -10,4 +10,4 @@ status:
     kind: SeaweedBackup
     # UID-derived: <backup-name>-<uid[:8]>
     (starts_with(name, 'adhoc-1-')): true
-    (length(name) == length('adhoc-1-') + 8): true
+    (length(name)): 16

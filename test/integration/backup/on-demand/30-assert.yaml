@@ -8,4 +8,4 @@ status:
     group: seaweed.seaweedfs.com
     kind: SeaweedBackup
     (starts_with(name, 'adhoc-filerpath-')): true
-    (length(name) == length('adhoc-filerpath-') + 8): true
+    (length(name)): 24
