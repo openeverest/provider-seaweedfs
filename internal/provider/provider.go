@@ -68,7 +68,6 @@ func New() *Provider {
 			},
 			WatchConfigs: []controller.WatchConfig{
 				controller.WatchOwned(&seaweedv1.Seaweed{}),
-				controller.WatchOwned(&seaweedv1.SeaweedBackup{}),
 				// Re-apply the S3 identities Secret if it is edited or deleted.
 				controller.WatchOwned(&corev1.Secret{},
 					predicate.NewPredicateFuncs(func(o client.Object) bool {
