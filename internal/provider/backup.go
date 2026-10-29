@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/AlekSi/pointer"
+	"github.com/robfig/cron/v3"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -46,6 +47,10 @@ var _ controller.RestoreWatcher = (*Provider)(nil)
 // accepts for spec.backup.storages map keys (and schedule names). Stricter than
 // validation.DNS1123LabelMaxLength (63).
 const seaweedBackupStorageNameMax = 50
+
+// seaweedBackupCronMax is BackupScheduleSpec.Schedule's kubebuilder MaxLength
+// on the seaweedfs-operator CRD.
+const seaweedBackupCronMax = 120
 
 // defaultBackupDirectory is the sink prefix OpenEverest BackupStorage has no
 // field for. The proposal and operator examples use "/".
@@ -95,6 +100,10 @@ func buildSeaweedSchedules(entries []corev1alpha1.InstanceBackupStorage) ([]seaw
 			}
 			seen[sched.Name] = storageName
 
+			if err := validateScheduleCron(sched.Name, sched.Cron); err != nil {
+				return nil, err
+			}
+
 			keep, err := mapScheduleKeep(sched)
 			if err != nil {
 				return nil, err
@@ -123,6 +132,34 @@ func buildSeaweedSchedules(entries []corev1alpha1.InstanceBackupStorage) ([]seaw
 		}
 	}
 	return out, nil
+}
+
+func validateScheduleCron(scheduleName, expr string) error {
+	if expr == "" {
+		return &controller.BackupConfigError{
+			Reason:  "InvalidScheduleCron",
+			Message: fmt.Sprintf("schedule %q: cron is required", scheduleName),
+		}
+	}
+	if len(expr) > seaweedBackupCronMax {
+		return &controller.BackupConfigError{
+			Reason: "InvalidScheduleCron",
+			Message: fmt.Sprintf(
+				"schedule %q: cron must be at most %d characters (seaweedfs-operator limit)",
+				scheduleName, seaweedBackupCronMax,
+			),
+		}
+	}
+	if _, err := cron.ParseStandard(expr); err != nil {
+		return &controller.BackupConfigError{
+			Reason: "InvalidScheduleCron",
+			Message: fmt.Sprintf(
+				"schedule %q: invalid cron %q: %v",
+				scheduleName, expr, err,
+			),
+		}
+	}
+	return nil
 }
 
 func mapScheduleKeep(sched corev1alpha1.InstanceBackupSchedule) (int32, error) {
