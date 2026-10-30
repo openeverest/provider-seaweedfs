@@ -1,0 +1,93 @@
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: backup-scheduled
+spec:
+  description: |
+    Scheduled filer-metadata backup: write Instance schedules onto
+    Seaweed.spec.backup.schedule, mirror a scheduler-created SeaweedBackup
+    into a Backup (scheduleName + Retain), map status through
+    Pending → Running → Succeeded, and delete the mirrored Backup when keep
+    removes the SeaweedBackup. The seaweedfs-operator is scaled to 0; tests
+    create/patch SeaweedBackup objects directly (no real cron).
+  catch:
+    - script:
+        content: kubectl -n $NAMESPACE get instance,seaweed,backup,backupstorage,seaweedbackup,secret -o yaml
+    - podLogs:
+        namespace: provider-system
+        selector: app.kubernetes.io/name=provider-seaweedfs
+        tail: 100
+  steps:
+    - name: provider-operator-installed
+      try:
+        - assert:
+            file: 00-assert.yaml
+
+    - name: enable-backup-with-schedules
+      try:
+        - apply:
+            file: 10-setup.yaml
+        - apply:
+            file: 10-create-cluster.yaml
+        - assert:
+            file: 10-assert.yaml
+
+    - name: mirror-scheduled-seaweedbackup
+      try:
+        - apply:
+            file: 20-create-scheduled-seaweedbackup.yaml
+        - assert:
+            file: 20-assert.yaml
+
+    - name: backup-running
+      try:
+        - script:
+            content: |
+              kubectl patch seaweedbackup/backup-seaweedfs-nightly-20260101020000 --subresource status -n $NAMESPACE --type=merge \
+                -p '{"status":{"phase":"Running","startTime":"2026-01-01T02:00:00Z"}}'
+        - assert:
+            file: 21-assert.yaml
+
+    - name: backup-succeeded
+      try:
+        - script:
+            content: |
+              kubectl patch seaweedbackup/backup-seaweedfs-nightly-20260101020000 --subresource status -n $NAMESPACE --type=merge \
+                -p '{"status":{"phase":"Completed","startTime":"2026-01-01T02:00:00Z","completionTime":"2026-01-01T02:01:00Z"}}'
+        - assert:
+            file: 22-assert.yaml
+
+    - name: prune-seaweedbackup-deletes-mirrored-backup
+      try:
+        - delete:
+            ref:
+              apiVersion: seaweed.seaweedfs.com/v1
+              kind: SeaweedBackup
+              name: backup-seaweedfs-nightly-20260101020000
+        - wait:
+            apiVersion: seaweed.seaweedfs.com/v1
+            kind: SeaweedBackup
+            name: backup-seaweedfs-nightly-20260101020000
+            for:
+              deletion: {}
+        - wait:
+            apiVersion: backup.openeverest.io/v1alpha1
+            kind: Backup
+            name: backup-seaweedfs-nightly-20260101020000
+            for:
+              deletion: {}
+
+    - name: delete-cluster
+      try:
+        - delete:
+            ref:
+              apiVersion: core.openeverest.io/v1alpha1
+              kind: Instance
+              name: backup-seaweedfs
+        - wait:
+            apiVersion: seaweed.seaweedfs.com/v1
+            kind: Seaweed
+            name: backup-seaweedfs
+            for:
+              deletion: {}

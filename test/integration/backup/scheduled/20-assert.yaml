@@ -1,0 +1,28 @@
+apiVersion: backup.openeverest.io/v1alpha1
+kind: Backup
+metadata:
+  name: backup-seaweedfs-nightly-20260101020000
+spec:
+  scheduleName: nightly
+  deletionPolicy: Retain
+  storageRef:
+    name: test-s3
+  classRef:
+    name: seaweedfs-filer-meta
+  origin:
+    type: Instance
+    instanceRef:
+      name: backup-seaweedfs
+status:
+  state: Pending
+  executionMode: ProviderManaged
+  operatorBackupRef:
+    group: seaweed.seaweedfs.com
+    kind: SeaweedBackup
+    name: backup-seaweedfs-nightly-20260101020000
+---
+apiVersion: seaweed.seaweedfs.com/v1
+kind: SeaweedBackup
+metadata:
+  name: backup-seaweedfs-nightly-20260101020000
+  (ownerReferences[?kind == 'Backup' && name == 'backup-seaweedfs-nightly-20260101020000'] | length(@)): 1
