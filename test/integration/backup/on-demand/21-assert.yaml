@@ -7,11 +7,4 @@ status:
   operatorBackupRef:
     group: seaweed.seaweedfs.com
     kind: SeaweedBackup
-    name: adhoc-1
----
-apiVersion: seaweed.seaweedfs.com/v1
-kind: SeaweedBackup
-metadata:
-  name: adhoc-1
-status:
-  phase: Running
+    (starts_with(name, 'adhoc-1-')): true

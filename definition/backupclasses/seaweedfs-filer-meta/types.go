@@ -27,6 +27,7 @@ type SeaweedfsFilerMetaBackupParameters struct {
 	// FilerPath is the filer subtree to snapshot. Defaults to "/".
 	// +optional
 	// +kubebuilder:default:="/"
+	// +kubebuilder:validation:Pattern=`^/[A-Za-z0-9._/-]*$`
 	FilerPath string `json:"filerPath,omitempty"`
 }
 

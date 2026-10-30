@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path"
+	"regexp"
 	"strings"
 
 	"github.com/AlekSi/pointer"
@@ -39,6 +41,10 @@ import (
 
 	seaweedfsfilermeta "github.com/openeverest/provider-seaweedfs/definition/backupclasses/seaweedfs-filer-meta"
 )
+
+// filerPathPattern rejects characters that can break out of the operator's
+// single-quoted weed-shell command (quotes, whitespace, metacharacters).
+var filerPathPattern = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 
 // Compile-time interface checks.
 var _ controller.BackupProvider = (*Provider)(nil)
@@ -303,6 +309,14 @@ func validateSeaweedBackupLabelName(what, name string) error {
 
 const seaweedBackupKind = "SeaweedBackup"
 
+// seaweedBackupNamePrefixMax leaves room for "-" + 8-char UID suffix within
+// validation.DNS1123LabelMaxLength (63). Catalog path is
+// /.seaweedfs-operator/backups/<SeaweedBackup name>/filer.meta.gz — a
+// UID-derived name keeps a Retain recreate of the same Backup name from
+// overwriting the previous catalog.
+const seaweedBackupNamePrefixMax = 54
+const seaweedBackupUIDSuffixLen = 8
+
 // deletionPolicyDeleteUnsupported is returned when Backup.spec.deletionPolicy
 // is Delete (the OpenEverest default). The operator does not purge
 // filer.meta.gz when a SeaweedBackup is deleted, and this provider does not
@@ -317,20 +331,29 @@ func (p *Provider) SyncBackup(c *controller.Context, backup *backupv1alpha1.Back
 	l := log.FromContext(c.Context())
 	l.Info("Syncing backup", "name", backup.Name)
 
-	if backup.Spec.ScheduleName != "" {
-		return observeSeaweedBackup(c, backup)
-	}
-
 	// Do not recreate a pruned SeaweedBackup under the same name; keep would
-	// delete it again and we would snapshot forever.
+	// delete it again and we would snapshot forever. Check before schedule
+	// observation so a succeeded mirrored Backup stays Succeeded after prune.
 	if backup.Status.State == backupv1alpha1.BackupStateSucceeded {
 		return preserveSucceededBackup(backup), nil
+	}
+
+	if backup.Spec.ScheduleName != "" {
+		return observeSeaweedBackup(c, backup)
 	}
 
 	if err := requireRetainDeletionPolicy(backup); err != nil {
 		return controller.BackupExecutionStatus{
 			State:   backupv1alpha1.BackupStateFailed,
 			Message: err.Error(),
+		}, nil
+	}
+
+	storageName := backup.Spec.StorageRef.Name
+	if msg := permanentStorageMisconfig(c, storageName); msg != "" {
+		return controller.BackupExecutionStatus{
+			State:   backupv1alpha1.BackupStateFailed,
+			Message: msg,
 		}, nil
 	}
 
@@ -345,7 +368,6 @@ func (p *Provider) SyncBackup(c *controller.Context, backup *backupv1alpha1.Back
 		return controller.BackupExecutionStatus{}, fmt.Errorf("get Seaweed: %w", err)
 	}
 
-	storageName := backup.Spec.StorageRef.Name
 	if sw.Spec.Backup == nil {
 		return controller.BackupExecutionStatus{
 			State:   backupv1alpha1.BackupStatePending,
@@ -361,16 +383,32 @@ func (p *Provider) SyncBackup(c *controller.Context, backup *backupv1alpha1.Back
 
 	params, err := decodeBackupParameters(backup.Spec.Parameters)
 	if err != nil {
-		return controller.BackupExecutionStatus{}, err
+		return controller.BackupExecutionStatus{
+			State:   backupv1alpha1.BackupStateFailed,
+			Message: err.Error(),
+		}, nil
 	}
 	filerPath := params.FilerPath
 	if filerPath == "" {
 		filerPath = "/"
 	}
+	if !validFilerPath(filerPath) {
+		return controller.BackupExecutionStatus{
+			State:   backupv1alpha1.BackupStateFailed,
+			Message: fmt.Sprintf("invalid filerPath %q: must be an absolute, clean path of [A-Za-z0-9._/-]", filerPath),
+		}, nil
+	}
 
+	sbName, err := seaweedBackupName(backup)
+	if err != nil {
+		return controller.BackupExecutionStatus{
+			State:   backupv1alpha1.BackupStateFailed,
+			Message: err.Error(),
+		}, nil
+	}
 	sb := &seaweedv1.SeaweedBackup{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      backup.Name,
+			Name:      sbName,
 			Namespace: backup.Namespace,
 		},
 	}
@@ -389,6 +427,50 @@ func (p *Provider) SyncBackup(c *controller.Context, backup *backupv1alpha1.Back
 	}
 
 	return mapSeaweedBackupStatus(sb), nil
+}
+
+// seaweedBackupName returns the SeaweedBackup object name for this Backup.
+// Prefer status.operatorBackupRef.name once set so Sync/Cleanup stay stable;
+// otherwise derive "<truncated-name>-<uid[:8]>".
+func seaweedBackupName(backup *backupv1alpha1.Backup) (string, error) {
+	if backup.Status.OperatorBackupRef != nil && backup.Status.OperatorBackupRef.Name != "" {
+		return backup.Status.OperatorBackupRef.Name, nil
+	}
+	return deriveSeaweedBackupName(backup.Name, string(backup.UID))
+}
+
+func deriveSeaweedBackupName(name, uid string) (string, error) {
+	if uid == "" {
+		return "", fmt.Errorf("backup UID is required to derive SeaweedBackup name")
+	}
+	prefix := name
+	if len(prefix) > seaweedBackupNamePrefixMax {
+		prefix = prefix[:seaweedBackupNamePrefixMax]
+	}
+	suffix := uid
+	if len(suffix) > seaweedBackupUIDSuffixLen {
+		suffix = suffix[:seaweedBackupUIDSuffixLen]
+	}
+	return fmt.Sprintf("%s-%s", prefix, suffix), nil
+}
+
+func permanentStorageMisconfig(c *controller.Context, storageName string) string {
+	cfg := c.Instance().Spec.Backup
+	if cfg == nil || !cfg.Enabled {
+		return fmt.Sprintf("backup is not enabled on Instance %q", c.Name())
+	}
+	for _, entry := range cfg.Storages {
+		if entry.StorageRef.Name == storageName {
+			return ""
+		}
+	}
+	return fmt.Sprintf("storage %q is not registered in Instance.spec.backup.storages", storageName)
+}
+
+// validFilerPath accepts absolute, clean paths limited to safe path characters
+// so values cannot break out of the operator's single-quoted weed shell.
+func validFilerPath(p string) bool {
+	return strings.HasPrefix(p, "/") && path.Clean(p) == p && filerPathPattern.MatchString(p)
 }
 
 // observeSeaweedBackup maps status for a scheduler-created SeaweedBackup
@@ -508,8 +590,10 @@ func preserveSucceededBackup(backup *backupv1alpha1.Backup) controller.BackupExe
 	}
 	if backup.Status.OperatorBackupRef != nil {
 		exec.OperatorBackupRef = backup.Status.OperatorBackupRef
-	} else {
-		ref := seaweedBackupRef(backup.Name)
+		return exec
+	}
+	if name, err := seaweedBackupName(backup); err == nil {
+		ref := seaweedBackupRef(name)
 		exec.OperatorBackupRef = &ref
 	}
 	return exec
@@ -579,20 +663,27 @@ func (p *Provider) SyncRestore(c *controller.Context, restore *backupv1alpha1.Re
 	}, nil
 }
 
-// CleanupBackup deletes the SeaweedBackup CR when deletionPolicy is Retain.
-// Delete is rejected: this provider does not purge
-// /.seaweedfs-operator/backups/<name>/filer.meta.gz from the filer.
+// CleanupBackup deletes the SeaweedBackup CR. Filer-catalog purge is not
+// implemented, so deletionPolicy Delete only removes the operator CR (catalog
+// left behind). Look up the CR via status.operatorBackupRef.name (UID-derived).
 // Return true when fully gone.
 func (p *Provider) CleanupBackup(c *controller.Context, backup *backupv1alpha1.Backup) (bool, error) {
 	l := log.FromContext(c.Context())
 	l.Info("Cleaning up backup", "name", backup.Name)
 
-	if err := requireRetainDeletionPolicy(backup); err != nil {
-		return false, err
+	if !c.ShouldRetainBackupData(backup) {
+		// Filer-catalog purge is not implemented; the catalog is left behind.
+		l.Info("deletionPolicy Delete: removing SeaweedBackup only; filer catalog is not purged", "name", backup.Name)
+	}
+
+	sbName, err := seaweedBackupName(backup)
+	if err != nil {
+		// No ref and no UID — nothing we can look up; treat as gone.
+		return true, nil
 	}
 
 	sb := &seaweedv1.SeaweedBackup{}
-	if err := c.Get(sb, backup.Name); err != nil {
+	if err := c.Get(sb, sbName); err != nil {
 		if apierrors.IsNotFound(err) {
 			return true, nil
 		}

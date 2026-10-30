@@ -1,0 +1,16 @@
+apiVersion: backup.openeverest.io/v1alpha1
+kind: Backup
+metadata:
+  name: adhoc-delete-policy
+spec:
+  origin:
+    type: Instance
+    instanceRef:
+      name: backup-seaweedfs
+  classRef:
+    name: seaweedfs-filer-meta
+  storageRef:
+    name: test-s3
+  # SyncBackup fails Delete at create time; CleanupBackup must still finish
+  # so the Backup (and Cascade Instance delete) is not stuck on the finalizer.
+  deletionPolicy: Delete
