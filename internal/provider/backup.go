@@ -394,6 +394,15 @@ func observeSeaweedBackup(c *controller.Context, backup *backupv1alpha1.Backup) 
 	sb := &seaweedv1.SeaweedBackup{}
 	if err := c.Get(sb, backup.Name); err != nil {
 		if apierrors.IsNotFound(err) {
+			if shouldDeleteOrphanedScheduledBackup(backup) {
+				if err := c.Delete(backup); err != nil && !apierrors.IsNotFound(err) {
+					return controller.BackupExecutionStatus{}, fmt.Errorf("delete pruned scheduled Backup: %w", err)
+				}
+				return controller.BackupExecutionStatus{
+					State:   backupv1alpha1.BackupStatePending,
+					Message: fmt.Sprintf("SeaweedBackup %q gone; deleting mirrored Backup", backup.Name),
+				}, nil
+			}
 			return controller.BackupExecutionStatus{
 				State:   backupv1alpha1.BackupStatePending,
 				Message: fmt.Sprintf("Waiting for scheduled SeaweedBackup %q", backup.Name),
@@ -401,7 +410,38 @@ func observeSeaweedBackup(c *controller.Context, backup *backupv1alpha1.Backup) 
 		}
 		return controller.BackupExecutionStatus{}, fmt.Errorf("get SeaweedBackup: %w", err)
 	}
+
+	if err := ensureSeaweedBackupOwnedBy(c, backup, sb); err != nil {
+		return controller.BackupExecutionStatus{}, err
+	}
 	return mapSeaweedBackupStatus(sb), nil
+}
+
+func shouldDeleteOrphanedScheduledBackup(backup *backupv1alpha1.Backup) bool {
+	if backup.Status.OperatorBackupRef != nil {
+		return true
+	}
+	switch backup.Status.State {
+	case backupv1alpha1.BackupStateSucceeded, backupv1alpha1.BackupStateFailed, backupv1alpha1.BackupStateRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+// ensureSeaweedBackupOwnedBy sets Backup as controller of SeaweedBackup when
+// missing, so WatchOwned routes operator events to the mirrored Backup.
+func ensureSeaweedBackupOwnedBy(c *controller.Context, backup *backupv1alpha1.Backup, sb *seaweedv1.SeaweedBackup) error {
+	if metav1.IsControlledBy(sb, backup) {
+		return nil
+	}
+	if err := controllerutil.SetControllerReference(backup, sb, c.Client().Scheme()); err != nil {
+		return fmt.Errorf("set controller reference on SeaweedBackup: %w", err)
+	}
+	if err := c.Client().Update(c.Context(), sb); err != nil {
+		return fmt.Errorf("adopt SeaweedBackup: %w", err)
+	}
+	return nil
 }
 
 func preserveSucceededBackup(backup *backupv1alpha1.Backup) controller.BackupExecutionStatus {
