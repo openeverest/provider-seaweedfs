@@ -24,8 +24,8 @@ For S3, `storageRef` does not choose where the catalog is written. Every object-
 ## Backup
 
 The provider writes this onto the `Seaweed` when backup is enabled (storages
-and schedules). `dataMirror` is still opt-in and not written by Sync yet — see
-below.
+and schedules). One `dataMirror` entry is written per registered storage (see
+below).
 
 ```yaml
 spec:
@@ -47,8 +47,9 @@ spec:
         keep: 7                    # retention type count, count 7
         filerPath: /               # schedule.parameters.filerPath, default /
         suspend: false             # enabled: false becomes suspend: true
-    # Not written by Sync yet (later slice):
-    # dataMirror: [...]
+    dataMirror:
+      - storageName: my-s3
+        filerPath: /
 ```
 
 Disabled schedules stay on the list with `suspend: true` so toggling
@@ -128,9 +129,12 @@ Storage and schedule names must be lowercase RFC 1123 labels of at most 50 chara
 
 ### Data mirror
 
-Off unless the user opts in. One mirror per registered storage is a continuous `weed filer.backup -initialSnapshot` Deployment. It copies every file under the mirrored path, not just the catalog, and it re-walks that tree on every pod start. Restore does not read it. The mirror is also the only thing that carries the catalog off the cluster. With it left off, the catalog stays on the filer.
-
-When it is on, the provider adds:
+On whenever backup is enabled with at least one registered storage. Sync writes
+one `dataMirror` entry per storage (operator `listMapKey=storageName`). Each
+entry is a continuous `weed filer.backup -initialSnapshot` Deployment. It
+copies every file under the mirrored path, not just the catalog, and it
+re-walks that tree on every pod start. Restore does not read it. The mirror is
+also the only thing that carries the catalog off the cluster.
 
 ```yaml
 dataMirror:
@@ -138,7 +142,10 @@ dataMirror:
     filerPath: /
 ```
 
-`filerPath` is `/` so the hidden backup directory is included. How the user opts in is decided at implementation.
+`filerPath` is always `/` so the hidden backup directory
+(`/.seaweedfs-operator/backups`) is included. There is no separate flag and no
+per-storage opt-out: turning backup off (or removing a storage) removes the
+corresponding mirror.
 
 ## Restore into the existing cluster
 
