@@ -15,6 +15,7 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -25,6 +26,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -42,6 +44,7 @@ import (
 var _ controller.BackupProvider = (*Provider)(nil)
 var _ controller.BackupWatcher = (*Provider)(nil)
 var _ controller.RestoreWatcher = (*Provider)(nil)
+var _ controller.BackupMirror = (*Provider)(nil)
 
 // seaweedBackupStorageNameMax is the max length the seaweedfs-operator webhook
 // accepts for spec.backup.storages map keys (and schedule names). Stricter than
@@ -442,6 +445,58 @@ func ensureSeaweedBackupOwnedBy(c *controller.Context, backup *backupv1alpha1.Ba
 		return fmt.Errorf("adopt SeaweedBackup: %w", err)
 	}
 	return nil
+}
+
+// OperatorBackupType implements controller.BackupMirror.
+func (p *Provider) OperatorBackupType() client.Object {
+	return &seaweedv1.SeaweedBackup{}
+}
+
+// Mirror implements controller.BackupMirror. Scheduler-created SeaweedBackups
+// carry LabelBackupSchedule; on-demand ones (created by SyncBackup) do not and
+// are skipped. Mirrored Backups use deletionPolicy Retain — Delete would claim
+// to purge filer.meta.gz, which this provider does not do.
+func (p *Provider) Mirror(ctx context.Context, c client.Client, obj client.Object) (*backupv1alpha1.Backup, error) {
+	sb, ok := obj.(*seaweedv1.SeaweedBackup)
+	if !ok {
+		return nil, nil
+	}
+	scheduleName := sb.Labels[seaweedv1.LabelBackupSchedule]
+	if scheduleName == "" {
+		// On-demand backups originate from a Backup CR- no mirroring needed.
+		return nil, nil
+	}
+
+	instance := &corev1alpha1.Instance{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: sb.Namespace, Name: sb.Spec.ClusterName}, instance); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get parent Instance %q: %w", sb.Spec.ClusterName, err)
+	}
+	if instance.Spec.ProviderRef.Name != p.Name() {
+		return nil, nil
+	}
+	if instance.Spec.Backup == nil || instance.Spec.Backup.ClassRef.Name == "" {
+		return nil, nil
+	}
+
+	return &backupv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      sb.Name,
+			Namespace: sb.Namespace,
+		},
+		Spec: backupv1alpha1.BackupSpec{
+			Origin: backupv1alpha1.BackupOrigin{
+				Type:        backupv1alpha1.BackupOriginTypeInstance,
+				InstanceRef: &commonv1alpha1.ObjectRef{Name: sb.Spec.ClusterName},
+			},
+			ClassRef:       commonv1alpha1.ObjectRef{Name: instance.Spec.Backup.ClassRef.Name},
+			StorageRef:     commonv1alpha1.ObjectRef{Name: sb.Spec.StorageName},
+			ScheduleName:   scheduleName,
+			DeletionPolicy: backupv1alpha1.BackupDeletionPolicyRetain,
+		},
+	}, nil
 }
 
 func preserveSucceededBackup(backup *backupv1alpha1.Backup) controller.BackupExecutionStatus {
