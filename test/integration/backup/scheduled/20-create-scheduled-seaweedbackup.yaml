@@ -1,0 +1,13 @@
+# Simulates a seaweedfs-operator scheduler fire. The provider Mirror loop
+# creates the OpenEverest Backup; SyncBackup only observes status.
+apiVersion: seaweed.seaweedfs.com/v1
+kind: SeaweedBackup
+metadata:
+  name: backup-seaweedfs-nightly-20260101020000
+  labels:
+    seaweed.seaweedfs.com/backup-cluster: backup-seaweedfs
+    seaweed.seaweedfs.com/backup-schedule: nightly
+spec:
+  clusterName: backup-seaweedfs
+  storageName: test-s3
+  filerPath: /

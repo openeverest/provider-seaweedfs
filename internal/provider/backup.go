@@ -15,6 +15,7 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"path"
@@ -22,10 +23,12 @@ import (
 	"strings"
 
 	"github.com/AlekSi/pointer"
+	"github.com/robfig/cron/v3"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -47,11 +50,16 @@ var filerPathPattern = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 var _ controller.BackupProvider = (*Provider)(nil)
 var _ controller.BackupWatcher = (*Provider)(nil)
 var _ controller.RestoreWatcher = (*Provider)(nil)
+var _ controller.BackupMirror = (*Provider)(nil)
 
 // seaweedBackupStorageNameMax is the max length the seaweedfs-operator webhook
 // accepts for spec.backup.storages map keys (and schedule names). Stricter than
 // validation.DNS1123LabelMaxLength (63).
 const seaweedBackupStorageNameMax = 50
+
+// seaweedBackupCronMax is BackupScheduleSpec.Schedule's kubebuilder MaxLength
+// on the seaweedfs-operator CRD.
+const seaweedBackupCronMax = 120
 
 // defaultBackupDirectory is the sink prefix OpenEverest BackupStorage has no
 // field for. The proposal and operator examples use "/".
@@ -70,7 +78,135 @@ func buildBackupSpec(c *controller.Context) (*seaweedv1.BackupSpec, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &seaweedv1.BackupSpec{Storages: storages}, nil
+	schedules, err := buildSeaweedSchedules(cfg.Storages)
+	if err != nil {
+		return nil, err
+	}
+	return &seaweedv1.BackupSpec{Storages: storages, Schedule: schedules}, nil
+}
+
+func buildSeaweedSchedules(entries []corev1alpha1.InstanceBackupStorage) ([]seaweedv1.BackupScheduleSpec, error) {
+	var out []seaweedv1.BackupScheduleSpec
+	// schedule name -> storage that registered it
+	seen := make(map[string]string)
+	for _, entry := range entries {
+		storageName := entry.StorageRef.Name
+		for _, sched := range entry.Schedules {
+			if err := validateSeaweedBackupLabelName("backup schedule", sched.Name); err != nil {
+				return nil, &controller.BackupConfigError{
+					Reason:  "InvalidScheduleName",
+					Message: err.Error(),
+				}
+			}
+			if prev, ok := seen[sched.Name]; ok {
+				return nil, &controller.BackupConfigError{
+					Reason: "DuplicateSchedule",
+					Message: fmt.Sprintf(
+						"backup schedule %q is registered more than once (storages %q and %q)",
+						sched.Name, prev, storageName,
+					),
+				}
+			}
+			seen[sched.Name] = storageName
+
+			if err := validateScheduleCron(sched.Name, sched.Cron); err != nil {
+				return nil, err
+			}
+
+			keep, err := mapScheduleKeep(sched)
+			if err != nil {
+				return nil, err
+			}
+
+			params, err := decodeBackupParameters(sched.Parameters)
+			if err != nil {
+				return nil, &controller.BackupConfigError{
+					Reason:  "InvalidScheduleParameters",
+					Message: err.Error(),
+				}
+			}
+			filerPath := params.FilerPath
+			if filerPath == "" {
+				filerPath = "/"
+			}
+			if !validFilerPath(filerPath) {
+				return nil, &controller.BackupConfigError{
+					Reason: "InvalidScheduleParameters",
+					Message: fmt.Sprintf(
+						"schedule %q: invalid filerPath %q: must be an absolute, clean path of [A-Za-z0-9._/-]",
+						sched.Name, filerPath,
+					),
+				}
+			}
+
+			out = append(out, seaweedv1.BackupScheduleSpec{
+				Name:        sched.Name,
+				Schedule:    sched.Cron,
+				StorageName: storageName,
+				Keep:        keep,
+				FilerPath:   filerPath,
+				Suspend:     !sched.Enabled,
+			})
+		}
+	}
+	return out, nil
+}
+
+func validateScheduleCron(scheduleName, expr string) error {
+	if expr == "" {
+		return &controller.BackupConfigError{
+			Reason:  "InvalidScheduleCron",
+			Message: fmt.Sprintf("schedule %q: cron is required", scheduleName),
+		}
+	}
+	if len(expr) > seaweedBackupCronMax {
+		return &controller.BackupConfigError{
+			Reason: "InvalidScheduleCron",
+			Message: fmt.Sprintf(
+				"schedule %q: cron must be at most %d characters (seaweedfs-operator limit)",
+				scheduleName, seaweedBackupCronMax,
+			),
+		}
+	}
+	if _, err := cron.ParseStandard(expr); err != nil {
+		return &controller.BackupConfigError{
+			Reason: "InvalidScheduleCron",
+			Message: fmt.Sprintf(
+				"schedule %q: invalid cron %q: %v",
+				scheduleName, expr, err,
+			),
+		}
+	}
+	return nil
+}
+
+func mapScheduleKeep(sched corev1alpha1.InstanceBackupSchedule) (int32, error) {
+	if sched.Retention == nil {
+		return 0, nil
+	}
+	switch sched.Retention.Type {
+	case corev1alpha1.BackupScheduleRetentionTypeCount:
+		if sched.Retention.Count == nil {
+			return 0, &controller.BackupConfigError{
+				Reason:  "InvalidRetention",
+				Message: fmt.Sprintf("schedule %q: retention type count requires count", sched.Name),
+			}
+		}
+		return *sched.Retention.Count, nil
+	case corev1alpha1.BackupScheduleRetentionTypeTime:
+		return 0, &controller.BackupConfigError{
+			Reason: "UnsupportedRetention",
+			Message: fmt.Sprintf(
+				"schedule %q: time retention is not supported (seaweedfs-operator only supports keep count); use retention type count",
+				sched.Name,
+			),
+		}
+	default:
+		return 0, &controller.BackupConfigError{
+			Reason:  "InvalidRetention",
+			Message: fmt.Sprintf("schedule %q: unknown retention type %q", sched.Name, sched.Retention.Type),
+		}
+	}
 }
 
 func buildSeaweedStorages(
@@ -165,11 +301,17 @@ func mapBackupStorageToSeaweed(bs *backupv1alpha1.BackupStorage) (*seaweedv1.Bac
 }
 
 func validateSeaweedBackupStorageName(name string) error {
+	return validateSeaweedBackupLabelName("backup storage", name)
+}
+
+// validateSeaweedBackupLabelName enforces the seaweedfs-operator webhook rule for
+// spec.backup.storages keys and schedule names: lowercase RFC 1123, ≤50 chars.
+func validateSeaweedBackupLabelName(what, name string) error {
 	if errs := validation.IsDNS1123Label(name); len(errs) > 0 {
-		return fmt.Errorf("backup storage name %q must be a lowercase RFC 1123 label: %s", name, strings.Join(errs, "; "))
+		return fmt.Errorf("%s name %q must be a lowercase RFC 1123 label: %s", what, name, strings.Join(errs, "; "))
 	}
 	if len(name) > seaweedBackupStorageNameMax {
-		return fmt.Errorf("backup storage name %q must be at most %d characters (seaweedfs-operator limit)", name, seaweedBackupStorageNameMax)
+		return fmt.Errorf("%s name %q must be at most %d characters (seaweedfs-operator limit)", what, name, seaweedBackupStorageNameMax)
 	}
 	return nil
 }
@@ -193,20 +335,22 @@ const deletionPolicyDeleteUnsupported = "deletionPolicy Delete is not supported:
 
 // SyncBackup creates a SeaweedBackup for on-demand Backups and maps operator
 // status. Scheduled Backups (spec.scheduleName set) are observed only — the
-// seaweedfs-operator scheduler owns those SeaweedBackups.
+// seaweedfs-operator scheduler owns those SeaweedBackups. OpenEverest inventory
+// mirrors operator keep: when a previously observed scheduled SeaweedBackup is
+// gone, SyncBackup deletes the mirrored Backup.
 func (p *Provider) SyncBackup(c *controller.Context, backup *backupv1alpha1.Backup) (controller.BackupExecutionStatus, error) {
 	l := log.FromContext(c.Context())
 	l.Info("Syncing backup", "name", backup.Name)
 
-	// Do not recreate a pruned SeaweedBackup under the same name; keep would
-	// delete it again and we would snapshot forever. Check before schedule
-	// observation so a succeeded mirrored Backup stays Succeeded after prune.
-	if backup.Status.State == backupv1alpha1.BackupStateSucceeded {
-		return preserveSucceededBackup(backup), nil
-	}
-
+	// Scheduled first so keep-pruned SeaweedBackups delete the mirrored Backup
+	// even after Succeeded. On-demand Succeeded still short-circuits below so
+	// we never recreate a pruned SeaweedBackup under the same name.
 	if backup.Spec.ScheduleName != "" {
 		return observeSeaweedBackup(c, backup)
+	}
+
+	if backup.Status.State == backupv1alpha1.BackupStateSucceeded {
+		return preserveSucceededBackup(backup), nil
 	}
 
 	if err := requireRetainDeletionPolicy(backup); err != nil {
@@ -346,6 +490,15 @@ func observeSeaweedBackup(c *controller.Context, backup *backupv1alpha1.Backup) 
 	sb := &seaweedv1.SeaweedBackup{}
 	if err := c.Get(sb, backup.Name); err != nil {
 		if apierrors.IsNotFound(err) {
+			if shouldDeleteOrphanedScheduledBackup(backup) {
+				if err := c.Delete(backup); err != nil && !apierrors.IsNotFound(err) {
+					return controller.BackupExecutionStatus{}, fmt.Errorf("delete pruned scheduled Backup: %w", err)
+				}
+				return controller.BackupExecutionStatus{
+					State:   backupv1alpha1.BackupStatePending,
+					Message: fmt.Sprintf("SeaweedBackup %q gone; deleting mirrored Backup", backup.Name),
+				}, nil
+			}
 			return controller.BackupExecutionStatus{
 				State:   backupv1alpha1.BackupStatePending,
 				Message: fmt.Sprintf("Waiting for scheduled SeaweedBackup %q", backup.Name),
@@ -353,7 +506,90 @@ func observeSeaweedBackup(c *controller.Context, backup *backupv1alpha1.Backup) 
 		}
 		return controller.BackupExecutionStatus{}, fmt.Errorf("get SeaweedBackup: %w", err)
 	}
+
+	if err := ensureSeaweedBackupOwnedBy(c, backup, sb); err != nil {
+		return controller.BackupExecutionStatus{}, err
+	}
 	return mapSeaweedBackupStatus(sb), nil
+}
+
+func shouldDeleteOrphanedScheduledBackup(backup *backupv1alpha1.Backup) bool {
+	if backup.Status.OperatorBackupRef != nil {
+		return true
+	}
+	switch backup.Status.State {
+	case backupv1alpha1.BackupStateSucceeded, backupv1alpha1.BackupStateFailed, backupv1alpha1.BackupStateRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+// ensureSeaweedBackupOwnedBy sets Backup as controller of SeaweedBackup when
+// missing, so WatchOwned routes operator events to the mirrored Backup.
+func ensureSeaweedBackupOwnedBy(c *controller.Context, backup *backupv1alpha1.Backup, sb *seaweedv1.SeaweedBackup) error {
+	if metav1.IsControlledBy(sb, backup) {
+		return nil
+	}
+	if err := controllerutil.SetControllerReference(backup, sb, c.Client().Scheme()); err != nil {
+		return fmt.Errorf("set controller reference on SeaweedBackup: %w", err)
+	}
+	if err := c.Client().Update(c.Context(), sb); err != nil {
+		return fmt.Errorf("adopt SeaweedBackup: %w", err)
+	}
+	return nil
+}
+
+// OperatorBackupType implements controller.BackupMirror.
+func (p *Provider) OperatorBackupType() client.Object {
+	return &seaweedv1.SeaweedBackup{}
+}
+
+// Mirror implements controller.BackupMirror. Scheduler-created SeaweedBackups
+// carry LabelBackupSchedule; on-demand ones (created by SyncBackup) do not and
+// are skipped. Mirrored Backups use deletionPolicy Retain — Delete would claim
+// to purge filer.meta.gz, which this provider does not do.
+func (p *Provider) Mirror(ctx context.Context, c client.Client, obj client.Object) (*backupv1alpha1.Backup, error) {
+	sb, ok := obj.(*seaweedv1.SeaweedBackup)
+	if !ok {
+		return nil, nil
+	}
+	scheduleName := sb.Labels[seaweedv1.LabelBackupSchedule]
+	if scheduleName == "" {
+		// On-demand backups originate from a Backup CR- no mirroring needed.
+		return nil, nil
+	}
+
+	instance := &corev1alpha1.Instance{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: sb.Namespace, Name: sb.Spec.ClusterName}, instance); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get parent Instance %q: %w", sb.Spec.ClusterName, err)
+	}
+	if instance.Spec.ProviderRef.Name != p.Name() {
+		return nil, nil
+	}
+	if instance.Spec.Backup == nil || instance.Spec.Backup.ClassRef.Name == "" {
+		return nil, nil
+	}
+
+	return &backupv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      sb.Name,
+			Namespace: sb.Namespace,
+		},
+		Spec: backupv1alpha1.BackupSpec{
+			Origin: backupv1alpha1.BackupOrigin{
+				Type:        backupv1alpha1.BackupOriginTypeInstance,
+				InstanceRef: &commonv1alpha1.ObjectRef{Name: sb.Spec.ClusterName},
+			},
+			ClassRef:       commonv1alpha1.ObjectRef{Name: instance.Spec.Backup.ClassRef.Name},
+			StorageRef:     commonv1alpha1.ObjectRef{Name: sb.Spec.StorageName},
+			ScheduleName:   scheduleName,
+			DeletionPolicy: backupv1alpha1.BackupDeletionPolicyRetain,
+		},
+	}, nil
 }
 
 func preserveSucceededBackup(backup *backupv1alpha1.Backup) controller.BackupExecutionStatus {

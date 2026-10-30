@@ -181,6 +181,249 @@ func TestBuildBackupSpecWaitsForMissingBackupStorage(t *testing.T) {
 	assert.Contains(t, err.Error(), "missing-s3")
 }
 
+func TestBuildBackupSpecMapsSchedules(t *testing.T) {
+	bs := s3BackupStorage("my-s3", pointer.To(false))
+	instance := enabledBackupInstance("my-s3")
+	instance.Spec.Backup.Storages[0].Schedules = []corev1alpha1.InstanceBackupSchedule{
+		{
+			Name:    "nightly",
+			Enabled: true,
+			Cron:    "0 2 * * *",
+			Retention: &corev1alpha1.BackupScheduleRetention{
+				Type:  corev1alpha1.BackupScheduleRetentionTypeCount,
+				Count: pointer.To(int32(7)),
+			},
+		},
+		{
+			Name:    "paused",
+			Enabled: false,
+			Cron:    "0 4 * * 0",
+		},
+	}
+	ctx := backupSpecTestContext(t, instance, bs)
+
+	got, err := buildBackupSpec(ctx)
+	require.NoError(t, err)
+	require.Len(t, got.Schedule, 2)
+
+	assert.Equal(t, seaweedv1.BackupScheduleSpec{
+		Name:        "nightly",
+		Schedule:    "0 2 * * *",
+		StorageName: "my-s3",
+		Keep:        7,
+		FilerPath:   "/",
+		Suspend:     false,
+	}, got.Schedule[0])
+	assert.Equal(t, seaweedv1.BackupScheduleSpec{
+		Name:        "paused",
+		Schedule:    "0 4 * * 0",
+		StorageName: "my-s3",
+		Keep:        0,
+		FilerPath:   "/",
+		Suspend:     true,
+	}, got.Schedule[1])
+}
+
+func TestBuildBackupSpecScheduleFilerPathParameter(t *testing.T) {
+	bs := s3BackupStorage("my-s3", pointer.To(false))
+	instance := enabledBackupInstance("my-s3")
+	instance.Spec.Backup.Storages[0].Schedules = []corev1alpha1.InstanceBackupSchedule{{
+		Name:       "subtree",
+		Enabled:    true,
+		Cron:       "0 3 * * *",
+		Parameters: &runtime.RawExtension{Raw: []byte(`{"filerPath":"/buckets"}`)},
+	}}
+	ctx := backupSpecTestContext(t, instance, bs)
+
+	got, err := buildBackupSpec(ctx)
+	require.NoError(t, err)
+	require.Len(t, got.Schedule, 1)
+	assert.Equal(t, "/buckets", got.Schedule[0].FilerPath)
+}
+
+func TestBuildBackupSpecRejectsInvalidScheduleFilerPath(t *testing.T) {
+	bs := s3BackupStorage("my-s3", pointer.To(false))
+	instance := enabledBackupInstance("my-s3")
+	instance.Spec.Backup.Storages[0].Schedules = []corev1alpha1.InstanceBackupSchedule{{
+		Name:       "nightly",
+		Enabled:    true,
+		Cron:       "0 2 * * *",
+		Parameters: &runtime.RawExtension{Raw: []byte(`{"filerPath":"/buckets'; id"}`)},
+	}}
+	ctx := backupSpecTestContext(t, instance, bs)
+
+	_, err := buildBackupSpec(ctx)
+	require.Error(t, err)
+	bce := controller.AsBackupConfigError(err)
+	require.NotNil(t, bce)
+	assert.Equal(t, "InvalidScheduleParameters", bce.Reason)
+	assert.Contains(t, bce.Message, "filerPath")
+}
+
+func TestBuildBackupSpecRejectsTimeRetention(t *testing.T) {
+	bs := s3BackupStorage("my-s3", pointer.To(false))
+	instance := enabledBackupInstance("my-s3")
+	instance.Spec.Backup.Storages[0].Schedules = []corev1alpha1.InstanceBackupSchedule{{
+		Name:    "nightly",
+		Enabled: true,
+		Cron:    "0 2 * * *",
+		Retention: &corev1alpha1.BackupScheduleRetention{
+			Type:     corev1alpha1.BackupScheduleRetentionTypeTime,
+			Duration: "30d",
+		},
+	}}
+	ctx := backupSpecTestContext(t, instance, bs)
+
+	_, err := buildBackupSpec(ctx)
+	require.Error(t, err)
+	bce := controller.AsBackupConfigError(err)
+	require.NotNil(t, bce)
+	assert.Equal(t, "UnsupportedRetention", bce.Reason)
+	assert.Contains(t, bce.Message, "time retention")
+}
+
+func TestBuildBackupSpecRejectsCountRetentionWithoutCount(t *testing.T) {
+	bs := s3BackupStorage("my-s3", pointer.To(false))
+	instance := enabledBackupInstance("my-s3")
+	instance.Spec.Backup.Storages[0].Schedules = []corev1alpha1.InstanceBackupSchedule{{
+		Name:    "nightly",
+		Enabled: true,
+		Cron:    "0 2 * * *",
+		Retention: &corev1alpha1.BackupScheduleRetention{
+			Type: corev1alpha1.BackupScheduleRetentionTypeCount,
+		},
+	}}
+	ctx := backupSpecTestContext(t, instance, bs)
+
+	_, err := buildBackupSpec(ctx)
+	require.Error(t, err)
+	bce := controller.AsBackupConfigError(err)
+	require.NotNil(t, bce)
+	assert.Equal(t, "InvalidRetention", bce.Reason)
+}
+
+func TestBuildBackupSpecRejectsInvalidScheduleName(t *testing.T) {
+	bs := s3BackupStorage("my-s3", pointer.To(false))
+	instance := enabledBackupInstance("my-s3")
+	instance.Spec.Backup.Storages[0].Schedules = []corev1alpha1.InstanceBackupSchedule{{
+		Name:    "Nightly",
+		Enabled: true,
+		Cron:    "0 2 * * *",
+	}}
+	ctx := backupSpecTestContext(t, instance, bs)
+
+	_, err := buildBackupSpec(ctx)
+	require.Error(t, err)
+	bce := controller.AsBackupConfigError(err)
+	require.NotNil(t, bce)
+	assert.Equal(t, "InvalidScheduleName", bce.Reason)
+}
+
+func TestBuildBackupSpecRejectsScheduleNameTooLong(t *testing.T) {
+	bs := s3BackupStorage("my-s3", pointer.To(false))
+	instance := enabledBackupInstance("my-s3")
+	instance.Spec.Backup.Storages[0].Schedules = []corev1alpha1.InstanceBackupSchedule{{
+		Name:    strings.Repeat("a", seaweedBackupStorageNameMax+1),
+		Enabled: true,
+		Cron:    "0 2 * * *",
+	}}
+	ctx := backupSpecTestContext(t, instance, bs)
+
+	_, err := buildBackupSpec(ctx)
+	require.Error(t, err)
+	bce := controller.AsBackupConfigError(err)
+	require.NotNil(t, bce)
+	assert.Equal(t, "InvalidScheduleName", bce.Reason)
+}
+
+func TestBuildBackupSpecRejectsDuplicateScheduleNames(t *testing.T) {
+	bsA := s3BackupStorage("s3-a", pointer.To(false))
+	bsB := s3BackupStorage("s3-b", pointer.To(false))
+	instance := &corev1alpha1.Instance{
+		ObjectMeta: metav1.ObjectMeta{Name: "sw", Namespace: "ns"},
+		Spec: corev1alpha1.InstanceSpec{
+			Backup: &corev1alpha1.InstanceBackupSpec{
+				Enabled: true,
+				Storages: []corev1alpha1.InstanceBackupStorage{
+					{
+						StorageRef: commonv1alpha1.ObjectRef{Name: "s3-a"},
+						Schedules: []corev1alpha1.InstanceBackupSchedule{{
+							Name: "nightly", Enabled: true, Cron: "0 2 * * *",
+						}},
+					},
+					{
+						StorageRef: commonv1alpha1.ObjectRef{Name: "s3-b"},
+						Schedules: []corev1alpha1.InstanceBackupSchedule{{
+							Name: "nightly", Enabled: true, Cron: "0 3 * * *",
+						}},
+					},
+				},
+			},
+		},
+	}
+	ctx := backupSpecTestContext(t, instance, bsA, bsB)
+
+	_, err := buildBackupSpec(ctx)
+	require.Error(t, err)
+	bce := controller.AsBackupConfigError(err)
+	require.NotNil(t, bce)
+	assert.Equal(t, "DuplicateSchedule", bce.Reason)
+	assert.Contains(t, bce.Message, "nightly")
+}
+
+func TestBuildBackupSpecRejectsInvalidCron(t *testing.T) {
+	bs := s3BackupStorage("my-s3", pointer.To(false))
+	instance := enabledBackupInstance("my-s3")
+	instance.Spec.Backup.Storages[0].Schedules = []corev1alpha1.InstanceBackupSchedule{{
+		Name:    "nightly",
+		Enabled: true,
+		Cron:    "not-a-cron",
+	}}
+	ctx := backupSpecTestContext(t, instance, bs)
+
+	_, err := buildBackupSpec(ctx)
+	require.Error(t, err)
+	bce := controller.AsBackupConfigError(err)
+	require.NotNil(t, bce)
+	assert.Equal(t, "InvalidScheduleCron", bce.Reason)
+	assert.Contains(t, bce.Message, "not-a-cron")
+}
+
+func TestBuildBackupSpecRejectsEmptyCron(t *testing.T) {
+	bs := s3BackupStorage("my-s3", pointer.To(false))
+	instance := enabledBackupInstance("my-s3")
+	instance.Spec.Backup.Storages[0].Schedules = []corev1alpha1.InstanceBackupSchedule{{
+		Name:    "nightly",
+		Enabled: true,
+		Cron:    "",
+	}}
+	ctx := backupSpecTestContext(t, instance, bs)
+
+	_, err := buildBackupSpec(ctx)
+	require.Error(t, err)
+	bce := controller.AsBackupConfigError(err)
+	require.NotNil(t, bce)
+	assert.Equal(t, "InvalidScheduleCron", bce.Reason)
+}
+
+func TestBuildBackupSpecRejectsCronTooLong(t *testing.T) {
+	bs := s3BackupStorage("my-s3", pointer.To(false))
+	instance := enabledBackupInstance("my-s3")
+	instance.Spec.Backup.Storages[0].Schedules = []corev1alpha1.InstanceBackupSchedule{{
+		Name:    "nightly",
+		Enabled: true,
+		Cron:    strings.Repeat("x", seaweedBackupCronMax+1),
+	}}
+	ctx := backupSpecTestContext(t, instance, bs)
+
+	_, err := buildBackupSpec(ctx)
+	require.Error(t, err)
+	bce := controller.AsBackupConfigError(err)
+	require.NotNil(t, bce)
+	assert.Equal(t, "InvalidScheduleCron", bce.Reason)
+	assert.Contains(t, bce.Message, "at most")
+}
+
 func TestValidateSeaweedBackupStorageName(t *testing.T) {
 	require.NoError(t, validateSeaweedBackupStorageName("a"))
 	require.NoError(t, validateSeaweedBackupStorageName("my-s3"))
@@ -287,6 +530,154 @@ func TestSyncBackupReusesOperatorBackupRefName(t *testing.T) {
 	exists, err := ctx.Exists(&seaweedv1.SeaweedBackup{}, testSeaweedBackupName("adhoc-1"))
 	require.NoError(t, err)
 	assert.False(t, exists, "must not create a second SeaweedBackup when ref is set")
+}
+
+func TestSyncBackupSkipsScheduled(t *testing.T) {
+	instance := enabledBackupInstance("my-s3")
+	backup := onDemandBackup("nightly-1", "sw", "my-s3")
+	backup.Spec.ScheduleName = "nightly"
+	ctx := backupSpecTestContext(t, instance, backup)
+
+	exec, err := (&Provider{}).SyncBackup(ctx, backup)
+	require.NoError(t, err)
+	assert.Equal(t, backupv1alpha1.BackupStatePending, exec.State)
+	assert.Contains(t, exec.Message, "scheduled")
+
+	exists, err := ctx.Exists(&seaweedv1.SeaweedBackup{}, "nightly-1")
+	require.NoError(t, err)
+	assert.False(t, exists)
+}
+
+func TestSyncBackupObservesScheduledSeaweedBackup(t *testing.T) {
+	instance := enabledBackupInstance("my-s3")
+	backup := onDemandBackup("nightly-1", "sw", "my-s3")
+	backup.Spec.ScheduleName = "nightly"
+	sb := &seaweedv1.SeaweedBackup{
+		ObjectMeta: metav1.ObjectMeta{Name: "nightly-1", Namespace: "ns"},
+		Spec: seaweedv1.SeaweedBackupSpec{
+			ClusterName: "sw",
+			StorageName: "my-s3",
+		},
+		Status: seaweedv1.SeaweedBackupStatus{Phase: seaweedv1.BackupPhaseCompleted},
+	}
+	ctx := backupSpecTestContext(t, instance, backup, sb)
+	// Populate UID so SetControllerReference / IsControlledBy match the store.
+	require.NoError(t, ctx.Get(backup, backup.Name))
+
+	exec, err := (&Provider{}).SyncBackup(ctx, backup)
+	require.NoError(t, err)
+	assert.Equal(t, backupv1alpha1.BackupStateSucceeded, exec.State)
+
+	require.NoError(t, ctx.Get(sb, "nightly-1"))
+	assert.True(t, metav1.IsControlledBy(sb, backup), "scheduled SeaweedBackup must be owned by Backup for WatchOwned")
+}
+
+func TestSyncBackupDeletesSucceededMirroredBackupWhenSeaweedBackupGone(t *testing.T) {
+	instance := enabledBackupInstance("my-s3")
+	backup := onDemandBackup("nightly-1", "sw", "my-s3")
+	backup.Spec.ScheduleName = "nightly"
+	ref := seaweedBackupRef("nightly-1")
+	backup.Status.OperatorBackupRef = &ref
+	backup.Status.State = backupv1alpha1.BackupStateSucceeded
+	ctx := backupSpecTestContext(t, instance, backup)
+
+	exec, err := (&Provider{}).SyncBackup(ctx, backup)
+	require.NoError(t, err)
+	assert.Equal(t, backupv1alpha1.BackupStatePending, exec.State)
+	assert.Contains(t, exec.Message, "deleting mirrored Backup")
+
+	exists, err := ctx.Exists(backup, "nightly-1")
+	require.NoError(t, err)
+	assert.False(t, exists, "OE inventory mirrors keep: Succeeded mirrored Backup is deleted when SeaweedBackup is pruned")
+}
+
+func TestSyncBackupDeletesFailedMirroredBackupWhenSeaweedBackupGone(t *testing.T) {
+	instance := enabledBackupInstance("my-s3")
+	backup := onDemandBackup("nightly-1", "sw", "my-s3")
+	backup.Spec.ScheduleName = "nightly"
+	ref := seaweedBackupRef("nightly-1")
+	backup.Status.OperatorBackupRef = &ref
+	backup.Status.State = backupv1alpha1.BackupStateFailed
+	ctx := backupSpecTestContext(t, instance, backup)
+
+	exec, err := (&Provider{}).SyncBackup(ctx, backup)
+	require.NoError(t, err)
+	assert.Equal(t, backupv1alpha1.BackupStatePending, exec.State)
+
+	exists, err := ctx.Exists(backup, "nightly-1")
+	require.NoError(t, err)
+	assert.False(t, exists, "Failed mirrored Backup is deleted when SeaweedBackup is pruned")
+}
+
+func TestMirrorCreatesRetainScheduledBackup(t *testing.T) {
+	instance := enabledBackupInstance("my-s3")
+	sb := &seaweedv1.SeaweedBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "sw-nightly-20261029120000",
+			Namespace: "ns",
+			Labels: map[string]string{
+				seaweedv1.LabelBackupSchedule: "nightly",
+				seaweedv1.LabelBackupCluster:  "sw",
+			},
+		},
+		Spec: seaweedv1.SeaweedBackupSpec{
+			ClusterName: "sw",
+			StorageName: "my-s3",
+			FilerPath:   "/",
+		},
+	}
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1alpha1.AddToScheme(scheme))
+	require.NoError(t, backupv1alpha1.AddToScheme(scheme))
+	require.NoError(t, seaweedv1.AddToScheme(scheme))
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(instance, sb).Build()
+
+	got, err := (&Provider{BaseProvider: controller.BaseProvider{ProviderName: common.ProviderName}}).
+		Mirror(context.Background(), cl, sb)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, sb.Name, got.Name)
+	assert.Equal(t, "nightly", got.Spec.ScheduleName)
+	assert.Equal(t, backupv1alpha1.BackupDeletionPolicyRetain, got.Spec.DeletionPolicy)
+	assert.Equal(t, "my-s3", got.Spec.StorageRef.Name)
+	assert.Equal(t, "seaweedfs-filer-meta", got.Spec.ClassRef.Name)
+	require.NotNil(t, got.Spec.Origin.InstanceRef)
+	assert.Equal(t, "sw", got.Spec.Origin.InstanceRef.Name)
+}
+
+func TestMirrorSkipsOnDemandSeaweedBackup(t *testing.T) {
+	sb := &seaweedv1.SeaweedBackup{
+		ObjectMeta: metav1.ObjectMeta{Name: "adhoc-1", Namespace: "ns"},
+		Spec: seaweedv1.SeaweedBackupSpec{
+			ClusterName: "sw",
+			StorageName: "my-s3",
+		},
+	}
+	got, err := (&Provider{}).Mirror(context.Background(), nil, sb)
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}
+
+func TestMirrorSkipsOtherProvider(t *testing.T) {
+	instance := enabledBackupInstance("my-s3")
+	instance.Spec.ProviderRef.Name = "provider-other"
+	sb := &seaweedv1.SeaweedBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "sw-nightly-1",
+			Namespace: "ns",
+			Labels:    map[string]string{seaweedv1.LabelBackupSchedule: "nightly"},
+		},
+		Spec: seaweedv1.SeaweedBackupSpec{ClusterName: "sw", StorageName: "my-s3"},
+	}
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1alpha1.AddToScheme(scheme))
+	require.NoError(t, seaweedv1.AddToScheme(scheme))
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(instance, sb).Build()
+
+	got, err := (&Provider{BaseProvider: controller.BaseProvider{ProviderName: common.ProviderName}}).
+		Mirror(context.Background(), cl, sb)
+	require.NoError(t, err)
+	assert.Nil(t, got)
 }
 
 func TestSyncBackupDoesNotRecreateSucceeded(t *testing.T) {
@@ -537,8 +928,10 @@ func enabledBackupInstance(storageName string) *corev1alpha1.Instance {
 	return &corev1alpha1.Instance{
 		ObjectMeta: metav1.ObjectMeta{Name: "sw", Namespace: "ns"},
 		Spec: corev1alpha1.InstanceSpec{
+			ProviderRef: commonv1alpha1.ObjectRef{Name: common.ProviderName},
 			Backup: &corev1alpha1.InstanceBackupSpec{
-				Enabled: true,
+				Enabled:  true,
+				ClassRef: commonv1alpha1.ObjectRef{Name: "seaweedfs-filer-meta"},
 				Storages: []corev1alpha1.InstanceBackupStorage{{
 					StorageRef: commonv1alpha1.ObjectRef{Name: storageName},
 				}},
