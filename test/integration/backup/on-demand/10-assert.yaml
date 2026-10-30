@@ -22,3 +22,6 @@ spec:
           directory: /
           forcePathStyle: true
         credentialsSecret: test-s3-creds
+    dataMirror:
+      - storageName: test-s3
+        filerPath: /

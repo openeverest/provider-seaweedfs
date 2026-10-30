@@ -109,7 +109,10 @@ func TestBuildBackupSpecMapsS3Storage(t *testing.T) {
 	require.NotNil(t, st.CredentialsSecret)
 	assert.Equal(t, "my-s3-creds", *st.CredentialsSecret)
 	assert.Empty(t, got.Schedule)
-	assert.Empty(t, got.DataMirror)
+	assert.Equal(t, []seaweedv1.BackupMirrorSpec{{
+		StorageName: "my-s3",
+		FilerPath:   "/",
+	}}, got.DataMirror)
 }
 
 func TestBuildBackupSpecForcePathStyleNilDefaultsFalse(t *testing.T) {
@@ -222,6 +225,35 @@ func TestBuildBackupSpecMapsSchedules(t *testing.T) {
 		FilerPath:   "/",
 		Suspend:     true,
 	}, got.Schedule[1])
+	assert.Equal(t, []seaweedv1.BackupMirrorSpec{{
+		StorageName: "my-s3",
+		FilerPath:   "/",
+	}}, got.DataMirror)
+}
+
+func TestBuildBackupSpecDataMirrorOnePerStorage(t *testing.T) {
+	bsA := s3BackupStorage("s3-a", pointer.To(false))
+	bsB := s3BackupStorage("s3-b", pointer.To(false))
+	instance := &corev1alpha1.Instance{
+		ObjectMeta: metav1.ObjectMeta{Name: "sw", Namespace: "ns"},
+		Spec: corev1alpha1.InstanceSpec{
+			Backup: &corev1alpha1.InstanceBackupSpec{
+				Enabled: true,
+				Storages: []corev1alpha1.InstanceBackupStorage{
+					{StorageRef: commonv1alpha1.ObjectRef{Name: "s3-a"}},
+					{StorageRef: commonv1alpha1.ObjectRef{Name: "s3-b"}},
+				},
+			},
+		},
+	}
+	ctx := backupSpecTestContext(t, instance, bsA, bsB)
+
+	got, err := buildBackupSpec(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []seaweedv1.BackupMirrorSpec{
+		{StorageName: "s3-a", FilerPath: "/"},
+		{StorageName: "s3-b", FilerPath: "/"},
+	}, got.DataMirror)
 }
 
 func TestBuildBackupSpecScheduleFilerPathParameter(t *testing.T) {
