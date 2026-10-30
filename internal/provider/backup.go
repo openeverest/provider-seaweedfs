@@ -82,7 +82,28 @@ func buildBackupSpec(c *controller.Context) (*seaweedv1.BackupSpec, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &seaweedv1.BackupSpec{Storages: storages, Schedule: schedules}, nil
+
+	return &seaweedv1.BackupSpec{
+		Storages:   storages,
+		Schedule:   schedules,
+		DataMirror: buildSeaweedDataMirrors(cfg.Storages),
+	}, nil
+}
+
+// buildSeaweedDataMirrors returns one BackupMirrorSpec per registered storage.
+// The operator listMapKey is storageName (at most one mirror per storage).
+// One continuous weed filer.backup Deployment per registered storage.
+// filerPath is always "/" so /.seaweedfs-operator/backups (and the rest
+// of the tree) is included. Off only when backup itself is off.
+func buildSeaweedDataMirrors(entries []corev1alpha1.InstanceBackupStorage) []seaweedv1.BackupMirrorSpec {
+	out := make([]seaweedv1.BackupMirrorSpec, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, seaweedv1.BackupMirrorSpec{
+			StorageName: entry.StorageRef.Name,
+			FilerPath:   "/",
+		})
+	}
+	return out
 }
 
 func buildSeaweedSchedules(entries []corev1alpha1.InstanceBackupStorage) ([]seaweedv1.BackupScheduleSpec, error) {
