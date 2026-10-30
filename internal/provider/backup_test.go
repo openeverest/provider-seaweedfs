@@ -241,6 +241,25 @@ func TestBuildBackupSpecScheduleFilerPathParameter(t *testing.T) {
 	assert.Equal(t, "/buckets", got.Schedule[0].FilerPath)
 }
 
+func TestBuildBackupSpecRejectsInvalidScheduleFilerPath(t *testing.T) {
+	bs := s3BackupStorage("my-s3", pointer.To(false))
+	instance := enabledBackupInstance("my-s3")
+	instance.Spec.Backup.Storages[0].Schedules = []corev1alpha1.InstanceBackupSchedule{{
+		Name:       "nightly",
+		Enabled:    true,
+		Cron:       "0 2 * * *",
+		Parameters: &runtime.RawExtension{Raw: []byte(`{"filerPath":"/buckets'; id"}`)},
+	}}
+	ctx := backupSpecTestContext(t, instance, bs)
+
+	_, err := buildBackupSpec(ctx)
+	require.Error(t, err)
+	bce := controller.AsBackupConfigError(err)
+	require.NotNil(t, bce)
+	assert.Equal(t, "InvalidScheduleParameters", bce.Reason)
+	assert.Contains(t, bce.Message, "filerPath")
+}
+
 func TestBuildBackupSpecRejectsTimeRetention(t *testing.T) {
 	bs := s3BackupStorage("my-s3", pointer.To(false))
 	instance := enabledBackupInstance("my-s3")
@@ -553,7 +572,7 @@ func TestSyncBackupObservesScheduledSeaweedBackup(t *testing.T) {
 	assert.True(t, metav1.IsControlledBy(sb, backup), "scheduled SeaweedBackup must be owned by Backup for WatchOwned")
 }
 
-func TestSyncBackupPreservesSucceededMirroredBackupWhenSeaweedBackupGone(t *testing.T) {
+func TestSyncBackupDeletesSucceededMirroredBackupWhenSeaweedBackupGone(t *testing.T) {
 	instance := enabledBackupInstance("my-s3")
 	backup := onDemandBackup("nightly-1", "sw", "my-s3")
 	backup.Spec.ScheduleName = "nightly"
@@ -564,13 +583,30 @@ func TestSyncBackupPreservesSucceededMirroredBackupWhenSeaweedBackupGone(t *test
 
 	exec, err := (&Provider{}).SyncBackup(ctx, backup)
 	require.NoError(t, err)
-	assert.Equal(t, backupv1alpha1.BackupStateSucceeded, exec.State)
-	require.NotNil(t, exec.OperatorBackupRef)
-	assert.Equal(t, "nightly-1", exec.OperatorBackupRef.Name)
+	assert.Equal(t, backupv1alpha1.BackupStatePending, exec.State)
+	assert.Contains(t, exec.Message, "deleting mirrored Backup")
 
 	exists, err := ctx.Exists(backup, "nightly-1")
 	require.NoError(t, err)
-	assert.True(t, exists, "succeeded mirrored Backup must stay after keep pruned SeaweedBackup")
+	assert.False(t, exists, "OE inventory mirrors keep: Succeeded mirrored Backup is deleted when SeaweedBackup is pruned")
+}
+
+func TestSyncBackupDeletesFailedMirroredBackupWhenSeaweedBackupGone(t *testing.T) {
+	instance := enabledBackupInstance("my-s3")
+	backup := onDemandBackup("nightly-1", "sw", "my-s3")
+	backup.Spec.ScheduleName = "nightly"
+	ref := seaweedBackupRef("nightly-1")
+	backup.Status.OperatorBackupRef = &ref
+	backup.Status.State = backupv1alpha1.BackupStateFailed
+	ctx := backupSpecTestContext(t, instance, backup)
+
+	exec, err := (&Provider{}).SyncBackup(ctx, backup)
+	require.NoError(t, err)
+	assert.Equal(t, backupv1alpha1.BackupStatePending, exec.State)
+
+	exists, err := ctx.Exists(backup, "nightly-1")
+	require.NoError(t, err)
+	assert.False(t, exists, "Failed mirrored Backup is deleted when SeaweedBackup is pruned")
 }
 
 func TestMirrorCreatesRetainScheduledBackup(t *testing.T) {

@@ -129,6 +129,15 @@ func buildSeaweedSchedules(entries []corev1alpha1.InstanceBackupStorage) ([]seaw
 			if filerPath == "" {
 				filerPath = "/"
 			}
+			if !validFilerPath(filerPath) {
+				return nil, &controller.BackupConfigError{
+					Reason: "InvalidScheduleParameters",
+					Message: fmt.Sprintf(
+						"schedule %q: invalid filerPath %q: must be an absolute, clean path of [A-Za-z0-9._/-]",
+						sched.Name, filerPath,
+					),
+				}
+			}
 
 			out = append(out, seaweedv1.BackupScheduleSpec{
 				Name:        sched.Name,
@@ -326,20 +335,22 @@ const deletionPolicyDeleteUnsupported = "deletionPolicy Delete is not supported:
 
 // SyncBackup creates a SeaweedBackup for on-demand Backups and maps operator
 // status. Scheduled Backups (spec.scheduleName set) are observed only — the
-// seaweedfs-operator scheduler owns those SeaweedBackups.
+// seaweedfs-operator scheduler owns those SeaweedBackups. OpenEverest inventory
+// mirrors operator keep: when a previously observed scheduled SeaweedBackup is
+// gone, SyncBackup deletes the mirrored Backup.
 func (p *Provider) SyncBackup(c *controller.Context, backup *backupv1alpha1.Backup) (controller.BackupExecutionStatus, error) {
 	l := log.FromContext(c.Context())
 	l.Info("Syncing backup", "name", backup.Name)
 
-	// Do not recreate a pruned SeaweedBackup under the same name; keep would
-	// delete it again and we would snapshot forever. Check before schedule
-	// observation so a succeeded mirrored Backup stays Succeeded after prune.
-	if backup.Status.State == backupv1alpha1.BackupStateSucceeded {
-		return preserveSucceededBackup(backup), nil
-	}
-
+	// Scheduled first so keep-pruned SeaweedBackups delete the mirrored Backup
+	// even after Succeeded. On-demand Succeeded still short-circuits below so
+	// we never recreate a pruned SeaweedBackup under the same name.
 	if backup.Spec.ScheduleName != "" {
 		return observeSeaweedBackup(c, backup)
+	}
+
+	if backup.Status.State == backupv1alpha1.BackupStateSucceeded {
+		return preserveSucceededBackup(backup), nil
 	}
 
 	if err := requireRetainDeletionPolicy(backup); err != nil {

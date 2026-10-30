@@ -52,8 +52,11 @@ spec:
 ```
 
 Disabled schedules stay on the list with `suspend: true` so toggling
-`enabled` does not drop the definition. `keep: 0` and `suspend: false` are
-omitted on the wire (`omitempty`); they are the operator defaults.
+`enabled` does not drop the definition. That diverges from the OpenEverest
+API comment that a disabled schedule is "removed from the engine": Seaweed's
+scheduler has an explicit `Suspend` field, and removing/re-adding a schedule
+re-anchors first-fire timing. `keep: 0` and `suspend: false` are omitted on
+the wire (`omitempty`); they are the operator defaults.
 
 Field mapping for S3:
 
@@ -73,7 +76,7 @@ OpenEverest defaults `forcePathStyle` to false. The operator defaults it to true
 
 Storage map keys must pass the operator webhook: lowercase RFC 1123 label, at most 50 characters. Invalid names become `BackupConfigured`=`InvalidStorageName`. PITR on a storage is rejected (`PITRConfigInvalid`). A missing `BackupStorage` requeues Sync until it appears.
 
-Schedule names use the same RFC 1123 / 50-character rule (`InvalidScheduleName`). Names must be unique across all storages on the Instance (`DuplicateSchedule`); that matches the operator's `listMapKey=name`. Cron is validated up front with the same `cron.ParseStandard` the operator scheduler uses, and must be at most 120 characters (operator CRD `MaxLength`) — failures are `InvalidScheduleCron`. Without that, Sync would succeed and the schedule would only fail later inside the operator tick.
+Schedule names use the same RFC 1123 / 50-character rule (`InvalidScheduleName`). Names must be unique across all storages on the Instance (`DuplicateSchedule`); the operator marks the list with `listMapKey=name` for SSA merge but does not webhook-enforce uniqueness, so the provider rejects duplicates up front. Cron is validated up front with the same `cron.ParseStandard` the operator scheduler uses, and must be at most 120 characters (operator CRD `MaxLength`) — failures are `InvalidScheduleCron`. Without that, Sync would succeed and the schedule would only fail later inside the operator tick. Schedule `filerPath` (from `parameters`) is validated with the same absolute/clean/`[A-Za-z0-9._/-]` rule as on-demand backups (`InvalidScheduleParameters`); the operator interpolates it into a single-quoted `fs.meta.save` shell.
 
 An on-demand `Backup` becomes a `SeaweedBackup`:
 
@@ -90,7 +93,7 @@ spec:
 
 That runs `fs.meta.save` once and stages the catalog on the filer. `Completed` means that Job finished. Nothing checks that a mirror copied the file to the bucket, or that a mirror is running.
 
-`SyncBackup` creates a `SeaweedBackup` for an on-demand `Backup` only. It does not create one for a `Backup` with `spec.scheduleName` set (those are observed only), and it does not create one again when the `Backup` is already `Succeeded`. Otherwise a pruned `SeaweedBackup` would be recreated under the old name, a new snapshot would run, and `keep` would prune it again.
+`SyncBackup` creates a `SeaweedBackup` for an on-demand `Backup` only. It does not create one for a `Backup` with `spec.scheduleName` set (those are observed only). For on-demand it also does not create one again when the `Backup` is already `Succeeded` — otherwise a pruned `SeaweedBackup` would be recreated under the old name, a new snapshot would run, and `keep` would prune it again. Scheduled inventory follows operator `keep` instead (see below).
 
 `deletionPolicy: Delete` is rejected (`SyncBackup` → `Failed`, `CleanupBackup` errors). The provider does not purge `filer.meta.gz` from the filer, so Delete would silently leave data behind. Use `deletionPolicy: Retain`. `CleanupBackup` then deletes only the `SeaweedBackup` CR and leaves the filer catalog (same as operator `keep`).
 
@@ -105,9 +108,11 @@ name, sets `spec.scheduleName` from that label, and forces
 the `SeaweedBackup`. On first observation it adopts the `SeaweedBackup` with a
 controller owner reference from the `Backup`, so `BackupWatches`
 `WatchOwned(SeaweedBackup)` enqueues on status changes and when `keep` deletes
-the object. Once the `Backup` has been observed (`status.operatorBackupRef` or
-a Running/Succeeded/Failed state), a missing `SeaweedBackup` means prune (or an
-external delete) removed it — the provider deletes the mirrored `Backup`.
+the object. OpenEverest inventory mirrors operator `keep`: once the `Backup`
+has been observed (`status.operatorBackupRef` or a Running/Succeeded/Failed
+state), a missing `SeaweedBackup` means prune (or an external delete) removed
+it — the provider deletes the mirrored `Backup`, including Succeeded ones.
+(Filer `filer.meta.gz` is still left behind; same as operator keep.)
 
 Status maps as `Pending` → `Pending`, `Running` → `Running`, `Completed` → `Succeeded`, `Failed` → `Failed`. `Succeeded` means the catalog is on the filer. It does not mean the bucket has it. `status.operatorBackupRef` points at the `SeaweedBackup`.
 
