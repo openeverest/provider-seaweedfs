@@ -153,6 +153,77 @@ func TestBuildBackupSpecRejectsPITR(t *testing.T) {
 	assert.Equal(t, controller.PITRConfigInvalidReason, bce.Reason)
 }
 
+func TestBuildBackupSpecRejectsSelfS3Endpoint(t *testing.T) {
+	tests := []struct {
+		name     string
+		endpoint string
+	}{
+		{name: "short service name", endpoint: "https://sw-s3:8334"},
+		{name: "namespaced service", endpoint: "http://sw-s3.ns:8333"},
+		{name: "cluster DNS", endpoint: "https://sw-s3.ns.svc:8334"},
+		{name: "fqdn", endpoint: "https://sw-s3.ns.svc.cluster.local:8334"},
+		{name: "case insensitive", endpoint: "https://SW-S3.NS.SVC:8334"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bs := s3BackupStorage("my-s3", pointer.To(true))
+			bs.Spec.S3.EndpointURL = tt.endpoint
+			ctx := backupSpecTestContext(t, enabledBackupInstance("my-s3"), bs)
+
+			_, err := buildBackupSpec(ctx)
+			require.Error(t, err)
+			bce := controller.AsBackupConfigError(err)
+			require.NotNil(t, bce)
+			assert.Equal(t, "StorageIsSelf", bce.Reason)
+			assert.Contains(t, bce.Message, "this Instance's S3 gateway")
+		})
+	}
+}
+
+func TestBuildBackupSpecRejectsSelfS3IngressHost(t *testing.T) {
+	bs := s3BackupStorage("my-s3", pointer.To(true))
+	bs.Spec.S3.EndpointURL = "https://s3.example.com"
+	instance := enabledBackupInstance("my-s3")
+	instance.Spec.Components = map[string]corev1alpha1.ComponentSpec{
+		common.ComponentS3: {
+			Replicas: pointer.To(int32(1)),
+			Parameters: &runtime.RawExtension{Raw: []byte(
+				`{"ingress":{"host":"s3.example.com"}}`,
+			)},
+		},
+	}
+	ctx := backupSpecTestContext(t, instance, bs)
+
+	_, err := buildBackupSpec(ctx)
+	require.Error(t, err)
+	bce := controller.AsBackupConfigError(err)
+	require.NotNil(t, bce)
+	assert.Equal(t, "StorageIsSelf", bce.Reason)
+}
+
+func TestBuildBackupSpecAllowsExternalS3Endpoint(t *testing.T) {
+	bs := s3BackupStorage("my-s3", pointer.To(true))
+	bs.Spec.S3.EndpointURL = "https://s3.amazonaws.com"
+	ctx := backupSpecTestContext(t, enabledBackupInstance("my-s3"), bs)
+
+	got, err := buildBackupSpec(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "https://s3.amazonaws.com", got.Storages["my-s3"].S3.Endpoint)
+}
+
+func TestBuildBackupSpecRejectsInvalidStorageEndpoint(t *testing.T) {
+	bs := s3BackupStorage("my-s3", pointer.To(true))
+	bs.Spec.S3.EndpointURL = "not-a-url"
+	ctx := backupSpecTestContext(t, enabledBackupInstance("my-s3"), bs)
+
+	_, err := buildBackupSpec(ctx)
+	require.Error(t, err)
+	bce := controller.AsBackupConfigError(err)
+	require.NotNil(t, bce)
+	assert.Equal(t, "InvalidStorageEndpoint", bce.Reason)
+}
+
 func TestBuildBackupSpecRejectsInvalidStorageName(t *testing.T) {
 	bs := s3BackupStorage("My_S3", pointer.To(true))
 	instance := enabledBackupInstance("My_S3")

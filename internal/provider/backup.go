@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"path"
 	"regexp"
 	"strings"
@@ -40,6 +41,8 @@ import (
 	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
 
 	seaweedfsfilermeta "github.com/openeverest/provider-seaweedfs/definition/backupclasses/seaweedfs-filer-meta"
+	"github.com/openeverest/provider-seaweedfs/definition/components"
+	"github.com/openeverest/provider-seaweedfs/internal/common"
 )
 
 // filerPathPattern rejects characters that can break out of the operator's
@@ -264,6 +267,10 @@ func buildSeaweedStorages(
 			return nil, err
 		}
 
+		if err := rejectSelfS3Endpoint(c, bs); err != nil {
+			return nil, err
+		}
+
 		spec, err := mapBackupStorageToSeaweed(bs)
 		if err != nil {
 			return nil, err
@@ -271,6 +278,78 @@ func buildSeaweedStorages(
 		out[name] = *spec
 	}
 	return out, nil
+}
+
+// rejectSelfS3Endpoint fails when BackupStorage.spec.s3.endpointURL points at
+// this Instance's own S3 gateway. dataMirror copies filerPath "/" including
+// /buckets/<backup-bucket>, so a self sink would mirror its own writes forever.
+func rejectSelfS3Endpoint(c *controller.Context, bs *backupv1alpha1.BackupStorage) error {
+	if bs.Spec.S3 == nil {
+		return nil
+	}
+	host, err := backupStorageEndpointHost(bs.Spec.S3.EndpointURL)
+	if err != nil {
+		return &controller.BackupConfigError{
+			Reason: "InvalidStorageEndpoint",
+			Message: fmt.Sprintf(
+				"BackupStorage %q: invalid endpointURL %q: %v",
+				bs.Name, bs.Spec.S3.EndpointURL, err,
+			),
+		}
+	}
+	if host == "" {
+		return nil
+	}
+	for _, self := range instanceSelfS3Hosts(c) {
+		if strings.EqualFold(host, self) {
+			return &controller.BackupConfigError{
+				Reason: "StorageIsSelf",
+				Message: fmt.Sprintf(
+					"BackupStorage %q: endpoint %q points at this Instance's S3 gateway; mirroring into the cluster being protected is not supported",
+					bs.Name, bs.Spec.S3.EndpointURL,
+				),
+			}
+		}
+	}
+	return nil
+}
+
+// backupStorageEndpointHost returns the hostname from an S3 endpoint URL.
+// An empty endpointURL (default AWS) yields an empty host.
+func backupStorageEndpointHost(endpointURL string) (string, error) {
+	if endpointURL == "" {
+		return "", nil
+	}
+	u, err := url.Parse(endpointURL)
+	if err != nil {
+		return "", err
+	}
+	host := u.Hostname()
+	if host == "" {
+		return "", fmt.Errorf("missing host")
+	}
+	return host, nil
+}
+
+// instanceSelfS3Hosts lists DNS names that resolve to this Instance's S3
+// Service, plus the configured Ingress host when Ingress is enabled.
+func instanceSelfS3Hosts(c *controller.Context) []string {
+	name := c.Name()
+	ns := c.Namespace()
+	short := s3ServiceName(name)
+	hosts := []string{
+		short,
+		short + "." + ns,
+		short + "." + ns + ".svc",
+		short + "." + ns + ".svc.cluster.local",
+	}
+	if s3Comp, ok := c.Instance().Spec.Components[common.ComponentS3]; ok {
+		var s3Params components.S3CustomSpec
+		if c.TryDecodeComponentParameters(s3Comp, &s3Params) && s3IngressEnabled(s3Params.Ingress) && s3Params.Ingress.Host != "" {
+			hosts = append(hosts, s3Params.Ingress.Host)
+		}
+	}
+	return hosts
 }
 
 // mapBackupStorageToSeaweed translates one OpenEverest BackupStorage into the
