@@ -2,6 +2,8 @@ apiVersion: backup.openeverest.io/v1alpha1
 kind: Backup
 metadata:
   name: backup-seaweedfs-nightly-20260101020000
+  labels:
+    seaweedfs.openeverest.io/mirrored-from: SeaweedBackup
 spec:
   scheduleName: nightly
   deletionPolicy: Retain

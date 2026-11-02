@@ -6,11 +6,13 @@ metadata:
 spec:
   description: |
     Scheduled filer-metadata backup: write Instance schedules onto
-    Seaweed.spec.backup.schedule, mirror a scheduler-created SeaweedBackup
-    into a Backup (scheduleName + Retain), map status through
-    Pending → Running → Succeeded, and delete the mirrored Backup when keep
-    removes the SeaweedBackup. The seaweedfs-operator is scaled to 0; tests
-    create/patch SeaweedBackup objects directly (no real cron).
+    Seaweed.spec.backup.schedule (including enabled: false → suspend: true),
+    mirror a scheduler-created SeaweedBackup into a Backup (scheduleName +
+    Retain + mirrored-from label), map status through Pending → Running →
+    Succeeded, delete the SeaweedBackup when the mirrored Backup is removed,
+    and delete the mirrored Backup when keep removes the SeaweedBackup. The
+    seaweedfs-operator is scaled to 0; tests create/patch SeaweedBackup
+    objects directly (no real cron).
   catch:
     - script:
         content: kubectl -n $NAMESPACE get instance,seaweed,backup,backupstorage,seaweedbackup,secret -o yaml
@@ -58,8 +60,34 @@ spec:
         - assert:
             file: 22-assert.yaml
 
+    # Deleting the mirrored Backup must remove the SeaweedBackup (Cleanup +
+    # owner-ref GC). Recreate a SeaweedBackup afterward for the keep-prune path.
+    - name: delete-mirrored-backup-cleans-seaweedbackup
+      try:
+        - delete:
+            ref:
+              apiVersion: backup.openeverest.io/v1alpha1
+              kind: Backup
+              name: backup-seaweedfs-nightly-20260101020000
+        - wait:
+            apiVersion: backup.openeverest.io/v1alpha1
+            kind: Backup
+            name: backup-seaweedfs-nightly-20260101020000
+            for:
+              deletion: {}
+        - wait:
+            apiVersion: seaweed.seaweedfs.com/v1
+            kind: SeaweedBackup
+            name: backup-seaweedfs-nightly-20260101020000
+            for:
+              deletion: {}
+
     - name: prune-seaweedbackup-deletes-mirrored-backup
       try:
+        - apply:
+            file: 20-create-scheduled-seaweedbackup.yaml
+        - assert:
+            file: 20-assert.yaml
         - delete:
             ref:
               apiVersion: seaweed.seaweedfs.com/v1
