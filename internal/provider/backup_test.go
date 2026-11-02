@@ -424,6 +424,29 @@ func TestBuildBackupSpecRejectsCronTooLong(t *testing.T) {
 	assert.Contains(t, bce.Message, "at most")
 }
 
+func TestBuildBackupSpecRejectsTooManySchedules(t *testing.T) {
+	bs := s3BackupStorage("my-s3", pointer.To(false))
+	instance := enabledBackupInstance("my-s3")
+	n := seaweedBackupScheduleMax + 1
+	schedules := make([]corev1alpha1.InstanceBackupSchedule, n)
+	for i := range schedules {
+		schedules[i] = corev1alpha1.InstanceBackupSchedule{
+			Name:    fmt.Sprintf("sched-%02d", i),
+			Enabled: true,
+			Cron:    "0 2 * * *",
+		}
+	}
+	instance.Spec.Backup.Storages[0].Schedules = schedules
+	ctx := backupSpecTestContext(t, instance, bs)
+
+	_, err := buildBackupSpec(ctx)
+	require.Error(t, err)
+	bce := controller.AsBackupConfigError(err)
+	require.NotNil(t, bce)
+	assert.Equal(t, "TooManySchedules", bce.Reason)
+	assert.Contains(t, bce.Message, fmt.Sprintf("got %d", n))
+}
+
 func TestValidateSeaweedBackupStorageName(t *testing.T) {
 	require.NoError(t, validateSeaweedBackupStorageName("a"))
 	require.NoError(t, validateSeaweedBackupStorageName("my-s3"))
@@ -609,6 +632,41 @@ func TestSyncBackupDeletesFailedMirroredBackupWhenSeaweedBackupGone(t *testing.T
 	assert.False(t, exists, "Failed mirrored Backup is deleted when SeaweedBackup is pruned")
 }
 
+func TestSyncBackupDeletesUnobservedMirroredBackupWhenSeaweedBackupGone(t *testing.T) {
+	instance := enabledBackupInstance("my-s3")
+	backup := onDemandBackup("nightly-1", "sw", "my-s3")
+	backup.Spec.ScheduleName = "nightly"
+	backup.Labels = map[string]string{mirroredFromLabel: mirroredFromSeaweedBackup}
+	// Empty status: SeaweedBackup pruned before SyncBackup ever observed it.
+	ctx := backupSpecTestContext(t, instance, backup)
+
+	exec, err := (&Provider{}).SyncBackup(ctx, backup)
+	require.NoError(t, err)
+	assert.Equal(t, backupv1alpha1.BackupStatePending, exec.State)
+	assert.Contains(t, exec.Message, "deleting mirrored Backup")
+
+	exists, err := ctx.Exists(backup, "nightly-1")
+	require.NoError(t, err)
+	assert.False(t, exists, "Mirror-stamped Backup is deleted even with empty status")
+}
+
+func TestSyncBackupWaitsForUnmarkedScheduledBackupWithoutSeaweedBackup(t *testing.T) {
+	instance := enabledBackupInstance("my-s3")
+	backup := onDemandBackup("nightly-1", "sw", "my-s3")
+	backup.Spec.ScheduleName = "nightly"
+	// Manually created scheduleName Backup (no Mirror stamp) keeps the safe wait path.
+	ctx := backupSpecTestContext(t, instance, backup)
+
+	exec, err := (&Provider{}).SyncBackup(ctx, backup)
+	require.NoError(t, err)
+	assert.Equal(t, backupv1alpha1.BackupStatePending, exec.State)
+	assert.Contains(t, exec.Message, "Waiting for scheduled SeaweedBackup")
+
+	exists, err := ctx.Exists(backup, "nightly-1")
+	require.NoError(t, err)
+	assert.True(t, exists)
+}
+
 func TestMirrorCreatesRetainScheduledBackup(t *testing.T) {
 	instance := enabledBackupInstance("my-s3")
 	sb := &seaweedv1.SeaweedBackup{
@@ -643,6 +701,7 @@ func TestMirrorCreatesRetainScheduledBackup(t *testing.T) {
 	assert.Equal(t, "seaweedfs-filer-meta", got.Spec.ClassRef.Name)
 	require.NotNil(t, got.Spec.Origin.InstanceRef)
 	assert.Equal(t, "sw", got.Spec.Origin.InstanceRef.Name)
+	assert.Equal(t, mirroredFromSeaweedBackup, got.Labels[mirroredFromLabel])
 }
 
 func TestMirrorSkipsOnDemandSeaweedBackup(t *testing.T) {
