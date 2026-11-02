@@ -64,6 +64,11 @@ const seaweedBackupStorageNameMax = 50
 // on the seaweedfs-operator CRD.
 const seaweedBackupCronMax = 120
 
+const seaweedBackupScheduleMax = 32
+
+const mirroredFromLabel = "seaweedfs.openeverest.io/mirrored-from"
+const mirroredFromSeaweedBackup = "SeaweedBackup"
+
 // defaultBackupDirectory is the sink prefix OpenEverest BackupStorage has no
 // field for. The proposal and operator examples use "/".
 const defaultBackupDirectory = "/"
@@ -171,6 +176,15 @@ func buildSeaweedSchedules(entries []corev1alpha1.InstanceBackupStorage) ([]seaw
 				FilerPath:   filerPath,
 				Suspend:     !sched.Enabled,
 			})
+		}
+	}
+	if n := len(out); n > seaweedBackupScheduleMax {
+		return nil, &controller.BackupConfigError{
+			Reason: "TooManySchedules",
+			Message: fmt.Sprintf(
+				"at most %d backup schedules are supported across all storages (seaweedfs-operator limit), got %d",
+				seaweedBackupScheduleMax, n,
+			),
 		}
 	}
 	return out, nil
@@ -436,8 +450,8 @@ const deletionPolicyDeleteUnsupported = "deletionPolicy Delete is not supported:
 // SyncBackup creates a SeaweedBackup for on-demand Backups and maps operator
 // status. Scheduled Backups (spec.scheduleName set) are observed only — the
 // seaweedfs-operator scheduler owns those SeaweedBackups. OpenEverest inventory
-// mirrors operator keep: when a previously observed scheduled SeaweedBackup is
-// gone, SyncBackup deletes the mirrored Backup.
+// mirrors operator keep: when a scheduled SeaweedBackup is gone, SyncBackup
+// deletes the mirrored Backup (Mirror-stamped, or previously observed).
 func (p *Provider) SyncBackup(c *controller.Context, backup *backupv1alpha1.Backup) (controller.BackupExecutionStatus, error) {
 	l := log.FromContext(c.Context())
 	l.Info("Syncing backup", "name", backup.Name)
@@ -614,6 +628,9 @@ func observeSeaweedBackup(c *controller.Context, backup *backupv1alpha1.Backup) 
 }
 
 func shouldDeleteOrphanedScheduledBackup(backup *backupv1alpha1.Backup) bool {
+	if isMirroredScheduledBackup(backup) {
+		return true
+	}
 	if backup.Status.OperatorBackupRef != nil {
 		return true
 	}
@@ -625,16 +642,21 @@ func shouldDeleteOrphanedScheduledBackup(backup *backupv1alpha1.Backup) bool {
 	}
 }
 
+func isMirroredScheduledBackup(backup *backupv1alpha1.Backup) bool {
+	return backup.Labels[mirroredFromLabel] == mirroredFromSeaweedBackup
+}
+
 // ensureSeaweedBackupOwnedBy sets Backup as controller of SeaweedBackup when
 // missing, so WatchOwned routes operator events to the mirrored Backup.
 func ensureSeaweedBackupOwnedBy(c *controller.Context, backup *backupv1alpha1.Backup, sb *seaweedv1.SeaweedBackup) error {
 	if metav1.IsControlledBy(sb, backup) {
 		return nil
 	}
+	base := sb.DeepCopy()
 	if err := controllerutil.SetControllerReference(backup, sb, c.Client().Scheme()); err != nil {
 		return fmt.Errorf("set controller reference on SeaweedBackup: %w", err)
 	}
-	if err := c.Client().Update(c.Context(), sb); err != nil {
+	if err := c.Client().Patch(c.Context(), sb, client.MergeFrom(base)); err != nil {
 		return fmt.Errorf("adopt SeaweedBackup: %w", err)
 	}
 	return nil
@@ -678,6 +700,9 @@ func (p *Provider) Mirror(ctx context.Context, c client.Client, obj client.Objec
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      sb.Name,
 			Namespace: sb.Namespace,
+			Labels: map[string]string{
+				mirroredFromLabel: mirroredFromSeaweedBackup,
+			},
 		},
 		Spec: backupv1alpha1.BackupSpec{
 			Origin: backupv1alpha1.BackupOrigin{

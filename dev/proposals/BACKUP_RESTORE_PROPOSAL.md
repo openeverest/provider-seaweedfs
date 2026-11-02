@@ -79,7 +79,7 @@ An endpoint that points at this Instance's own S3 gateway is rejected (`BackupCo
 
 Storage map keys must pass the operator webhook: lowercase RFC 1123 label, at most 50 characters. Invalid names become `BackupConfigured`=`InvalidStorageName`. PITR on a storage is rejected (`PITRConfigInvalid`). A missing `BackupStorage` requeues Sync until it appears.
 
-Schedule names use the same RFC 1123 / 50-character rule (`InvalidScheduleName`). Names must be unique across all storages on the Instance (`DuplicateSchedule`); the operator marks the list with `listMapKey=name` for SSA merge but does not webhook-enforce uniqueness, so the provider rejects duplicates up front. Cron is validated up front with the same `cron.ParseStandard` the operator scheduler uses, and must be at most 120 characters (operator CRD `MaxLength`) — failures are `InvalidScheduleCron`. Without that, Sync would succeed and the schedule would only fail later inside the operator tick. Schedule `filerPath` (from `parameters`) is validated with the same absolute/clean/`[A-Za-z0-9._/-]` rule as on-demand backups (`InvalidScheduleParameters`); the operator interpolates it into a single-quoted `fs.meta.save` shell.
+Schedule names use the same RFC 1123 / 50-character rule (`InvalidScheduleName`). Names must be unique across all storages on the Instance (`DuplicateSchedule`); the operator marks the list with `listMapKey=name` for SSA merge but does not webhook-enforce uniqueness, so the provider rejects duplicates up front. Cron is validated up front with the same `cron.ParseStandard` the operator scheduler uses, and must be at most 120 characters (operator CRD `MaxLength`) — failures are `InvalidScheduleCron`. Without that, Sync would succeed and the schedule would only fail later inside the operator tick. Schedule `filerPath` (from `parameters`) is validated with the same absolute/clean/`[A-Za-z0-9._/-]` rule as on-demand backups (`InvalidScheduleParameters`); the operator interpolates it into a single-quoted `fs.meta.save` shell. Total schedules across all storages are capped at 32 (`TooManySchedules`) to match the operator CRD `MaxItems` on `spec.backup.schedule`.
 
 An on-demand `Backup` becomes a `SeaweedBackup`:
 
@@ -104,18 +104,30 @@ Scheduled backups stay on the SeaweedFS scheduler. The provider's `BackupMirror`
 watches `SeaweedBackup` and mirrors objects that carry the operator label
 `seaweed.seaweedfs.com/backup-schedule` (absent on on-demand backups created by
 `SyncBackup`). Each mirrored OpenEverest `Backup` reuses the `SeaweedBackup`
-name, sets `spec.scheduleName` from that label, and forces
-`deletionPolicy: Retain`.
+name, sets `spec.scheduleName` from that label, forces
+`deletionPolicy: Retain`, and stamps
+`seaweedfs.openeverest.io/mirrored-from=SeaweedBackup` so orphans can be
+recognized before the first observation.
 
 `SyncBackup` for `spec.scheduleName` backups is observe-only: it does not create
 the `SeaweedBackup`. On first observation it adopts the `SeaweedBackup` with a
-controller owner reference from the `Backup`, so `BackupWatches`
-`WatchOwned(SeaweedBackup)` enqueues on status changes and when `keep` deletes
-the object. OpenEverest inventory mirrors operator `keep`: once the `Backup`
-has been observed (`status.operatorBackupRef` or a Running/Succeeded/Failed
-state), a missing `SeaweedBackup` means prune (or an external delete) removed
-it — the provider deletes the mirrored `Backup`, including Succeeded ones.
-(Filer `filer.meta.gz` is still left behind; same as operator keep.)
+controller owner reference from the `Backup` (merge-patched onto owner refs
+only), so `BackupWatches` `WatchOwned(SeaweedBackup)` enqueues on status
+changes and when `keep` deletes the object. OpenEverest inventory mirrors
+operator `keep`: a missing `SeaweedBackup` for a Mirror-stamped `Backup`, or
+for one already observed (`status.operatorBackupRef` or a
+Running/Succeeded/Failed state), means prune (or an external delete) removed
+it — the provider deletes the mirrored `Backup`, including Succeeded ones and
+never-observed Pending ones. Manually created `scheduleName` Backups without
+the Mirror stamp stay on the wait path until observed. (Filer `filer.meta.gz`
+is still left behind; same as operator keep.)
+
+Deleting a mirrored scheduled `Backup` deletes its `SeaweedBackup` via
+`CleanupBackup` and owner-ref GC. The operator scheduler derives `lastRun`
+from the newest remaining `SeaweedBackup` for that schedule, so deleting the
+*newest* one moves `lastRun` back; when `Next(lastRun) <= now` the scheduler
+fires an immediate off-schedule backup. Prefer deleting older inventory
+entries, or expect a catch-up run.
 
 Status maps as `Pending` → `Pending`, `Running` → `Running`, `Completed` → `Succeeded`, `Failed` → `Failed`. `Succeeded` means the catalog is on the filer. It does not mean the bucket has it. `status.operatorBackupRef` points at the `SeaweedBackup`.
 
