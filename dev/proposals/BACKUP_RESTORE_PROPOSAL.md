@@ -24,8 +24,8 @@ For S3, `storageRef` does not choose where the catalog is written. Every object-
 ## Backup
 
 The provider writes this onto the `Seaweed` when backup is enabled (storages
-and schedules). `dataMirror` is still opt-in and not written by Sync yet — see
-below.
+and schedules). One `dataMirror` entry is written per registered storage (see
+below).
 
 ```yaml
 spec:
@@ -47,8 +47,9 @@ spec:
         keep: 7                    # retention type count, count 7
         filerPath: /               # schedule.parameters.filerPath, default /
         suspend: false             # enabled: false becomes suspend: true
-    # Not written by Sync yet (later slice):
-    # dataMirror: [...]
+    dataMirror:
+      - storageName: my-s3
+        filerPath: /
 ```
 
 Disabled schedules stay on the list with `suspend: true` so toggling
@@ -73,6 +74,8 @@ The Secret keys are the same on both sides: `AWS_ACCESS_KEY_ID` and `AWS_SECRET_
 OpenEverest defaults `forcePathStyle` to false. The operator defaults it to true when the field is omitted. The provider always sets `forcePathStyle` on the `Seaweed` storage (nil/`false` → `false`), so false stays false. An in-cluster MinIO or SeaweedFS endpoint needs `forcePathStyle: true` on the `BackupStorage`.
 
 `verifyTLS: false` is rejected with a `BackupConfigured` condition (`VerifyTLSUnsupported`). The operator's S3 storage has no such field, so dropping it would make the mirror fail. The default `verifyTLS: true` is left unset on the `Seaweed`.
+
+An endpoint that points at this Instance's own S3 gateway is rejected (`BackupConfigured`=`StorageIsSelf`). Matches are the in-cluster Service DNS (`<name>-s3`, `<name>-s3.<ns>`, `<name>-s3.<ns>.svc`, `<name>-s3.<ns>.svc.cluster.local`) and the S3 Ingress host when Ingress is enabled. Self-mirroring `/` would include `/buckets/<backup-bucket>` and loop forever; a backup stored inside the cluster it protects is not a backup. An unparseable `endpointURL` is `InvalidStorageEndpoint`.
 
 Storage map keys must pass the operator webhook: lowercase RFC 1123 label, at most 50 characters. Invalid names become `BackupConfigured`=`InvalidStorageName`. PITR on a storage is rejected (`PITRConfigInvalid`). A missing `BackupStorage` requeues Sync until it appears.
 
@@ -140,9 +143,12 @@ Storage and schedule names must be lowercase RFC 1123 labels of at most 50 chara
 
 ### Data mirror
 
-Off unless the user opts in. One mirror per registered storage is a continuous `weed filer.backup -initialSnapshot` Deployment. It copies every file under the mirrored path, not just the catalog, and it re-walks that tree on every pod start. Restore does not read it. The mirror is also the only thing that carries the catalog off the cluster. With it left off, the catalog stays on the filer.
-
-When it is on, the provider adds:
+On whenever backup is enabled with at least one registered storage. Sync writes
+one `dataMirror` entry per storage (operator `listMapKey=storageName`). Each
+entry is a continuous `weed filer.backup -initialSnapshot` Deployment. It
+copies every file under the mirrored path, not just the catalog, and it
+re-walks that tree on every pod start. Restore does not read it. The mirror is
+also the only thing that carries the catalog off the cluster.
 
 ```yaml
 dataMirror:
@@ -150,7 +156,34 @@ dataMirror:
     filerPath: /
 ```
 
-`filerPath` is `/` so the hidden backup directory is included. How the user opts in is decided at implementation.
+`filerPath` is always `/` so the hidden backup directory
+(`/.seaweedfs-operator/backups`) is included. There is no separate flag and no
+per-storage opt-out: turning backup off (or removing a storage) removes the
+corresponding mirror. Because the path is `/`, the mirror also copies `/etc`
+(and any S3/IAM identities stored in the filer) into the backup bucket.
+
+#### What the mirror does and does not protect
+
+The operator runs `weed filer.backup` with `is_incremental = false` and without
+`-doDeleteFiles`. That means:
+
+- **Single always-current copy of data** — not point-in-time. Scheduled
+  `Backup`s / `keep` are point-in-time only for the `filer.meta.gz` catalog;
+  the data mirror is one live tree in the bucket.
+- **Overwrites propagate within seconds.** An accidental overwrite or
+  ransomware that replaces objects updates the mirror the same way; there is
+  no older data copy unless the backup bucket itself retains versions.
+- **Deletes are never propagated.** The bucket only grows; removed filer
+  paths stay in the sink.
+- **`keep` prunes only catalogs** (`SeaweedBackup` / `filer.meta.gz` inventory),
+  not mirrored object bytes.
+- **Every mirror pod restart re-uploads the whole tree** (`-initialSnapshot`
+  with no skip-if-exists).
+- **SSE-encrypted objects are written to the backup bucket as plaintext**
+  (the S3 sink decrypts before upload).
+
+A UI that shows "N retained backups" therefore describes retained *metadata*
+snapshots, not N recoverable point-in-time copies of the file bytes.
 
 ## Restore into the existing cluster
 
@@ -188,6 +221,7 @@ Only one restore per Instance runs at a time.
 ## What does not map
 
 - **Data mirror is not PITR.** The mirror is a continuous copy of file bytes, and restore does not use it. `supportsPITR` stays false, and `Instance.spec.backup.storages[].pitr` is rejected.
+- **Self-mirror / in-cluster sink for this Instance is rejected** (`StorageIsSelf`). The backup bucket must be outside this Instance's S3 gateway.
 - **`Backup.origin.type: External` is not mapped.** A path inside the bucket is not something `SeaweedRestore` can load. `supportsImport` stays false.
 - **`BackupStorage.spec.s3.verifyTLS: false` is rejected.** There is nowhere to put it.
 - **Time retention is rejected.** The operator only has `keep`.

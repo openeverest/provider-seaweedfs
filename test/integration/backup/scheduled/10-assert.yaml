@@ -33,3 +33,6 @@ spec:
         storageName: test-s3
         filerPath: /
         suspend: true
+    dataMirror:
+      - storageName: test-s3
+        filerPath: /

@@ -109,7 +109,10 @@ func TestBuildBackupSpecMapsS3Storage(t *testing.T) {
 	require.NotNil(t, st.CredentialsSecret)
 	assert.Equal(t, "my-s3-creds", *st.CredentialsSecret)
 	assert.Empty(t, got.Schedule)
-	assert.Empty(t, got.DataMirror)
+	assert.Equal(t, []seaweedv1.BackupMirrorSpec{{
+		StorageName: "my-s3",
+		FilerPath:   "/",
+	}}, got.DataMirror)
 }
 
 func TestBuildBackupSpecForcePathStyleNilDefaultsFalse(t *testing.T) {
@@ -148,6 +151,77 @@ func TestBuildBackupSpecRejectsPITR(t *testing.T) {
 	bce := controller.AsBackupConfigError(err)
 	require.NotNil(t, bce)
 	assert.Equal(t, controller.PITRConfigInvalidReason, bce.Reason)
+}
+
+func TestBuildBackupSpecRejectsSelfS3Endpoint(t *testing.T) {
+	tests := []struct {
+		name     string
+		endpoint string
+	}{
+		{name: "short service name", endpoint: "https://sw-s3:8334"},
+		{name: "namespaced service", endpoint: "http://sw-s3.ns:8333"},
+		{name: "cluster DNS", endpoint: "https://sw-s3.ns.svc:8334"},
+		{name: "fqdn", endpoint: "https://sw-s3.ns.svc.cluster.local:8334"},
+		{name: "case insensitive", endpoint: "https://SW-S3.NS.SVC:8334"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bs := s3BackupStorage("my-s3", pointer.To(true))
+			bs.Spec.S3.EndpointURL = tt.endpoint
+			ctx := backupSpecTestContext(t, enabledBackupInstance("my-s3"), bs)
+
+			_, err := buildBackupSpec(ctx)
+			require.Error(t, err)
+			bce := controller.AsBackupConfigError(err)
+			require.NotNil(t, bce)
+			assert.Equal(t, "StorageIsSelf", bce.Reason)
+			assert.Contains(t, bce.Message, "this Instance's S3 gateway")
+		})
+	}
+}
+
+func TestBuildBackupSpecRejectsSelfS3IngressHost(t *testing.T) {
+	bs := s3BackupStorage("my-s3", pointer.To(true))
+	bs.Spec.S3.EndpointURL = "https://s3.example.com"
+	instance := enabledBackupInstance("my-s3")
+	instance.Spec.Components = map[string]corev1alpha1.ComponentSpec{
+		common.ComponentS3: {
+			Replicas: pointer.To(int32(1)),
+			Parameters: &runtime.RawExtension{Raw: []byte(
+				`{"ingress":{"host":"s3.example.com"}}`,
+			)},
+		},
+	}
+	ctx := backupSpecTestContext(t, instance, bs)
+
+	_, err := buildBackupSpec(ctx)
+	require.Error(t, err)
+	bce := controller.AsBackupConfigError(err)
+	require.NotNil(t, bce)
+	assert.Equal(t, "StorageIsSelf", bce.Reason)
+}
+
+func TestBuildBackupSpecAllowsExternalS3Endpoint(t *testing.T) {
+	bs := s3BackupStorage("my-s3", pointer.To(true))
+	bs.Spec.S3.EndpointURL = "https://s3.amazonaws.com"
+	ctx := backupSpecTestContext(t, enabledBackupInstance("my-s3"), bs)
+
+	got, err := buildBackupSpec(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "https://s3.amazonaws.com", got.Storages["my-s3"].S3.Endpoint)
+}
+
+func TestBuildBackupSpecRejectsInvalidStorageEndpoint(t *testing.T) {
+	bs := s3BackupStorage("my-s3", pointer.To(true))
+	bs.Spec.S3.EndpointURL = "not-a-url"
+	ctx := backupSpecTestContext(t, enabledBackupInstance("my-s3"), bs)
+
+	_, err := buildBackupSpec(ctx)
+	require.Error(t, err)
+	bce := controller.AsBackupConfigError(err)
+	require.NotNil(t, bce)
+	assert.Equal(t, "InvalidStorageEndpoint", bce.Reason)
 }
 
 func TestBuildBackupSpecRejectsInvalidStorageName(t *testing.T) {
@@ -222,6 +296,35 @@ func TestBuildBackupSpecMapsSchedules(t *testing.T) {
 		FilerPath:   "/",
 		Suspend:     true,
 	}, got.Schedule[1])
+	assert.Equal(t, []seaweedv1.BackupMirrorSpec{{
+		StorageName: "my-s3",
+		FilerPath:   "/",
+	}}, got.DataMirror)
+}
+
+func TestBuildBackupSpecDataMirrorOnePerStorage(t *testing.T) {
+	bsA := s3BackupStorage("s3-a", pointer.To(false))
+	bsB := s3BackupStorage("s3-b", pointer.To(false))
+	instance := &corev1alpha1.Instance{
+		ObjectMeta: metav1.ObjectMeta{Name: "sw", Namespace: "ns"},
+		Spec: corev1alpha1.InstanceSpec{
+			Backup: &corev1alpha1.InstanceBackupSpec{
+				Enabled: true,
+				Storages: []corev1alpha1.InstanceBackupStorage{
+					{StorageRef: commonv1alpha1.ObjectRef{Name: "s3-a"}},
+					{StorageRef: commonv1alpha1.ObjectRef{Name: "s3-b"}},
+				},
+			},
+		},
+	}
+	ctx := backupSpecTestContext(t, instance, bsA, bsB)
+
+	got, err := buildBackupSpec(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []seaweedv1.BackupMirrorSpec{
+		{StorageName: "s3-a", FilerPath: "/"},
+		{StorageName: "s3-b", FilerPath: "/"},
+	}, got.DataMirror)
 }
 
 func TestBuildBackupSpecScheduleFilerPathParameter(t *testing.T) {
