@@ -136,8 +136,8 @@ Stateful workloads additionally report:
 |---|---|---|
 | Persistent storage | ✅ | Volume/filer `storage.size` required; optional master `storage.size`. Optional per-component `storage.storageClass` (UI picker for master/volume/filer) |
 | Storage expansion | ✅ | Volume, filer, and master `storage.size` can grow. A smaller size is rejected. Master `storage.size` cannot be set after creation when the master has no persistence, because the operator deletes and recreates the master StatefulSet. A larger size is rejected unless the StorageClass already on the Seaweed spec has `allowVolumeExpansion: true`, or the newest default class when the spec names none. Changing `storage.storageClass` in the same request as a size increase is rejected. Image `1.0.40` then patches the live PVCs and leaves StatefulSet `volumeClaimTemplates` unchanged ([seaweedfs-operator#394](https://github.com/seaweedfs/seaweedfs-operator/pull/394)). While a PVC is `Resizing`, or the operator has not patched it yet, the Instance phase is `Updating`. `FileSystemResizePending` does not hold the phase; offline expansion needs a pod restart. If the class on the PVC disallows expansion, the phase is `Failed`. Other claim-template edits are not applied; the operator emits Warning event `VolumeClaimTemplatesMismatch` (not a status condition) |
-| Backups | ❌ | Not implemented. Operator chart `0.1.30` and later install a `SeaweedBackup` CRD; this provider does not create it |
-| Restore | ❌ | Not implemented. `SeaweedRestore` ships in the same chart; this provider does not create it |
+| Backups | ⚠️ | On-demand filer-metadata snapshots via `SeaweedBackup` (`seaweedfs-filer-meta`, ProviderManaged). Registers S3 `BackupStorage` on `Seaweed.spec.backup.storages`. `Succeeded` means the catalog is on the filer (`/.seaweedfs-operator/backups/<name>/filer.meta.gz`), not that the bucket has it — off-cluster copy needs `dataMirror` (separate PR). `deletionPolicy: Delete` is rejected; use `Retain`. Schedules / mirroring of operator-scheduled backups not yet wired |
+| Restore | ❌ | Not implemented. `SyncRestore` fails with a clear message; `SeaweedRestore` is not created yet |
 
 ## Installation
 
@@ -594,7 +594,7 @@ markers, watches, and code generation are documented once for all providers in
   (cd ../openeverest && make build-controller docker-build-controller)
   make load-openeverest-controller-image
   (cd ../openeverest && make deploy-test-controller)
-  make test-integration            # or test-integration-core-standalone / -validation / -monitoring-metrics
+  make test-integration            # or test-integration-core-standalone / -validation / -monitoring-metrics / -backup-on-demand
   ```
 
 ## Troubleshooting

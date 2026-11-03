@@ -33,9 +33,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/AlekSi/pointer"
-	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	corev1alpha1 "github.com/openeverest/openeverest/v2/api/core/v1alpha1"
 	"github.com/openeverest/openeverest/v2/provider-runtime/controller"
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 
 	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
 
@@ -214,6 +214,11 @@ func (p *Provider) Sync(c *controller.Context) error {
 		return err
 	}
 
+	backupSpec, err := buildBackupSpec(c)
+	if err != nil {
+		return err
+	}
+
 	sw := &seaweedv1.Seaweed{
 		ObjectMeta: c.ObjectMeta(c.Name()),
 		Spec: seaweedv1.SeaweedSpec{
@@ -226,6 +231,7 @@ func (p *Provider) Sync(c *controller.Context) error {
 			Admin:                 buildAdminSpec(adminSecretName),
 			TLS:                   buildTLSSpec(topo),
 			SecurityConfig:        buildSecurityConfigSpec(topo),
+			Backup:                backupSpec,
 		},
 	}
 

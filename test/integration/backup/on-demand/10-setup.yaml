@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: test-s3-creds
+type: Opaque
+stringData:
+  AWS_ACCESS_KEY_ID: test-access-key
+  AWS_SECRET_ACCESS_KEY: test-secret-key
+---
+apiVersion: backup.openeverest.io/v1alpha1
+kind: BackupStorage
+metadata:
+  name: test-s3
+spec:
+  type: s3
+  s3:
+    bucket: test-backup-bucket
+    region: us-east-1
+    endpointURL: https://s3.example.com
+    # verifyTLS defaults to true; false is rejected by the provider.
+    forcePathStyle: true
+    credentialsSecretRef:
+      name: test-s3-creds

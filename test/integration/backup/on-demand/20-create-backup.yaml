@@ -1,0 +1,15 @@
+apiVersion: backup.openeverest.io/v1alpha1
+kind: Backup
+metadata:
+  name: adhoc-1
+spec:
+  origin:
+    type: Instance
+    instanceRef:
+      name: backup-seaweedfs
+  classRef:
+    name: seaweedfs-filer-meta
+  storageRef:
+    name: test-s3
+  # Delete would require purging filer.meta.gz; rejected until that lands.
+  deletionPolicy: Retain

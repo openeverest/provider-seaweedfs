@@ -157,3 +157,11 @@ jobs:
     with:
       make_target: test-integration-monitoring-metrics
       suite: metrics
+
+  test-integration-backup-on-demand:
+    name: Integration / backup on-demand
+    needs: [lint, build, verify]
+    uses: ./.github/workflows/integration-test.yaml
+    with:
+      make_target: test-integration-backup-on-demand
+      suite: backup-on-demand

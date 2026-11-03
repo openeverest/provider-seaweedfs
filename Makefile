@@ -188,6 +188,10 @@ test-integration-core-validation: ## Run core validation integration tests.
 test-integration-monitoring-metrics: ## Run metrics exposure integration tests.
 	. ./test/vars.sh && chainsaw test --config ./test/integration/.chainsaw.yaml ./test/integration/monitoring/metrics
 
+.PHONY: test-integration-backup-on-demand
+test-integration-backup-on-demand: ## Run on-demand backup integration tests.
+	. ./test/vars.sh && chainsaw test --config ./test/integration/.chainsaw.yaml ./test/integration/backup/on-demand
+
 .PHONY: test-e2e-cluster
 test-e2e-cluster: ## Run the e2e suite against a real seaweedfs-operator.
 	@kubectl get crd seaweeds.seaweed.seaweedfs.com >/dev/null 2>&1 || { \

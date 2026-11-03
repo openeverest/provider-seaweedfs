@@ -1,0 +1,10 @@
+apiVersion: backup.openeverest.io/v1alpha1
+kind: Backup
+metadata:
+  name: adhoc-1
+status:
+  state: Running
+  operatorBackupRef:
+    group: seaweed.seaweedfs.com
+    kind: SeaweedBackup
+    (starts_with(name, 'adhoc-1-')): true
