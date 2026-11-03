@@ -1,0 +1,35 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: backup-seaweedfs
+status:
+  (conditions[?type == 'BackupConfigured'] | [0].status): "True"
+---
+apiVersion: seaweed.seaweedfs.com/v1
+kind: Seaweed
+metadata:
+  name: backup-seaweedfs
+  (ownerReferences[?kind == 'Instance' && name == 'backup-seaweedfs'] | length(@)): 1
+spec:
+  backup:
+    storages:
+      test-s3:
+        type: s3
+        s3:
+          bucket: test-backup-bucket
+          region: us-east-1
+          endpoint: https://s3.example.com
+          directory: /
+          forcePathStyle: true
+        credentialsSecret: test-s3-creds
+    schedule:
+      - name: nightly
+        schedule: "0 2 * * *"
+        storageName: test-s3
+        keep: 7
+        filerPath: /
+      - name: paused
+        schedule: "0 4 * * 0"
+        storageName: test-s3
+        filerPath: /
+        suspend: true

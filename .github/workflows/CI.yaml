@@ -165,3 +165,11 @@ jobs:
     with:
       make_target: test-integration-backup-on-demand
       suite: backup-on-demand
+
+  test-integration-backup-scheduled:
+    name: Integration / backup scheduled
+    needs: [lint, build, verify]
+    uses: ./.github/workflows/integration-test.yaml
+    with:
+      make_target: test-integration-backup-scheduled
+      suite: backup-scheduled

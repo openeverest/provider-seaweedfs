@@ -192,6 +192,10 @@ test-integration-monitoring-metrics: ## Run metrics exposure integration tests.
 test-integration-backup-on-demand: ## Run on-demand backup integration tests.
 	. ./test/vars.sh && chainsaw test --config ./test/integration/.chainsaw.yaml ./test/integration/backup/on-demand
 
+.PHONY: test-integration-backup-scheduled
+test-integration-backup-scheduled: ## Run scheduled backup integration tests.
+	. ./test/vars.sh && chainsaw test --config ./test/integration/.chainsaw.yaml ./test/integration/backup/scheduled
+
 .PHONY: test-e2e-cluster
 test-e2e-cluster: ## Run the e2e suite against a real seaweedfs-operator.
 	@kubectl get crd seaweeds.seaweed.seaweedfs.com >/dev/null 2>&1 || { \

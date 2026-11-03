@@ -6,6 +6,7 @@ require (
 	github.com/AlekSi/pointer v1.2.0
 	github.com/openeverest/openeverest/v2 v2.0.0-dev.4
 	github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring v0.94.1
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/seaweedfs/seaweedfs-operator v0.0.0-20261025200953-b6b3122d9338
 	github.com/stretchr/testify v1.12.1
 	k8s.io/api v0.37.1
