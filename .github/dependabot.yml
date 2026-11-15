@@ -1,0 +1,14 @@
+# The seaweedfs-operator is tracked as the bundled Helm subchart
+# (charts/provider-seaweedfs/Chart.yaml). Its Go module has no release tags and is
+# pinned to a commit, so Dependabot cannot follow it; bump it by hand.
+version: 2
+
+updates:
+  - package-ecosystem: "helm"
+    directory: "/charts/provider-seaweedfs"
+    schedule:
+      interval: "daily"
+    allow:
+      - dependency-name: "seaweedfs-operator"
+    labels:
+      - "dependencies"
