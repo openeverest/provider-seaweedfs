@@ -187,6 +187,27 @@ snapshots, not N recoverable point-in-time copies of the file bytes.
 
 ## Restore into the existing cluster
 
+OpenEverest `Restore` (into the existing Instance):
+
+```yaml
+apiVersion: backup.openeverest.io/v1alpha1
+kind: Restore
+metadata:
+  name: restore-1
+spec:
+  instanceRef:
+    name: seaweed-sample
+  dataSource:
+    type: Backup
+    backup:
+      backupRef:
+        name: adhoc-1          # OpenEverest Backup; catalog path uses its SeaweedBackup name
+  parameters:
+    filerPath: /                     # optional; default /; maps to fs.meta.load -dirPrefix (filter, not remount)
+```
+
+Provider creates:
+
 ```yaml
 apiVersion: seaweed.seaweedfs.com/v1
 kind: SeaweedRestore
@@ -196,13 +217,20 @@ spec:
   clusterName: seaweed-sample
   backupSource:
     storageName: my-s3
-    metaPath: /.seaweedfs-operator/backups/adhoc-1/filer.meta.gz
+    metaPath: /.seaweedfs-operator/backups/<SeaweedBackup name>/filer.meta.gz
   filerPath: /
 ```
 
-`backupName` is not used. It needs the `SeaweedBackup` to still exist and be `Completed`, and `keep` deletes that object. `backupSource` only needs the catalog file, which `keep` does not delete.
+`backupName` is not used because that path needs the `SeaweedBackup` to still exist and be `Completed`, and `keep` deletes that object. `backupSource` only needs the catalog file on the filer, which `keep` does not delete. `metaPath` uses `status.operatorBackupRef.name` when set (UID-derived for on-demand; same name as the mirrored `Backup` for scheduled).
 
-`Restore.spec.instanceRef` is the cluster that already exists. The provider does not create a new `Seaweed`. `dataSource.type` must be `Backup`. `PointInTime` is rejected because this class does not support PITR.
+`Restore.spec.instanceRef` is the cluster that already exists. The provider does not create a new `Seaweed`. `dataSource.type` must be `Backup`. `PointInTime` is rejected because this class does not support PITR. The source Backup must have `origin.type: Instance` and `origin.instanceRef` equal to the restore target; External and cross-Instance sources fail.
+
+For S3 storages the operator restore Job reads the catalog with `weed filer.cat` from the filer path above. It does **not** read the backup bucket. The data mirror may have copied `filer.meta.gz` off-cluster, but restore does not use that copy. So restore requires:
+
+1. `/.seaweedfs-operator/backups/<SeaweedBackup name>/filer.meta.gz` still present on this cluster's filer, and
+2. volume chunks for the restored entries still present on this cluster.
+
+A fully wiped filer also loses the staged catalog. Putting the catalog back onto the filer (for example from the mirrored bucket) before creating the Restore is out of scope for this provider today.
 
 `fs.meta.load` uses `CreateEntry`. On a path that already exists, that deletes chunks that are on the current entry and not on the restored one. On a live filer:
 
@@ -210,13 +238,17 @@ spec:
 - A file deleted since the backup comes back, but its chunks are gone.
 - A file created since the backup is left in place. The load does not roll the cluster back.
 
-Restore is only safe when the filer's metadata is empty or lost and the volume data is still on this cluster. The provider gates it, either with an explicit metadata-only disaster recovery parameter or by refusing a filer that is not empty. Which gate is decided at implementation.
+That is why restore is only safe when the user namespace being restored is empty (or the operator has already lost that metadata) **and** the catalog file still exists on the filer (or was replaced there) **and** the volume data is still on this cluster.
 
-The operator's restore Job does not stop the S3 gateway. Whether this provider stops client traffic during `fs.meta.load` is decided at implementation. Writes during the load race with `CreateEntry`.
+The provider enforces emptiness before creating `SeaweedRestore`: one GET on the restore `filerPath` via the filer HTTP directory API (`Accept: application/json`, `limit=2` at `/` or `limit=1` otherwise). It does not walk or page the tree. Under `/`, only the reserved catalog root `.seaweedfs-operator` is allowed; any other entry (for example `buckets` or `etc`) Fails the Restore. Under a non-root `filerPath`, any entry Fails; a missing path is treated as empty. Listing failures that look transient (dial errors, HTTP 5xx) stay `Pending`; HTTP 403 (`exposeDirectoryData` disabled) Fails because the gate cannot run. The gate is not re-checked after a `SeaweedRestore` already exists for this Restore.
 
-Only one restore per Instance runs at a time.
+The operator's restore Job does not stop the S3 gateway or the filer, and this provider does not either. Stop clients before starting a restore. Writes during the load race with `CreateEntry`.
 
-`Instance.spec.dataSource` (a new Instance from a backup) is rejected. The file bytes are on the source cluster's volumes, so a new cluster cannot be seeded from this backup.
+Only one restore per Instance runs at a time. A second `Restore` stays `Pending` (no `SeaweedRestore` created) until the first reaches `Succeeded` or `Failed`.
+
+`Instance.spec.dataSource` (a new Instance from a backup) is rejected in `Sync` with `DataSourceReady=False`, reason `DataSourceUnsupported`. The file bytes are on the source cluster's volumes, so a new cluster cannot be seeded from this backup. No `Seaweed` is created while that field is set.
+
+Optional restore `filerPath` (default `/`) maps to `SeaweedRestore.spec.filerPath`, which the operator turns into `fs.meta.load -dirPrefix` when not `/`. That filters which snapshot entries are applied; entries keep their original paths (not a remount under a new root). Status maps `Pending` → `Pending`, `Running` → `Running`, `Completed` → `Succeeded`, `Failed` → `Failed`. `status.operatorRestoreRef` points at the `SeaweedRestore`.
 
 ## What does not map
 
