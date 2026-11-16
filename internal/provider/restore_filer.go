@@ -182,7 +182,7 @@ func listFilerDirectory(ctx context.Context, baseURL, dir string, limit int) (fi
 			msg: fmt.Sprintf("Waiting for filer directory listing at %s: %v", u.Host, err),
 		}
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(res.Body, 4<<20))
 	if err != nil {
