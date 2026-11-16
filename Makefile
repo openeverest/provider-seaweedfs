@@ -9,8 +9,15 @@ CONTAINER_TOOL ?= docker
 # Image URL to use for building/pushing image targets
 IMG ?= ghcr.io/openeverest/provider-seaweedfs-dev:latest
 
-# OpenEverest branch to use for OpenEverest CRD installation.
-OPENEVEREST_BRANCH ?= main
+# Commit of openeverest/openeverest pinned in go.mod (a tag or a pseudo-version).
+# CI builds the OpenEverest controller from it. Override it (e.g.
+# OPENEVEREST_REF=main) to build against another core ref.
+OPENEVEREST_REF ?= $(shell sed -n 's/.*"Hash":"\([0-9a-f]*\)".*/\1/p' \
+	"$$(go mod download -json github.com/openeverest/openeverest/v2 | sed -n 's/.*"Info": "\(.*\)",/\1/p')")
+
+# Local checkout of openeverest/openeverest (at OPENEVEREST_REF) used to build
+# and deploy the OpenEverest controller for integration tests.
+OPENEVEREST_DIR ?= _openeverest
 
 # Image URL for OpenEverest controller used in integration tests (must be pre-built).
 OPENEVEREST_CONTROLLER_IMG ?= ghcr.io/openeverest/openeverest-controller-dev:0.0.0
@@ -218,17 +225,26 @@ load-image: ## Import the provider image (IMG) into the k3d cluster.
 load-openeverest-controller-image: ## Import the OpenEverest controller image into the k3d cluster.
 	k3d image import ${OPENEVEREST_CONTROLLER_IMG} -c ${K3D_CLUSTER_NAME}
 
+.PHONY: openeverest-ref
+openeverest-ref: ## Print the openeverest/openeverest ref to build the OpenEverest controller from (OPENEVEREST_REF).
+	@test -n "$(OPENEVEREST_REF)" || { echo "cannot resolve the openeverest/openeverest commit pinned in go.mod" >&2; exit 1; }
+	@echo $(OPENEVEREST_REF)
+
+.PHONY: openeverest-checkout
+openeverest-checkout: ## Check out openeverest/openeverest at OPENEVEREST_REF into OPENEVEREST_DIR.
+	@ref="$(OPENEVEREST_REF)"; \
+	test -n "$$ref" || { echo "cannot resolve the openeverest/openeverest commit pinned in go.mod" >&2; exit 1; }; \
+	if [ ! -d "$(OPENEVEREST_DIR)/.git" ]; then \
+		git init -q "$(OPENEVEREST_DIR)"; \
+		git -C "$(OPENEVEREST_DIR)" remote add origin https://github.com/openeverest/openeverest; \
+	fi; \
+	git -C "$(OPENEVEREST_DIR)" fetch --depth 1 origin "$$ref"; \
+	git -C "$(OPENEVEREST_DIR)" checkout --force FETCH_HEAD
+
 .PHONY: install-crds
 install-crds: ## Install OpenEverest CRDs into the cluster (the Seaweed CRD ships with the chart).
-	kubectl apply -f https://raw.githubusercontent.com/openeverest/openeverest/$(OPENEVEREST_BRANCH)/config/crd/bases/core.openeverest.io_providers.yaml
-	kubectl apply -f https://raw.githubusercontent.com/openeverest/openeverest/$(OPENEVEREST_BRANCH)/config/crd/bases/core.openeverest.io_instances.yaml
-	kubectl apply -f https://raw.githubusercontent.com/openeverest/openeverest/$(OPENEVEREST_BRANCH)/config/crd/bases/monitoring.openeverest.io_monitoringconfigs.yaml
-	kubectl apply -f https://raw.githubusercontent.com/openeverest/openeverest/$(OPENEVEREST_BRANCH)/config/crd/bases/backup.openeverest.io_backupclasses.yaml
-	kubectl apply -f https://raw.githubusercontent.com/openeverest/openeverest/$(OPENEVEREST_BRANCH)/config/crd/bases/backup.openeverest.io_backups.yaml
-	kubectl apply -f https://raw.githubusercontent.com/openeverest/openeverest/$(OPENEVEREST_BRANCH)/config/crd/bases/backup.openeverest.io_restores.yaml
-	kubectl apply -f https://raw.githubusercontent.com/openeverest/openeverest/$(OPENEVEREST_BRANCH)/config/crd/bases/backup.openeverest.io_backupstorages.yaml
-	kubectl apply -f https://raw.githubusercontent.com/openeverest/openeverest/$(OPENEVEREST_BRANCH)/config/crd/bases/core.openeverest.io_instancepresets.yaml
-	kubectl apply -f https://raw.githubusercontent.com/openeverest/openeverest/$(OPENEVEREST_BRANCH)/config/crd/bases/backup.openeverest.io_backupimports.yaml
+	go mod download github.com/openeverest/openeverest/v2
+	kubectl apply --server-side --force-conflicts -f "$$(go list -m -f '{{.Dir}}' github.com/openeverest/openeverest/v2)/config/crd/bases"
 
 # The operator is scaled to 0 so tests drive Seaweed status by hand; its webhook
 # would then have no endpoints and reject every Seaweed write, so it is disabled.

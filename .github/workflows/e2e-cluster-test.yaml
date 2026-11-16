@@ -7,7 +7,7 @@ on:
   push:
     branches: [main]
   schedule:
-    # Nightly at 02:00 UTC.
+    # Nightly at 02:00 UTC, against openeverest/openeverest main.
     - cron: "0 2 * * *"
 
 # Queue rather than cancel: a push and the nightly run share one cluster budget.
@@ -23,6 +23,7 @@ jobs:
     name: e2e cluster
     uses: ./.github/workflows/integration-test.yaml
     with:
+      openeverest_ref: ${{ github.event_name == 'schedule' && 'main' || '' }}
       make_target: test-e2e-cluster
       suite: e2e-cluster
       deploy_target: deploy-provider-e2e
