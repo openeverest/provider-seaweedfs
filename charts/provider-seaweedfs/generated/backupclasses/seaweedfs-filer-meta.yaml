@@ -24,6 +24,9 @@ spec:
     supportsPITR: false
   restoreParametersSchema:
     openAPIV3Schema:
+      properties:
+        filerPath:
+          type: string
       type: object
   supportedProviders:
     - provider-seaweedfs
@@ -45,6 +48,14 @@ spec:
       componentsOrder: []
       label: PITR Configuration
     restore:
-      components: {}
-      componentsOrder: []
+      components:
+        filerPath:
+          fieldParams:
+            defaultValue: /
+            description: Filer subtree to load the snapshot under. Defaults to /.
+            label: Filer path
+          path: filerPath
+          uiType: text
+      componentsOrder:
+        - filerPath
       label: Restore Configuration

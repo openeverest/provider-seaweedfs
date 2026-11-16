@@ -24,5 +24,13 @@ pitr:
   componentsOrder: []
 restore:
   label: Restore Configuration
-  components: {}
-  componentsOrder: []
+  components:
+    filerPath:
+      path: filerPath
+      uiType: text
+      fieldParams:
+        label: Filer path
+        description: Filer subtree to load the snapshot under. Defaults to /.
+        defaultValue: /
+  componentsOrder:
+    - filerPath

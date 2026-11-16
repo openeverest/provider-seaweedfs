@@ -32,5 +32,12 @@ type SeaweedfsFilerMetaBackupParameters struct {
 }
 
 // SeaweedfsFilerMetaRestoreParameters describes Restore.spec.parameters for
-// this class. Restore-time options are not exposed yet.
-type SeaweedfsFilerMetaRestoreParameters struct{}
+// this class. filerPath maps to SeaweedRestoreSpec.FilerPath.
+type SeaweedfsFilerMetaRestoreParameters struct {
+	// FilerPath is the filer subtree the snapshot is loaded under. Defaults to
+	// "/". Maps to SeaweedRestoreSpec.FilerPath.
+	// +optional
+	// +kubebuilder:default:="/"
+	// +kubebuilder:validation:Pattern=`^/[A-Za-z0-9._/-]*$`
+	FilerPath string `json:"filerPath,omitempty"`
+}
