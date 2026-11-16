@@ -590,7 +590,9 @@ markers, watches, and code generation are documented once for all providers in
   ```bash
   make k3d-cluster-up
   make docker-build load-image install-crds deploy-provider-ci IMG=provider-seaweedfs:ci
-  # OpenEverest controller, built from an openeverest/openeverest checkout:
+  # OpenEverest controller, built from an openeverest/openeverest checkout at
+  # the core commit pinned in go.mod (`make openeverest-ref`):
+  git -C ../openeverest checkout "$(make -s openeverest-ref)"
   (cd ../openeverest && make build-controller docker-build-controller)
   make load-openeverest-controller-image
   (cd ../openeverest && make deploy-test-controller)
