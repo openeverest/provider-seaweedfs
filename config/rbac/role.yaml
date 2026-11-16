@@ -155,6 +155,7 @@ rules:
   - seaweed.seaweedfs.com
   resources:
   - seaweedbackups
+  - seaweedrestores
   - seaweeds
   verbs:
   - create
@@ -168,6 +169,7 @@ rules:
   - seaweed.seaweedfs.com
   resources:
   - seaweedbackups/status
+  - seaweedrestores/status
   - seaweeds/status
   verbs:
   - get
