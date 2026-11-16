@@ -1,0 +1,14 @@
+apiVersion: backup.openeverest.io/v1alpha1
+kind: Restore
+metadata:
+  name: restore-1
+spec:
+  instanceRef:
+    name: restore-seaweedfs
+  dataSource:
+    type: Backup
+    backup:
+      backupRef:
+        name: adhoc-1
+  parameters:
+    filerPath: /

@@ -188,3 +188,12 @@ jobs:
       openeverest_ref: ${{ github.event_name == 'schedule' && 'main' || inputs.openeverest_ref || '' }}
       make_target: test-integration-backup-scheduled
       suite: backup-scheduled
+
+  test-integration-backup-restore:
+    name: Integration / backup restore
+    needs: [lint, build, verify]
+    uses: ./.github/workflows/integration-test.yaml
+    with:
+      openeverest_ref: ${{ github.event_name == 'schedule' && 'main' || inputs.openeverest_ref || '' }}
+      make_target: test-integration-backup-restore
+      suite: backup-restore

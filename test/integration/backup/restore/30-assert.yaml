@@ -1,0 +1,24 @@
+apiVersion: backup.openeverest.io/v1alpha1
+kind: Restore
+metadata:
+  name: restore-1
+status:
+  state: Pending
+  executionMode: ProviderManaged
+  operatorRestoreRef:
+    group: seaweed.seaweedfs.com
+    kind: SeaweedRestore
+    name: restore-1
+---
+apiVersion: seaweed.seaweedfs.com/v1
+kind: SeaweedRestore
+metadata:
+  name: restore-1
+  (ownerReferences[?kind == 'Restore' && name == 'restore-1'] | length(@)): 1
+spec:
+  clusterName: restore-seaweedfs
+  filerPath: /
+  backupSource:
+    storageName: test-s3
+    # Exact metaPath (UID-derived SeaweedBackup name) is checked in chainsaw-test.yaml.
+    (starts_with(metaPath, '/.seaweedfs-operator/backups/adhoc-1-')): true
