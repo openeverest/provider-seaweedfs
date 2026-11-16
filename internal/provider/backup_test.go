@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -1030,6 +1031,7 @@ func TestValidFilerPath(t *testing.T) {
 }
 
 func TestSyncRestoreCreatesSeaweedRestoreWithBackupSource(t *testing.T) {
+	withFilerListServer(t, filerListJSONHandler(http.StatusOK, "/.seaweedfs-operator"))
 	instance := enabledBackupInstance("my-s3")
 	backup := succeededBackup("adhoc-1", "sw", "my-s3")
 	sw := seaweedClusterWithBackupStorage("sw", "my-s3")
@@ -1151,6 +1153,7 @@ func TestSyncRestoreRejectsExternalBackupOrigin(t *testing.T) {
 }
 
 func TestSyncRestoreUsesScheduledBackupNameForMetaPath(t *testing.T) {
+	withFilerListServer(t, filerListJSONHandler(http.StatusNotFound))
 	instance := enabledBackupInstance("my-s3")
 	backup := succeededScheduledBackup("sw-nightly-20260101", "sw", "my-s3", "nightly")
 	sw := seaweedClusterWithBackupStorage("sw", "my-s3")

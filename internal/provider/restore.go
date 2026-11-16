@@ -75,19 +75,10 @@ func (p *Provider) SyncRestore(c *controller.Context, restore *backupv1alpha1.Re
 		}, nil
 	}
 
-	filerPath := params.FilerPath
-	if filerPath == "" {
-		filerPath = "/"
-	}
-	if !validFilerPath(filerPath) {
-		return controller.RestoreExecutionStatus{
-			State:   backupv1alpha1.RestoreStateFailed,
-			Message: fmt.Sprintf("invalid filerPath %q: must be an absolute, clean path of [A-Za-z0-9._/-]", filerPath),
-		}, nil
-	}
-
 	// If we already own a SeaweedRestore, keep mapping its status even when
 	// another Restore is also non-terminal (creation is what we serialize).
+	// Do not re-probe the filer here so a mid-flight write cannot strand an
+	// in-progress operator Job.
 	srName := seaweedRestoreName(restore)
 	existing := &seaweedv1.SeaweedRestore{}
 	if err := c.Get(existing, srName); err == nil {
@@ -102,6 +93,17 @@ func (p *Provider) SyncRestore(c *controller.Context, restore *backupv1alpha1.Re
 		return controller.RestoreExecutionStatus{
 			State:   backupv1alpha1.RestoreStatePending,
 			Message: fmt.Sprintf("Waiting for restore %q to finish (only one restore per Instance at a time)", blocking),
+		}, nil
+	}
+
+	filerPath := params.FilerPath
+	if filerPath == "" {
+		filerPath = "/"
+	}
+	if !validFilerPath(filerPath) {
+		return controller.RestoreExecutionStatus{
+			State:   backupv1alpha1.RestoreStateFailed,
+			Message: fmt.Sprintf("invalid filerPath %q: must be an absolute, clean path of [A-Za-z0-9._/-]", filerPath),
 		}, nil
 	}
 
@@ -156,6 +158,23 @@ func (p *Provider) SyncRestore(c *controller.Context, restore *backupv1alpha1.Re
 		return controller.RestoreExecutionStatus{
 			State:   backupv1alpha1.RestoreStatePending,
 			Message: fmt.Sprintf("Waiting for storage %q to be registered on Seaweed cluster", storageName),
+		}, nil
+	}
+
+	if err := ensureFilerPathEmptyForRestore(
+		c.Context(),
+		filerHTTPBaseURLFn(c.Name(), c.Namespace()),
+		filerPath,
+	); err != nil {
+		if isFilerProbeTransient(err) {
+			return controller.RestoreExecutionStatus{
+				State:   backupv1alpha1.RestoreStatePending,
+				Message: err.Error(),
+			}, nil
+		}
+		return controller.RestoreExecutionStatus{
+			State:   backupv1alpha1.RestoreStateFailed,
+			Message: err.Error(),
 		}, nil
 	}
 
