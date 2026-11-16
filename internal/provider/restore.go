@@ -115,6 +115,12 @@ func (p *Provider) SyncRestore(c *controller.Context, restore *backupv1alpha1.Re
 		}
 		return controller.RestoreExecutionStatus{}, fmt.Errorf("get source Backup: %w", err)
 	}
+	if msg := validateRestoreBackupOrigin(backup, c.Name()); msg != "" {
+		return controller.RestoreExecutionStatus{
+			State:   backupv1alpha1.RestoreStateFailed,
+			Message: msg,
+		}, nil
+	}
 	if backup.Status.State != backupv1alpha1.BackupStateSucceeded {
 		return controller.RestoreExecutionStatus{
 			State:   backupv1alpha1.RestoreStatePending,
@@ -185,6 +191,28 @@ func (p *Provider) SyncRestore(c *controller.Context, restore *backupv1alpha1.Re
 	}
 
 	return mapSeaweedRestoreStatus(sr), nil
+}
+
+// validateRestoreBackupOrigin requires the source Backup to have been produced
+// by this Instance. External / cross-Instance restores are unsupported: the
+// catalog path and volume chunks live on the producing cluster's filer.
+func validateRestoreBackupOrigin(backup *backupv1alpha1.Backup, instanceName string) string {
+	if backup.Spec.Origin.Type != backupv1alpha1.BackupOriginTypeInstance {
+		return fmt.Sprintf(
+			"source Backup %q origin type %q is not supported; only Instance-produced backups can be restored",
+			backup.Name, backup.Spec.Origin.Type,
+		)
+	}
+	if backup.Spec.Origin.InstanceRef == nil || backup.Spec.Origin.InstanceRef.Name == "" {
+		return fmt.Sprintf("source Backup %q has empty origin.instanceRef", backup.Name)
+	}
+	if backup.Spec.Origin.InstanceRef.Name != instanceName {
+		return fmt.Sprintf(
+			"source Backup %q was produced by Instance %q; restore target is %q",
+			backup.Name, backup.Spec.Origin.InstanceRef.Name, instanceName,
+		)
+	}
+	return ""
 }
 
 // seaweedBackupNameForRestore resolves the SeaweedBackup object name used in

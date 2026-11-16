@@ -52,7 +52,7 @@ spec:
         filerPath:
           fieldParams:
             defaultValue: /
-            description: Filer subtree to load the snapshot under. Defaults to /.
+            description: Only restore snapshot entries under this prefix (original paths; operator -dirPrefix). Defaults to /.
             label: Filer path
           path: filerPath
           uiType: text

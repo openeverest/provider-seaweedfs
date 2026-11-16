@@ -30,7 +30,7 @@ restore:
       uiType: text
       fieldParams:
         label: Filer path
-        description: Filer subtree to load the snapshot under. Defaults to /.
+        description: Only restore snapshot entries under this prefix (original paths; operator -dirPrefix). Defaults to /.
         defaultValue: /
   componentsOrder:
     - filerPath

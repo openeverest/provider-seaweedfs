@@ -32,10 +32,13 @@ type SeaweedfsFilerMetaBackupParameters struct {
 }
 
 // SeaweedfsFilerMetaRestoreParameters describes Restore.spec.parameters for
-// this class. filerPath maps to SeaweedRestoreSpec.FilerPath.
+// this class. filerPath maps to SeaweedRestoreSpec.FilerPath (operator
+// -dirPrefix filter on fs.meta.load).
 type SeaweedfsFilerMetaRestoreParameters struct {
-	// FilerPath is the filer subtree the snapshot is loaded under. Defaults to
-	// "/". Maps to SeaweedRestoreSpec.FilerPath.
+	// FilerPath selects which snapshot entries to restore: the operator passes
+	// it as fs.meta.load -dirPrefix. Entries keep their original filer paths;
+	// this is not a remount/destination root. Defaults to "/" (entire
+	// snapshot). Maps to SeaweedRestoreSpec.FilerPath.
 	// +optional
 	// +kubebuilder:default:="/"
 	// +kubebuilder:validation:Pattern=`^/[A-Za-z0-9._/-]*$`
