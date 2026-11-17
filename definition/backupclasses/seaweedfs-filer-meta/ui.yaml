@@ -30,7 +30,7 @@ restore:
       uiType: text
       fieldParams:
         label: Filer path
-        description: Only restore snapshot entries under this prefix (original paths; operator -dirPrefix). Defaults to /.
+        description: Only restore snapshot entries whose directory starts with this string prefix (operator -dirPrefix; /data/a also matches /data/ab). Original paths; not a remount. Defaults to /.
         defaultValue: /
   componentsOrder:
     - filerPath

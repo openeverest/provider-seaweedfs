@@ -36,9 +36,12 @@ type SeaweedfsFilerMetaBackupParameters struct {
 // -dirPrefix filter on fs.meta.load).
 type SeaweedfsFilerMetaRestoreParameters struct {
 	// FilerPath selects which snapshot entries to restore: the operator passes
-	// it as fs.meta.load -dirPrefix. Entries keep their original filer paths;
-	// this is not a remount/destination root. Defaults to "/" (entire
-	// snapshot). Maps to SeaweedRestoreSpec.FilerPath.
+	// it as fs.meta.load -dirPrefix (metaLoadStatement). SeaweedFS matches with
+	// strings.HasPrefix on the entry's Dir, so filerPath /data/a also matches
+	// /data/ab/... The emptiness gate only lists filerPath itself (and
+	// /buckets when restoring /); it does not probe sibling prefix collisions.
+	// Entries keep their original filer paths; this is not a remount. Defaults
+	// to "/" (entire snapshot). Maps to SeaweedRestoreSpec.FilerPath.
 	// +optional
 	// +kubebuilder:default:="/"
 	// +kubebuilder:validation:Pattern=`^/[A-Za-z0-9._/-]*$`
