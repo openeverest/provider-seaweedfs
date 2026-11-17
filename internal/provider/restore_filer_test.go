@@ -70,6 +70,26 @@ func filerListJSONHandler(status int, fullPaths ...string) http.Handler {
 	})
 }
 
+// filerListByPathHandler answers each directory path with its own entry list.
+func filerListByPathHandler(byPath map[string][]string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Accept") != "application/json" {
+			http.Error(w, "Accept application/json required", http.StatusBadRequest)
+			return
+		}
+		dir := r.URL.Path
+		if dir == "" {
+			dir = "/"
+		}
+		fullPaths, ok := byPath[dir]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		filerListJSONHandler(http.StatusOK, fullPaths...).ServeHTTP(w, r)
+	})
+}
+
 func TestEnsureFilerPathEmptyUsesTinyLimit(t *testing.T) {
 	var gotLimit string
 	srv := withFilerListServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -77,7 +97,7 @@ func TestEnsureFilerPathEmptyUsesTinyLimit(t *testing.T) {
 		filerListJSONHandler(http.StatusOK, "/.seaweedfs-operator").ServeHTTP(w, r)
 	}))
 	require.NoError(t, ensureFilerPathEmptyForRestore(context.Background(), srv.URL, "/"))
-	assert.Equal(t, "2", gotLimit)
+	assert.Equal(t, "5", gotLimit)
 
 	gotLimit = ""
 	srv2 := withFilerListServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -93,12 +113,31 @@ func TestEnsureFilerPathEmptyAllowsReservedRootOnly(t *testing.T) {
 	require.NoError(t, ensureFilerPathEmptyForRestore(context.Background(), srv.URL, "/"))
 }
 
-func TestEnsureFilerPathEmptyRejectsBucketsAtRoot(t *testing.T) {
-	srv := withFilerListServer(t, filerListJSONHandler(http.StatusOK, "/.seaweedfs-operator", "/buckets"))
+func TestEnsureFilerPathEmptyAllowsSystemRootEntries(t *testing.T) {
+	srv := withFilerListServer(t, filerListByPathHandler(map[string][]string{
+		"/":        {"/.seaweedfs-operator", "/buckets", "/topics", "/etc"},
+		"/buckets": {},
+	}))
+	require.NoError(t, ensureFilerPathEmptyForRestore(context.Background(), srv.URL, "/"))
+}
+
+func TestEnsureFilerPathEmptyRejectsNonEmptyBucketsAtRoot(t *testing.T) {
+	srv := withFilerListServer(t, filerListByPathHandler(map[string][]string{
+		"/":        {"/.seaweedfs-operator", "/buckets"},
+		"/buckets": {"/buckets/my-bucket"},
+	}))
 	err := ensureFilerPathEmptyForRestore(context.Background(), srv.URL, "/")
 	require.Error(t, err)
 	assert.True(t, isFilerNotEmpty(err))
-	assert.Contains(t, err.Error(), "buckets")
+	assert.Contains(t, err.Error(), "my-bucket")
+}
+
+func TestEnsureFilerPathEmptyRejectsUnexpectedRootEntry(t *testing.T) {
+	srv := withFilerListServer(t, filerListJSONHandler(http.StatusOK, "/.seaweedfs-operator", "/userdata"))
+	err := ensureFilerPathEmptyForRestore(context.Background(), srv.URL, "/")
+	require.Error(t, err)
+	assert.True(t, isFilerNotEmpty(err))
+	assert.Contains(t, err.Error(), "userdata")
 }
 
 func TestEnsureFilerPathEmptyTreatsMissingAsEmpty(t *testing.T) {
@@ -122,8 +161,20 @@ func TestEnsureFilerPathEmptyFailsWhenListingForbidden(t *testing.T) {
 	assert.Contains(t, err.Error(), "exposeDirectoryData")
 }
 
+func TestEnsureFilerPathEmptyFailsWhenListingUnauthorized(t *testing.T) {
+	srv := withFilerListServer(t, filerListJSONHandler(http.StatusUnauthorized))
+	err := ensureFilerPathEmptyForRestore(context.Background(), srv.URL, "/")
+	require.Error(t, err)
+	assert.False(t, isFilerNotEmpty(err))
+	assert.False(t, isFilerProbeTransient(err))
+	assert.Contains(t, err.Error(), "jwtSigning.filerRead")
+}
+
 func TestSyncRestoreFailsWhenFilerNotEmpty(t *testing.T) {
-	withFilerListServer(t, filerListJSONHandler(http.StatusOK, "/buckets"))
+	withFilerListServer(t, filerListByPathHandler(map[string][]string{
+		"/":        {"/buckets"},
+		"/buckets": {"/buckets/live"},
+	}))
 	instance := enabledBackupInstance("my-s3")
 	backup := succeededBackup("adhoc-1", "sw", "my-s3")
 	sw := seaweedClusterWithBackupStorage("sw", "my-s3")
@@ -154,4 +205,57 @@ func TestSyncRestorePendingWhenFilerUnreachable(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, backupv1alpha1.RestoreStatePending, exec.State)
 	assert.Contains(t, exec.Message, "Waiting for filer")
+}
+
+func TestSyncRestoreKeepsFailedTerminalWithoutSeaweedRestore(t *testing.T) {
+	withFilerListServer(t, filerListByPathHandler(map[string][]string{
+		"/":        {"/buckets", "/topics"},
+		"/buckets": {},
+	}))
+	instance := enabledBackupInstance("my-s3")
+	backup := succeededBackup("adhoc-1", "sw", "my-s3")
+	sw := seaweedClusterWithBackupStorage("sw", "my-s3")
+	restore := restoreForBackup("restore-1", "sw", "adhoc-1", restoreParams("/"))
+	restore.Status.State = backupv1alpha1.RestoreStateFailed
+	restore.Status.Message = "filer path \"/\" is not empty (found \"buckets\")"
+	ctx := backupSpecTestContext(t, instance, sw, backup, restore)
+
+	exec, err := (&Provider{}).SyncRestore(ctx, restore)
+	require.NoError(t, err)
+	assert.Equal(t, backupv1alpha1.RestoreStateFailed, exec.State)
+	assert.Equal(t, restore.Status.Message, exec.Message)
+
+	err = ctx.Client().Get(ctx.Context(), client.ObjectKey{Namespace: "ns", Name: "restore-1"}, &seaweedv1.SeaweedRestore{})
+	assert.True(t, apierrors.IsNotFound(err))
+}
+
+func TestSyncRestoreSkipsPeerWithMissingBackup(t *testing.T) {
+	withFilerListServer(t, filerListJSONHandler(http.StatusOK, "/.seaweedfs-operator"))
+	instance := enabledBackupInstance("my-s3")
+	backup := succeededBackup("adhoc-1", "sw", "my-s3")
+	sw := seaweedClusterWithBackupStorage("sw", "my-s3")
+	typo := restoreForBackup("restore-typo", "sw", "does-not-exist", restoreParams("/"))
+	newer := restoreForBackup("restore-new", "sw", "adhoc-1", restoreParams("/"))
+	ctx := backupSpecTestContext(t, instance, sw, backup, typo, newer)
+
+	exec, err := (&Provider{}).SyncRestore(ctx, newer)
+	require.NoError(t, err)
+	assert.Equal(t, backupv1alpha1.RestoreStatePending, exec.State)
+	assert.NotContains(t, exec.Message, "restore-typo")
+	require.NotNil(t, exec.OperatorRestoreRef)
+	assert.Equal(t, "restore-new", exec.OperatorRestoreRef.Name)
+}
+
+func TestMapSeaweedRestoreStatusSetsProgressMessages(t *testing.T) {
+	exec := mapSeaweedRestoreStatus(&seaweedv1.SeaweedRestore{
+		Status: seaweedv1.SeaweedRestoreStatus{Phase: seaweedv1.RestorePhaseCompleted},
+	})
+	assert.Equal(t, backupv1alpha1.RestoreStateSucceeded, exec.State)
+	assert.Equal(t, "Restore completed", exec.Message)
+
+	exec = mapSeaweedRestoreStatus(&seaweedv1.SeaweedRestore{
+		Status: seaweedv1.SeaweedRestoreStatus{Phase: seaweedv1.RestorePhaseRunning},
+	})
+	assert.Equal(t, backupv1alpha1.RestoreStateRunning, exec.State)
+	assert.Equal(t, "Restore job is running", exec.Message)
 }

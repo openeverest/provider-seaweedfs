@@ -29,16 +29,31 @@ import (
 	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
 )
 
-// reservedBackupFilerRootName is the single root entry the operator uses to
-// stage filer.meta.gz catalogs (/.seaweedfs-operator/...). Present during a
-// same-cluster restore and ignored by the emptiness gate.
+// reservedBackupFilerRootName is the single root entry the seaweedfs-operator
+// stages filer.meta.gz catalogs under (/.seaweedfs-operator/backups/...).
+// See reservedBackupFilerDir in the operator's backup_storage.go.
 const reservedBackupFilerRootName = ".seaweedfs-operator"
 
-// Emptiness is decided from a single small listing, not a full walk:
-// non-root needs at most one entry; root needs two so ".seaweedfs-operator"
-// alone is distinguishable from ".seaweedfs-operator" + anything else.
+// System root names from SeaweedFS itself:
+//
+//	buckets — s3_constants.DefaultBucketsPath ("/buckets")
+//	topics  — filer.TopicsDir ("/topics"); IsHiddenSystemEntry
+//	etc     — IsHiddenSystemEntry (with topics) under "/"
+//
+// topics/etc are ignored by the emptiness gate; buckets may appear only when
+// /buckets itself is empty (user S3 data lives there).
 const (
-	filerEmptyProbeLimitRoot    = 2
+	systemFilerRootBuckets = "buckets"
+	systemFilerRootTopics  = "topics"
+	systemFilerRootEtc     = "etc"
+)
+
+// Emptiness is decided from small listings, not a full walk:
+// non-root needs at most one entry; root lists enough to see the allowed
+// system/reserved names plus one unexpected, then probes /buckets when present.
+const (
+	// .seaweedfs-operator + buckets + topics + etc + one unexpected.
+	filerEmptyProbeLimitRoot    = 5
 	filerEmptyProbeLimitSubtree = 1
 )
 
@@ -54,8 +69,8 @@ type errFilerNotEmpty struct {
 
 func (e *errFilerNotEmpty) Error() string {
 	return fmt.Sprintf(
-		"filer path %q is not empty (found %q); refuse restore because fs.meta.load overwrites existing entries and can delete live chunks; only %q may remain under /",
-		e.Dir, e.Entry, reservedBackupFilerRootName,
+		"filer path %q is not empty (found %q); refuse restore because fs.meta.load overwrites existing entries and can delete live chunks; under / only %q, empty %q/, %q, and %q may remain",
+		e.Dir, e.Entry, reservedBackupFilerRootName, systemFilerRootBuckets, systemFilerRootTopics, systemFilerRootEtc,
 	)
 }
 
@@ -85,54 +100,59 @@ func defaultFilerHTTPBaseURL(clusterName, namespace string) string {
 var filerHTTPBaseURLFn = defaultFilerHTTPBaseURL
 
 // ensureFilerPathEmptyForRestore probes whether the restore filerPath has any
-// disallowed entries. It issues one filer HTTP list with a tiny limit
-// (Accept: application/json) — it does not walk or page the directory.
+// disallowed entries. It issues small filer HTTP lists (Accept:
+// application/json) — it does not walk or page the directory.
 //
-// Under "/" only .seaweedfs-operator may appear; any other name (or a second
-// entry) fails. Under a non-root path, any entry fails. A missing path (HTTP
-// 404) is treated as empty.
+// Under "/" the reserved catalog root .seaweedfs-operator and SeaweedFS
+// system roots topics/etc may appear; buckets may appear only if /buckets
+// itself is empty. Any other root name fails. Under a non-root path, any
+// entry fails. A missing path (HTTP 404) is treated as empty.
+//
+// Note: the operator's fs.meta.load -dirPrefix is strings.HasPrefix on the
+// entry's Dir (weed/shell/command_fs_meta_load.go), so this gate listing
+// filerPath alone does not cover sibling prefix collisions.
 func ensureFilerPathEmptyForRestore(ctx context.Context, baseURL, filerPath string) error {
 	dir := filerPath
 	if dir == "" {
 		dir = "/"
 	}
 
-	limit := filerEmptyProbeLimitSubtree
 	if dir == "/" {
-		limit = filerEmptyProbeLimitRoot
+		return ensureFilerRootEmptyForRestore(ctx, baseURL)
 	}
 
-	resp, err := listFilerDirectory(ctx, baseURL, dir, limit)
+	resp, err := listFilerDirectory(ctx, baseURL, dir, filerEmptyProbeLimitSubtree)
 	if err != nil {
 		return err
 	}
-
 	names := resp.entryNames()
-	if dir == "/" {
-		switch len(names) {
-		case 0:
-			return nil
-		case 1:
-			if names[0] == reservedBackupFilerRootName {
-				return nil
-			}
-			return &errFilerNotEmpty{Dir: dir, Entry: names[0]}
-		default:
-			// Two hits with limit=2 means at least one non-reserved name, or
-			// two unexpected names. Prefer reporting a non-reserved entry.
-			for _, name := range names {
-				if name != reservedBackupFilerRootName {
-					return &errFilerNotEmpty{Dir: dir, Entry: name}
-				}
-			}
-			return &errFilerNotEmpty{Dir: dir, Entry: names[0]}
-		}
-	}
-
 	if len(names) > 0 {
 		return &errFilerNotEmpty{Dir: dir, Entry: names[0]}
 	}
 	return nil
+}
+
+func ensureFilerRootEmptyForRestore(ctx context.Context, baseURL string) error {
+	resp, err := listFilerDirectory(ctx, baseURL, "/", filerEmptyProbeLimitRoot)
+	if err != nil {
+		return err
+	}
+
+	hasBuckets := false
+	for _, name := range resp.entryNames() {
+		switch name {
+		case reservedBackupFilerRootName, systemFilerRootTopics, systemFilerRootEtc:
+			continue
+		case systemFilerRootBuckets:
+			hasBuckets = true
+		default:
+			return &errFilerNotEmpty{Dir: "/", Entry: name}
+		}
+	}
+	if !hasBuckets {
+		return nil
+	}
+	return ensureFilerPathEmptyForRestore(ctx, baseURL, "/"+systemFilerRootBuckets)
 }
 
 type filerDirListResponse struct {
@@ -193,6 +213,11 @@ func listFilerDirectory(ctx context.Context, baseURL, dir string, limit int) (fi
 	case res.StatusCode == http.StatusNotFound:
 		// Missing directory is empty for restore purposes.
 		return filerDirListResponse{EmptyFolder: true}, nil
+	case res.StatusCode == http.StatusUnauthorized:
+		return filerDirListResponse{}, fmt.Errorf(
+			"filer refused directory listing (HTTP 401): jwtSigning.filerRead is enabled and the probe is unsigned; cannot verify %q is empty before restore",
+			dir,
+		)
 	case res.StatusCode == http.StatusForbidden:
 		return filerDirListResponse{}, fmt.Errorf(
 			"filer refused directory listing (HTTP 403): exposeDirectoryData is disabled; cannot verify %q is empty before restore",

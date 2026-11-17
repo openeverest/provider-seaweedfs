@@ -23,7 +23,7 @@ spec:
 ---
 # SyncRestore probes http://<cluster>-filer.<ns>:8888 before creating a
 # SeaweedRestore. The real operator is scaled to 0, so this stand-in answers
-# the tiny directory list (limit=1/2) the emptiness gate uses.
+# the tiny directory lists (limit=1/5, plus /buckets) the emptiness gate uses.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -32,6 +32,7 @@ data:
   server.py: |
     #!/usr/bin/env python3
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import urlparse
     import json
     import threading
 
@@ -64,15 +65,23 @@ data:
             if self.headers.get("Accept") != "application/json":
                 self.send_error(400, "Accept application/json required")
                 return
+            dir_path = urlparse(self.path).path.rstrip("/") or "/"
             with mode_lock:
                 current = mode
-            if current == "nonempty":
+            if dir_path == "/":
                 entries = [
                     {"FullPath": "/.seaweedfs-operator"},
                     {"FullPath": "/buckets"},
+                    {"FullPath": "/topics"},
+                    {"FullPath": "/etc"},
                 ]
+            elif dir_path == "/buckets":
+                if current == "nonempty":
+                    entries = [{"FullPath": "/buckets/live"}]
+                else:
+                    entries = []
             else:
-                entries = [{"FullPath": "/.seaweedfs-operator"}]
+                entries = []
             body = json.dumps({
                 "Entries": entries,
                 "EmptyFolder": len(entries) == 0,
