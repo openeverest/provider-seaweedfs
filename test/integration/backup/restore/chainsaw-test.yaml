@@ -137,8 +137,11 @@ spec:
       try:
         - script:
             content: |
+              set -euo pipefail
+              # local a=1 b=$a leaves b empty — assign mode before interpolating the pod name.
               set_mode() {
-                local mode="$1" pod="fake-filer-mode-${mode}"
+                local mode="$1"
+                local pod="fake-filer-mode-${mode}"
                 kubectl -n "$NAMESPACE" delete pod "$pod" --ignore-not-found
                 kubectl -n "$NAMESPACE" run "$pod" --restart=Never --image=curlimages/curl:8.11.1 -- \
                   curl -sf -X PUT --data "$mode" "http://restore-seaweedfs-filer:8888/__test/mode"
