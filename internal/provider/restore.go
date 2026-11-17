@@ -329,7 +329,21 @@ func isActiveRestoreState(state backupv1alpha1.RestoreState) bool {
 	}
 }
 
+// restoreHasStarted reports whether r has already created / is mapping a
+// SeaweedRestore. Used so an in-flight restore wins serialization over peers
+// that only share the same CreationTimestamp second.
+func restoreHasStarted(r *backupv1alpha1.Restore) bool {
+	if r.Status.OperatorRestoreRef != nil && r.Status.OperatorRestoreRef.Name != "" {
+		return true
+	}
+	return r.Status.State == backupv1alpha1.RestoreStateRunning
+}
+
 func restoreRunsFirst(a, b *backupv1alpha1.Restore) bool {
+	aStarted, bStarted := restoreHasStarted(a), restoreHasStarted(b)
+	if aStarted != bStarted {
+		return aStarted
+	}
 	if !a.CreationTimestamp.Equal(&b.CreationTimestamp) {
 		return a.CreationTimestamp.Before(&b.CreationTimestamp)
 	}

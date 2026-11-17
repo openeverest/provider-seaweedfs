@@ -1100,6 +1100,34 @@ func TestSyncRestoreWaitsForOtherActiveRestore(t *testing.T) {
 	assert.True(t, apierrors.IsNotFound(err))
 }
 
+// Same-second CreationTimestamps + lexicographically earlier name used to let
+// restore-new win over an already-Running restore-old and create a second
+// SeaweedRestore (CI backup-restore / second-restore-waits-for-active).
+func TestSyncRestoreWaitsForStartedPeerDespiteNameTieBreak(t *testing.T) {
+	instance := enabledBackupInstance("my-s3")
+	backup := succeededBackup("adhoc-1", "sw", "my-s3")
+	sw := seaweedClusterWithBackupStorage("sw", "my-s3")
+	ts := metav1.Now()
+	older := restoreForBackup("restore-old", "sw", "adhoc-1", restoreParams("/"))
+	older.CreationTimestamp = ts
+	older.Status.State = backupv1alpha1.RestoreStateRunning
+	ref := seaweedRestoreRef("restore-old")
+	older.Status.OperatorRestoreRef = &ref
+	newer := restoreForBackup("restore-new", "sw", "adhoc-1", restoreParams("/"))
+	newer.CreationTimestamp = ts
+	ctx := backupSpecTestContext(t, instance, sw, backup, older, newer)
+
+	exec, err := (&Provider{}).SyncRestore(ctx, newer)
+	require.NoError(t, err)
+	assert.Equal(t, backupv1alpha1.RestoreStatePending, exec.State)
+	assert.Contains(t, exec.Message, "restore-old")
+	assert.Nil(t, exec.OperatorRestoreRef)
+
+	sr := &seaweedv1.SeaweedRestore{}
+	err = ctx.Client().Get(ctx.Context(), client.ObjectKey{Namespace: "ns", Name: "restore-new"}, sr)
+	assert.True(t, apierrors.IsNotFound(err))
+}
+
 func TestSyncRestoreRejectsPointInTime(t *testing.T) {
 	instance := enabledBackupInstance("my-s3")
 	ctx := backupSpecTestContext(t, instance)
