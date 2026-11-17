@@ -4,4 +4,4 @@ metadata:
   name: restore-new
 status:
   state: Pending
-  (contains(message, 'restore-old')): true
+  (contains(message || '', 'restore-old')): true
