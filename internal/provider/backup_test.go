@@ -1077,6 +1077,7 @@ func TestSyncRestoreMapsCompletedToSucceeded(t *testing.T) {
 	exec, err := (&Provider{}).SyncRestore(ctx, restore)
 	require.NoError(t, err)
 	assert.Equal(t, backupv1alpha1.RestoreStateSucceeded, exec.State)
+	assert.Equal(t, "Restore completed", exec.Message)
 }
 
 func TestSyncRestoreWaitsForOtherActiveRestore(t *testing.T) {

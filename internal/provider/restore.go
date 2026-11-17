@@ -53,6 +53,12 @@ func (p *Provider) SyncRestore(c *controller.Context, restore *backupv1alpha1.Re
 	if restore.Status.State == backupv1alpha1.RestoreStateSucceeded {
 		return preserveSucceededRestore(restore), nil
 	}
+	if restore.Status.State == backupv1alpha1.RestoreStateFailed && restore.Status.OperatorRestoreRef == nil {
+		return controller.RestoreExecutionStatus{
+			State:   backupv1alpha1.RestoreStateFailed,
+			Message: restore.Status.Message,
+		}, nil
+	}
 
 	if restore.Spec.DataSource.Type != backupv1alpha1.DataSourceTypeBackup {
 		return controller.RestoreExecutionStatus{
@@ -258,7 +264,8 @@ func seaweedRestoreName(restore *backupv1alpha1.Restore) string {
 // Instance that should run first. Among peers that have not finished, the
 // earliest CreationTimestamp (then name) is allowed to create a SeaweedRestore;
 // others stay Pending. That avoids a deadlock when two new Restores both have
-// an empty status.
+// an empty status. Peers that can never run (being deleted, or source Backup
+// missing so the runtime never reconciles them) are skipped.
 func otherActiveRestore(c *controller.Context, current *backupv1alpha1.Restore) (string, error) {
 	list := &backupv1alpha1.RestoreList{}
 	if err := c.Client().List(c.Context(), list, client.InNamespace(current.Namespace)); err != nil {
@@ -271,7 +278,11 @@ func otherActiveRestore(c *controller.Context, current *backupv1alpha1.Restore) 
 		if r.Spec.InstanceRef.Name != c.Name() {
 			continue
 		}
-		if !isActiveRestoreState(r.Status.State) {
+		ok, err := restoreCanBlockPeers(c, r)
+		if err != nil {
+			return "", err
+		}
+		if !ok {
 			continue
 		}
 		if winner == nil || restoreRunsFirst(r, winner) {
@@ -282,6 +293,30 @@ func otherActiveRestore(c *controller.Context, current *backupv1alpha1.Restore) 
 		return "", nil
 	}
 	return winner.Name, nil
+}
+
+// restoreCanBlockPeers reports whether r should serialize creation of other
+// SeaweedRestores for this Instance.
+func restoreCanBlockPeers(c *controller.Context, r *backupv1alpha1.Restore) (bool, error) {
+	if !r.DeletionTimestamp.IsZero() {
+		return false, nil
+	}
+	if !isActiveRestoreState(r.Status.State) {
+		return false, nil
+	}
+	if r.Spec.DataSource.Backup == nil || r.Spec.DataSource.Backup.BackupRef.Name == "" {
+		return true, nil
+	}
+	backup := &backupv1alpha1.Backup{}
+	if err := c.Get(backup, r.Spec.DataSource.Backup.BackupRef.Name); err != nil {
+		if apierrors.IsNotFound(err) {
+			// Runtime never reconciles a Restore whose backupRef is missing, so
+			// it would block peers forever if counted as active.
+			return false, nil
+		}
+		return false, fmt.Errorf("get peer restore %q source Backup: %w", r.Name, err)
+	}
+	return true, nil
 }
 
 func isActiveRestoreState(state backupv1alpha1.RestoreState) bool {
@@ -328,8 +363,10 @@ func mapSeaweedRestoreStatus(sr *seaweedv1.SeaweedRestore) controller.RestoreExe
 	switch sr.Status.Phase {
 	case seaweedv1.RestorePhaseCompleted:
 		exec.State = backupv1alpha1.RestoreStateSucceeded
+		exec.Message = "Restore completed"
 	case seaweedv1.RestorePhaseRunning:
 		exec.State = backupv1alpha1.RestoreStateRunning
+		exec.Message = "Restore job is running"
 	case seaweedv1.RestorePhaseFailed:
 		exec.State = backupv1alpha1.RestoreStateFailed
 		exec.Message = failedRestoreMessage(sr)
