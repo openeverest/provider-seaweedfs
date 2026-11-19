@@ -52,13 +52,13 @@ It never manages pods directly — all lifecycle work is delegated to the operat
 
 | provider-seaweedfs | OpenEverest | seaweedfs-operator | Kubernetes |
 |---|---|---|---|
-| `0.2.x` (MVP) | `2.0.0-dev.x` | chart `0.1.45` (image `1.0.42`) | `1.30` – `1.34` |
+| `0.2.x` (MVP) | `2.0.0-dev.x` | chart `0.1.48` (image `1.0.45`) | `1.30` – `1.34` |
 | `0.1.x` (MVP) | `2.0.0-dev.x` | chart `0.1.41` (image `1.0.38`) | `1.30` – `1.34` |
 
-The chart dependency installs `chrislusf/seaweedfs-operator:1.0.42`.
+The chart dependency installs `chrislusf/seaweedfs-operator:1.0.45`.
 The provider binary compiles against the Go module pin in
-[go.mod](go.mod) (`v0.0.0-20261025200953-b6b3122d9338`), commit
-`b6b3122d9338` (chart tag `seaweedfs-operator-0.1.45`).
+[go.mod](go.mod) (`v0.0.0-20261116062915-e7a1b0198aba`), commit
+`e7a1b0198aba` (chart tag `seaweedfs-operator-0.1.48`).
 
 Chart `0.1.42` (image `1.0.39`) changes admin startup and ServiceMonitor
 scraping, plus dependencies. Its ServiceMonitors select only the per-pod
@@ -105,7 +105,7 @@ The `1.0.27` GitHub release notes only mention a SeaweedFS library bump; the
 CRDs are in that chart's manifest anyway.
 
 **Minimum for the full set is chart `0.1.30` / operator image `1.0.27`.**
-The dependency above (`0.1.45` / `1.0.42`) is past that floor.
+The dependency above (`0.1.48` / `1.0.45`) is past that floor.
 
 ## Capabilities
 
