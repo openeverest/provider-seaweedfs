@@ -24,6 +24,9 @@ spec:
     supportsPITR: false
   restoreParametersSchema:
     openAPIV3Schema:
+      properties:
+        filerPath:
+          type: string
       type: object
   supportedProviders:
     - provider-seaweedfs
@@ -45,6 +48,14 @@ spec:
       componentsOrder: []
       label: PITR Configuration
     restore:
-      components: {}
-      componentsOrder: []
+      components:
+        filerPath:
+          fieldParams:
+            defaultValue: /
+            description: Only restore snapshot entries whose directory starts with this string prefix (operator -dirPrefix; /data/a also matches /data/ab). Original paths; not a remount. Defaults to /.
+            label: Filer path
+          path: filerPath
+          uiType: text
+      componentsOrder:
+        - filerPath
       label: Restore Configuration

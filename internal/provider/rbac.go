@@ -31,6 +31,8 @@ package provider
 // +kubebuilder:rbac:groups=seaweed.seaweedfs.com,resources=seaweeds/status,verbs=get
 // +kubebuilder:rbac:groups=seaweed.seaweedfs.com,resources=seaweedbackups,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=seaweed.seaweedfs.com,resources=seaweedbackups/status,verbs=get
+// +kubebuilder:rbac:groups=seaweed.seaweedfs.com,resources=seaweedrestores,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=seaweed.seaweedfs.com,resources=seaweedrestores/status,verbs=get
 
 // OpenEverest backup APIs (ProviderManaged BackupClass path):
 // +kubebuilder:rbac:groups=backup.openeverest.io,resources=backups,verbs=get;list;watch;create;update;patch;delete

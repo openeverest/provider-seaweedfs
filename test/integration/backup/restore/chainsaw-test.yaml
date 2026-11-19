@@ -1,0 +1,183 @@
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: backup-restore
+spec:
+  description: |
+    Restore into an existing Instance: create SeaweedRestore with backupSource
+    (not backupName) after a Succeeded Backup, map operator phases through
+    Pending → Running → Succeeded, keep a second Restore Pending while one is
+    active, Fail when the filer emptiness probe sees user data, and delete the
+    SeaweedRestore when the Restore CR is removed. A fake filer Service stands
+    in for the seaweedfs-operator (scaled to 0) so SyncRestore can probe
+    directory emptiness over HTTP.
+  timeouts:
+    assert: 60s
+    exec: 90s
+  catch:
+    - script:
+        content: kubectl -n $NAMESPACE get instance,seaweed,backup,backupstorage,restore,seaweedbackup,seaweedrestore,deploy,svc,secret -o yaml
+    - podLogs:
+        namespace: provider-system
+        selector: app.kubernetes.io/name=provider-seaweedfs
+        tail: 100
+    - podLogs:
+        selector: app=restore-seaweedfs-filer
+        tail: 50
+  steps:
+    - name: provider-operator-installed
+      try:
+        - assert:
+            file: 00-assert.yaml
+
+    - name: enable-backup-and-fake-filer
+      try:
+        - apply:
+            file: 10-setup.yaml
+        - apply:
+            file: 10-create-cluster.yaml
+        - assert:
+            file: 10-assert.yaml
+
+    - name: succeed-source-backup
+      try:
+        - apply:
+            file: 20-create-backup.yaml
+        - script:
+            content: |
+              # Wait until the provider has created the SeaweedBackup, then stand
+              # in for the scaled-down operator by marking it Completed.
+              for i in $(seq 1 30); do
+                SB=$(kubectl get backup/adhoc-1 -n "$NAMESPACE" -o jsonpath='{.status.operatorBackupRef.name}' 2>/dev/null || true)
+                if [ -n "$SB" ]; then
+                  kubectl patch seaweedbackup/"$SB" --subresource status -n "$NAMESPACE" --type=merge \
+                    -p '{"status":{"phase":"Completed","startTime":"2026-01-01T00:00:00Z","completionTime":"2026-01-01T00:01:00Z"}}'
+                  exit 0
+                fi
+                sleep 2
+              done
+              echo "timed out waiting for operatorBackupRef on backup/adhoc-1" >&2
+              exit 1
+        - assert:
+            file: 20-assert.yaml
+
+    - name: create-restore-with-backup-source
+      try:
+        - apply:
+            file: 30-create-restore.yaml
+        - assert:
+            file: 30-assert.yaml
+        - script:
+            content: |
+              SB=$(kubectl get backup/adhoc-1 -n "$NAMESPACE" -o jsonpath='{.status.operatorBackupRef.name}')
+              test -n "$SB"
+              META=$(kubectl get seaweedrestore/restore-1 -n "$NAMESPACE" -o jsonpath='{.spec.backupSource.metaPath}')
+              test "$META" = "/.seaweedfs-operator/backups/${SB}/filer.meta.gz"
+              test -z "$(kubectl get seaweedrestore/restore-1 -n "$NAMESPACE" -o jsonpath='{.spec.backupName}')"
+              test "$(kubectl get seaweedrestore/restore-1 -n "$NAMESPACE" -o jsonpath='{.spec.backupSource.storageName}')" = "test-s3"
+              test "$(kubectl get seaweedrestore/restore-1 -n "$NAMESPACE" -o jsonpath='{.spec.filerPath}')" = "/"
+              test "$(kubectl get seaweedrestore/restore-1 -n "$NAMESPACE" -o jsonpath='{.metadata.ownerReferences[0].name}')" = "restore-1"
+
+    - name: restore-running
+      try:
+        - script:
+            content: |
+              kubectl patch seaweedrestore/restore-1 --subresource status -n "$NAMESPACE" --type=merge \
+                -p '{"status":{"phase":"Running","startTime":"2026-01-01T00:00:00Z"}}'
+        - assert:
+            file: 31-assert.yaml
+
+    - name: restore-succeeded
+      try:
+        - script:
+            content: |
+              kubectl patch seaweedrestore/restore-1 --subresource status -n "$NAMESPACE" --type=merge \
+                -p '{"status":{"phase":"Completed","startTime":"2026-01-01T00:00:00Z","completionTime":"2026-01-01T00:01:00Z"}}'
+        - assert:
+            file: 32-assert.yaml
+
+    - name: second-restore-waits-for-active
+      try:
+        - apply:
+            file: 40-create-restore-old.yaml
+        - assert:
+            file: 40-assert-old.yaml
+        - script:
+            content: |
+              kubectl patch seaweedrestore/restore-old --subresource status -n "$NAMESPACE" --type=merge \
+                -p '{"status":{"phase":"Running","startTime":"2026-01-01T00:10:00Z"}}'
+        - apply:
+            file: 40-create-restore-new.yaml
+        - assert:
+            file: 41-assert-new-pending.yaml
+        - script:
+            content: |
+              # No SeaweedRestore until restore-old finishes.
+              if kubectl get seaweedrestore/restore-new -n "$NAMESPACE" >/dev/null 2>&1; then
+                echo "unexpected SeaweedRestore restore-new" >&2
+                exit 1
+              fi
+              kubectl delete restore/restore-new -n "$NAMESPACE"
+              kubectl wait --for=delete restore/restore-new -n "$NAMESPACE" --timeout=60s
+              kubectl patch seaweedrestore/restore-old --subresource status -n "$NAMESPACE" --type=merge \
+                -p '{"status":{"phase":"Completed","startTime":"2026-01-01T00:10:00Z","completionTime":"2026-01-01T00:11:00Z"}}'
+              # Wait for Restore to observe Succeeded so it is no longer "active".
+              for i in $(seq 1 30); do
+                STATE=$(kubectl get restore/restore-old -n "$NAMESPACE" -o jsonpath='{.status.state}')
+                if [ "$STATE" = "Succeeded" ]; then
+                  exit 0
+                fi
+                sleep 2
+              done
+              echo "timed out waiting for restore-old Succeeded (got ${STATE:-empty})" >&2
+              exit 1
+
+    - name: nonempty-filer-fails
+      try:
+        - script:
+            content: |
+              set -euo pipefail
+              # local a=1 b=$a leaves b empty — assign mode before interpolating the pod name.
+              set_mode() {
+                local mode="$1"
+                local pod="fake-filer-mode-${mode}"
+                kubectl -n "$NAMESPACE" delete pod "$pod" --ignore-not-found
+                kubectl -n "$NAMESPACE" run "$pod" --restart=Never --image=curlimages/curl:8.11.1 -- \
+                  curl -sf -X PUT --data "$mode" "http://restore-seaweedfs-filer:8888/__test/mode"
+                kubectl -n "$NAMESPACE" wait --for=jsonpath='{.status.phase}'=Succeeded "pod/$pod" --timeout=60s
+                kubectl -n "$NAMESPACE" delete pod "$pod" --ignore-not-found
+              }
+              set_mode nonempty
+        - apply:
+            file: 50-create-restore-nonempty.yaml
+        - assert:
+            file: 50-assert.yaml
+        - script:
+            content: |
+              if kubectl get seaweedrestore/restore-nonempty -n "$NAMESPACE" >/dev/null 2>&1; then
+                echo "unexpected SeaweedRestore restore-nonempty" >&2
+                exit 1
+              fi
+              kubectl -n "$NAMESPACE" delete pod fake-filer-mode-empty --ignore-not-found
+              kubectl -n "$NAMESPACE" run fake-filer-mode-empty --restart=Never --image=curlimages/curl:8.11.1 -- \
+                curl -sf -X PUT --data empty "http://restore-seaweedfs-filer:8888/__test/mode"
+              kubectl -n "$NAMESPACE" wait --for=jsonpath='{.status.phase}'=Succeeded pod/fake-filer-mode-empty --timeout=60s
+              kubectl -n "$NAMESPACE" delete pod fake-filer-mode-empty --ignore-not-found
+
+    - name: delete-restore-cleans-seaweedrestore
+      try:
+        - script:
+            content: |
+              kubectl delete restore/restore-1 -n "$NAMESPACE"
+              kubectl wait --for=delete restore/restore-1 -n "$NAMESPACE" --timeout=60s
+              kubectl wait --for=delete seaweedrestore/restore-1 -n "$NAMESPACE" --timeout=60s
+
+    - name: delete-cluster
+      try:
+        - script:
+            content: |
+              kubectl delete restore/restore-old restore/restore-nonempty --ignore-not-found -n "$NAMESPACE"
+              kubectl delete backup/adhoc-1 -n "$NAMESPACE" --ignore-not-found
+              kubectl delete instance/restore-seaweedfs -n "$NAMESPACE"
+              kubectl wait --for=delete seaweed/restore-seaweedfs -n "$NAMESPACE" --timeout=120s

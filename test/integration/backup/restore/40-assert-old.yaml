@@ -1,0 +1,14 @@
+apiVersion: backup.openeverest.io/v1alpha1
+kind: Restore
+metadata:
+  name: restore-old
+status:
+  operatorRestoreRef:
+    group: seaweed.seaweedfs.com
+    kind: SeaweedRestore
+    name: restore-old
+---
+apiVersion: seaweed.seaweedfs.com/v1
+kind: SeaweedRestore
+metadata:
+  name: restore-old

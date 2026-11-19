@@ -24,5 +24,13 @@ pitr:
   componentsOrder: []
 restore:
   label: Restore Configuration
-  components: {}
-  componentsOrder: []
+  components:
+    filerPath:
+      path: filerPath
+      uiType: text
+      fieldParams:
+        label: Filer path
+        description: Only restore snapshot entries whose directory starts with this string prefix (operator -dirPrefix; /data/a also matches /data/ab). Original paths; not a remount. Defaults to /.
+        defaultValue: /
+  componentsOrder:
+    - filerPath

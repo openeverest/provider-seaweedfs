@@ -1,0 +1,7 @@
+apiVersion: backup.openeverest.io/v1alpha1
+kind: Restore
+metadata:
+  name: restore-nonempty
+status:
+  state: Failed
+  (contains(message, 'not empty')): true

@@ -174,6 +174,15 @@ func (p *Provider) Sync(c *controller.Context) error {
 	l := log.FromContext(c.Context())
 	l.Info("Syncing instance", "name", c.Name())
 
+	// Filer-meta backups cannot seed a new cluster: volume bytes stay on the
+	// source. Reject before creating a Seaweed.
+	if c.Instance().Spec.DataSource != nil {
+		return &controller.DataSourceConfigError{
+			Reason:  "DataSourceUnsupported",
+			Message: "Instance.spec.dataSource is not supported: filer metadata backups cannot seed a new cluster (volume data remains on the source)",
+		}
+	}
+
 	master := c.Instance().Spec.Components[common.ComponentMaster]
 	volume := c.Instance().Spec.Components[common.ComponentVolume]
 	filer := c.Instance().Spec.Components[common.ComponentFiler]

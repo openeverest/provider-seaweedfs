@@ -1,0 +1,12 @@
+apiVersion: backup.openeverest.io/v1alpha1
+kind: Restore
+metadata:
+  name: restore-1
+status:
+  state: Running
+  executionMode: ProviderManaged
+  startedAt: "2026-01-01T00:00:00Z"
+  operatorRestoreRef:
+    group: seaweed.seaweedfs.com
+    kind: SeaweedRestore
+    name: restore-1

@@ -52,7 +52,6 @@ var filerPathPattern = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 // Compile-time interface checks.
 var _ controller.BackupProvider = (*Provider)(nil)
 var _ controller.BackupWatcher = (*Provider)(nil)
-var _ controller.RestoreWatcher = (*Provider)(nil)
 var _ controller.BackupMirror = (*Provider)(nil)
 
 // seaweedBackupStorageNameMax is the max length the seaweedfs-operator webhook
@@ -787,18 +786,6 @@ func decodeBackupParameters(raw *runtime.RawExtension) (seaweedfsfilermeta.Seawe
 	return cfg, nil
 }
 
-// SyncRestore is not implemented yet. Return Failed so Restore CRs do not
-// sit in Pending and requeue forever.
-func (p *Provider) SyncRestore(c *controller.Context, restore *backupv1alpha1.Restore) (controller.RestoreExecutionStatus, error) {
-	l := log.FromContext(c.Context())
-	l.Info("Syncing restore", "name", restore.Name)
-
-	return controller.RestoreExecutionStatus{
-		State:   backupv1alpha1.RestoreStateFailed,
-		Message: "restore is not implemented for seaweedfs-filer-meta",
-	}, nil
-}
-
 // CleanupBackup deletes the SeaweedBackup CR. Filer-catalog purge is not
 // implemented, so deletionPolicy Delete only removes the operator CR (catalog
 // left behind). Look up the CR via status.operatorBackupRef.name (UID-derived).
@@ -833,15 +820,6 @@ func (p *Provider) CleanupBackup(c *controller.Context, backup *backupv1alpha1.B
 	return false, nil
 }
 
-// CleanupRestore has nothing to delete until SyncRestore creates a
-// SeaweedRestore. Return true so the Restore finalizer can be removed.
-func (p *Provider) CleanupRestore(c *controller.Context, restore *backupv1alpha1.Restore) (bool, error) {
-	l := log.FromContext(c.Context())
-	l.Info("Cleaning up restore", "name", restore.Name)
-
-	return true, nil
-}
-
 func requireRetainDeletionPolicy(backup *backupv1alpha1.Backup) error {
 	if backup.Spec.DeletionPolicy == backupv1alpha1.BackupDeletionPolicyRetain {
 		return nil
@@ -854,9 +832,4 @@ func (p *Provider) BackupWatches() []controller.WatchConfig {
 	return []controller.WatchConfig{
 		controller.WatchOwned(&seaweedv1.SeaweedBackup{}),
 	}
-}
-
-// RestoreWatches implements controller.RestoreWatcher.
-func (p *Provider) RestoreWatches() []controller.WatchConfig {
-	return []controller.WatchConfig{}
 }

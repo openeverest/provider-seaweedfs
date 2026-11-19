@@ -16,13 +16,17 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/AlekSi/pointer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -1026,16 +1030,271 @@ func TestValidFilerPath(t *testing.T) {
 	assert.False(t, validFilerPath("/buckets\nrm"))
 }
 
-func TestSyncRestoreNotImplemented(t *testing.T) {
+func TestSyncRestoreCreatesSeaweedRestoreWithBackupSource(t *testing.T) {
+	withFilerListServer(t, filerListJSONHandler(http.StatusOK, "/.seaweedfs-operator"))
+	instance := enabledBackupInstance("my-s3")
+	backup := succeededBackup("adhoc-1", "sw", "my-s3")
+	sw := seaweedClusterWithBackupStorage("sw", "my-s3")
+	restore := restoreForBackup("restore-1", "sw", "adhoc-1", restoreParams("/"))
+	ctx := backupSpecTestContext(t, instance, sw, backup, restore)
+
+	exec, err := (&Provider{}).SyncRestore(ctx, restore)
+	require.NoError(t, err)
+	assert.Equal(t, backupv1alpha1.RestoreStatePending, exec.State)
+	require.NotNil(t, exec.OperatorRestoreRef)
+	assert.Equal(t, "SeaweedRestore", exec.OperatorRestoreRef.Kind)
+	assert.Equal(t, "restore-1", exec.OperatorRestoreRef.Name)
+
+	sr := &seaweedv1.SeaweedRestore{}
+	require.NoError(t, ctx.Client().Get(ctx.Context(), client.ObjectKey{Namespace: "ns", Name: "restore-1"}, sr))
+	assert.Equal(t, "sw", sr.Spec.ClusterName)
+	require.NotNil(t, sr.Spec.BackupSource)
+	assert.Equal(t, "my-s3", sr.Spec.BackupSource.StorageName)
+	assert.Equal(t, reservedFilerMetaPath(testSeaweedBackupName("adhoc-1")), sr.Spec.BackupSource.MetaPath)
+	assert.Empty(t, sr.Spec.BackupName)
+	assert.Equal(t, "/", sr.Spec.FilerPath)
+	assert.True(t, metav1.IsControlledBy(sr, restore))
+}
+
+func TestSyncRestoreMapsCompletedToSucceeded(t *testing.T) {
+	instance := enabledBackupInstance("my-s3")
+	backup := succeededBackup("adhoc-1", "sw", "my-s3")
+	sw := seaweedClusterWithBackupStorage("sw", "my-s3")
+	restore := restoreForBackup("restore-1", "sw", "adhoc-1", restoreParams("/"))
+	sr := &seaweedv1.SeaweedRestore{
+		ObjectMeta: metav1.ObjectMeta{Name: "restore-1", Namespace: "ns"},
+		Spec: seaweedv1.SeaweedRestoreSpec{
+			ClusterName: "sw",
+			BackupSource: &seaweedv1.BackupSource{
+				StorageName: "my-s3",
+				MetaPath:    reservedFilerMetaPath(testSeaweedBackupName("adhoc-1")),
+			},
+		},
+		Status: seaweedv1.SeaweedRestoreStatus{Phase: seaweedv1.RestorePhaseCompleted},
+	}
+	ctx := backupSpecTestContext(t, instance, sw, backup, restore, sr)
+
+	exec, err := (&Provider{}).SyncRestore(ctx, restore)
+	require.NoError(t, err)
+	assert.Equal(t, backupv1alpha1.RestoreStateSucceeded, exec.State)
+	assert.Equal(t, "Restore completed", exec.Message)
+}
+
+func TestSyncRestoreWaitsForOtherActiveRestore(t *testing.T) {
+	instance := enabledBackupInstance("my-s3")
+	backup := succeededBackup("adhoc-1", "sw", "my-s3")
+	sw := seaweedClusterWithBackupStorage("sw", "my-s3")
+	older := restoreForBackup("restore-old", "sw", "adhoc-1", restoreParams("/"))
+	older.CreationTimestamp = metav1.NewTime(metav1.Now().Add(-time.Hour))
+	newer := restoreForBackup("restore-new", "sw", "adhoc-1", restoreParams("/"))
+	newer.CreationTimestamp = metav1.Now()
+	ctx := backupSpecTestContext(t, instance, sw, backup, older, newer)
+
+	exec, err := (&Provider{}).SyncRestore(ctx, newer)
+	require.NoError(t, err)
+	assert.Equal(t, backupv1alpha1.RestoreStatePending, exec.State)
+	assert.Contains(t, exec.Message, "restore-old")
+
+	sr := &seaweedv1.SeaweedRestore{}
+	err = ctx.Client().Get(ctx.Context(), client.ObjectKey{Namespace: "ns", Name: "restore-new"}, sr)
+	assert.True(t, apierrors.IsNotFound(err))
+}
+
+// Same-second CreationTimestamps + lexicographically earlier name used to let
+// restore-new win over an already-Running restore-old and create a second
+// SeaweedRestore (CI backup-restore / second-restore-waits-for-active).
+func TestSyncRestoreWaitsForStartedPeerDespiteNameTieBreak(t *testing.T) {
+	instance := enabledBackupInstance("my-s3")
+	backup := succeededBackup("adhoc-1", "sw", "my-s3")
+	sw := seaweedClusterWithBackupStorage("sw", "my-s3")
+	ts := metav1.Now()
+	older := restoreForBackup("restore-old", "sw", "adhoc-1", restoreParams("/"))
+	older.CreationTimestamp = ts
+	older.Status.State = backupv1alpha1.RestoreStateRunning
+	ref := seaweedRestoreRef("restore-old")
+	older.Status.OperatorRestoreRef = &ref
+	newer := restoreForBackup("restore-new", "sw", "adhoc-1", restoreParams("/"))
+	newer.CreationTimestamp = ts
+	ctx := backupSpecTestContext(t, instance, sw, backup, older, newer)
+
+	exec, err := (&Provider{}).SyncRestore(ctx, newer)
+	require.NoError(t, err)
+	assert.Equal(t, backupv1alpha1.RestoreStatePending, exec.State)
+	assert.Contains(t, exec.Message, "restore-old")
+	assert.Nil(t, exec.OperatorRestoreRef)
+
+	sr := &seaweedv1.SeaweedRestore{}
+	err = ctx.Client().Get(ctx.Context(), client.ObjectKey{Namespace: "ns", Name: "restore-new"}, sr)
+	assert.True(t, apierrors.IsNotFound(err))
+}
+
+func TestSyncRestoreRejectsPointInTime(t *testing.T) {
 	instance := enabledBackupInstance("my-s3")
 	ctx := backupSpecTestContext(t, instance)
-
-	exec, err := (&Provider{}).SyncRestore(ctx, &backupv1alpha1.Restore{
+	restore := &backupv1alpha1.Restore{
 		ObjectMeta: metav1.ObjectMeta{Name: "restore-1", Namespace: "ns"},
-	})
+		Spec: backupv1alpha1.RestoreSpec{
+			InstanceRef: commonv1alpha1.ObjectRef{Name: "sw"},
+			DataSource: backupv1alpha1.DataSource{
+				Type: backupv1alpha1.DataSourceTypePointInTime,
+			},
+			Parameters: restoreParams("/"),
+		},
+	}
+
+	exec, err := (&Provider{}).SyncRestore(ctx, restore)
 	require.NoError(t, err)
 	assert.Equal(t, backupv1alpha1.RestoreStateFailed, exec.State)
-	assert.Contains(t, exec.Message, "not implemented")
+	assert.Contains(t, exec.Message, "PointInTime")
+}
+
+func TestSyncRestoreRejectsCrossInstanceBackup(t *testing.T) {
+	instance := enabledBackupInstance("my-s3")
+	backup := succeededBackup("adhoc-1", "other-sw", "my-s3")
+	sw := seaweedClusterWithBackupStorage("sw", "my-s3")
+	restore := restoreForBackup("restore-1", "sw", "adhoc-1", restoreParams("/"))
+	ctx := backupSpecTestContext(t, instance, sw, backup, restore)
+
+	exec, err := (&Provider{}).SyncRestore(ctx, restore)
+	require.NoError(t, err)
+	assert.Equal(t, backupv1alpha1.RestoreStateFailed, exec.State)
+	assert.Contains(t, exec.Message, "other-sw")
+	assert.Contains(t, exec.Message, "sw")
+
+	err = ctx.Client().Get(ctx.Context(), client.ObjectKey{Namespace: "ns", Name: "restore-1"}, &seaweedv1.SeaweedRestore{})
+	assert.True(t, apierrors.IsNotFound(err))
+}
+
+func TestSyncRestoreRejectsExternalBackupOrigin(t *testing.T) {
+	instance := enabledBackupInstance("my-s3")
+	backup := succeededBackup("adhoc-1", "sw", "my-s3")
+	backup.Spec.Origin = backupv1alpha1.BackupOrigin{
+		Type: backupv1alpha1.BackupOriginTypeExternal,
+	}
+	sw := seaweedClusterWithBackupStorage("sw", "my-s3")
+	restore := restoreForBackup("restore-1", "sw", "adhoc-1", restoreParams("/"))
+	ctx := backupSpecTestContext(t, instance, sw, backup, restore)
+
+	exec, err := (&Provider{}).SyncRestore(ctx, restore)
+	require.NoError(t, err)
+	assert.Equal(t, backupv1alpha1.RestoreStateFailed, exec.State)
+	assert.Contains(t, exec.Message, "External")
+}
+
+func TestSyncRestoreUsesScheduledBackupNameForMetaPath(t *testing.T) {
+	withFilerListServer(t, filerListJSONHandler(http.StatusNotFound))
+	instance := enabledBackupInstance("my-s3")
+	backup := succeededScheduledBackup("sw-nightly-20260101", "sw", "my-s3", "nightly")
+	sw := seaweedClusterWithBackupStorage("sw", "my-s3")
+	restore := restoreForBackup("restore-1", "sw", backup.Name, restoreParams("/buckets"))
+	ctx := backupSpecTestContext(t, instance, sw, backup, restore)
+
+	exec, err := (&Provider{}).SyncRestore(ctx, restore)
+	require.NoError(t, err)
+	assert.Equal(t, backupv1alpha1.RestoreStatePending, exec.State)
+
+	sr := &seaweedv1.SeaweedRestore{}
+	require.NoError(t, ctx.Client().Get(ctx.Context(), client.ObjectKey{Namespace: "ns", Name: "restore-1"}, sr))
+	assert.Equal(t, reservedFilerMetaPath(backup.Name), sr.Spec.BackupSource.MetaPath)
+	assert.Equal(t, "/buckets", sr.Spec.FilerPath)
+}
+
+func TestSyncRestoreWaitsForSourceBackupSuccess(t *testing.T) {
+	instance := enabledBackupInstance("my-s3")
+	backup := onDemandBackup("adhoc-1", "sw", "my-s3")
+	backup.Status.State = backupv1alpha1.BackupStateRunning
+	sw := seaweedClusterWithBackupStorage("sw", "my-s3")
+	restore := restoreForBackup("restore-1", "sw", "adhoc-1", restoreParams("/"))
+	ctx := backupSpecTestContext(t, instance, sw, backup, restore)
+
+	exec, err := (&Provider{}).SyncRestore(ctx, restore)
+	require.NoError(t, err)
+	assert.Equal(t, backupv1alpha1.RestoreStatePending, exec.State)
+	assert.Contains(t, exec.Message, "Waiting for source Backup")
+}
+
+func TestSyncRestoreFailsWhenSourceBackupMissing(t *testing.T) {
+	instance := enabledBackupInstance("my-s3")
+	sw := seaweedClusterWithBackupStorage("sw", "my-s3")
+	restore := restoreForBackup("restore-1", "sw", "missing", restoreParams("/"))
+	ctx := backupSpecTestContext(t, instance, sw, restore)
+
+	exec, err := (&Provider{}).SyncRestore(ctx, restore)
+	require.NoError(t, err)
+	assert.Equal(t, backupv1alpha1.RestoreStateFailed, exec.State)
+	assert.Contains(t, exec.Message, "not found")
+}
+
+func TestSyncRestoreRejectsInvalidFilerPath(t *testing.T) {
+	instance := enabledBackupInstance("my-s3")
+	backup := succeededBackup("adhoc-1", "sw", "my-s3")
+	sw := seaweedClusterWithBackupStorage("sw", "my-s3")
+	restore := restoreForBackup("restore-1", "sw", "adhoc-1", restoreParams("/buckets;rm"))
+	ctx := backupSpecTestContext(t, instance, sw, backup, restore)
+
+	exec, err := (&Provider{}).SyncRestore(ctx, restore)
+	require.NoError(t, err)
+	assert.Equal(t, backupv1alpha1.RestoreStateFailed, exec.State)
+	assert.Contains(t, exec.Message, "invalid filerPath")
+}
+
+func TestSeaweedBackupNameForRestore(t *testing.T) {
+	t.Run("prefers operatorBackupRef", func(t *testing.T) {
+		b := succeededBackup("adhoc-1", "sw", "my-s3")
+		name, err := seaweedBackupNameForRestore(b)
+		require.NoError(t, err)
+		assert.Equal(t, testSeaweedBackupName("adhoc-1"), name)
+	})
+	t.Run("scheduled without ref uses backup name", func(t *testing.T) {
+		b := onDemandBackup("sw-nightly-1", "sw", "my-s3")
+		b.Spec.ScheduleName = "nightly"
+		name, err := seaweedBackupNameForRestore(b)
+		require.NoError(t, err)
+		assert.Equal(t, "sw-nightly-1", name)
+	})
+	t.Run("on-demand without ref derives from uid", func(t *testing.T) {
+		b := onDemandBackup("adhoc-1", "sw", "my-s3")
+		name, err := seaweedBackupNameForRestore(b)
+		require.NoError(t, err)
+		assert.Equal(t, testSeaweedBackupName("adhoc-1"), name)
+	})
+}
+
+func TestCleanupRestoreDeletesSeaweedRestore(t *testing.T) {
+	instance := enabledBackupInstance("my-s3")
+	restore := restoreForBackup("restore-1", "sw", "adhoc-1", restoreParams("/"))
+	sr := &seaweedv1.SeaweedRestore{
+		ObjectMeta: metav1.ObjectMeta{Name: "restore-1", Namespace: "ns"},
+	}
+	ctx := backupSpecTestContext(t, instance, restore, sr)
+
+	done, err := (&Provider{}).CleanupRestore(ctx, restore)
+	require.NoError(t, err)
+	assert.False(t, done)
+
+	err = ctx.Client().Get(ctx.Context(), client.ObjectKey{Namespace: "ns", Name: "restore-1"}, &seaweedv1.SeaweedRestore{})
+	assert.True(t, apierrors.IsNotFound(err))
+
+	done, err = (&Provider{}).CleanupRestore(ctx, restore)
+	require.NoError(t, err)
+	assert.True(t, done)
+}
+
+func TestSyncRejectsInstanceDataSource(t *testing.T) {
+	instance := enabledBackupInstance("my-s3")
+	instance.Spec.DataSource = &backupv1alpha1.DataSource{
+		Type: backupv1alpha1.DataSourceTypeBackup,
+		Backup: &backupv1alpha1.DataSourceBackup{
+			BackupRef: commonv1alpha1.ObjectRef{Name: "adhoc-1"},
+		},
+	}
+	ctx := backupSpecTestContext(t, instance)
+
+	err := (&Provider{}).Sync(ctx)
+	require.Error(t, err)
+	dse := controller.AsDataSourceConfigError(err)
+	require.NotNil(t, dse)
+	assert.Equal(t, "DataSourceUnsupported", dse.Reason)
 }
 
 func seaweedClusterWithBackupStorage(cluster, storageName string) *seaweedv1.Seaweed {
@@ -1066,6 +1325,54 @@ func onDemandBackup(name, instance, storage string) *backupv1alpha1.Backup {
 			ClassRef:       commonv1alpha1.ObjectRef{Name: "seaweedfs-filer-meta"},
 			StorageRef:     commonv1alpha1.ObjectRef{Name: storage},
 			DeletionPolicy: backupv1alpha1.BackupDeletionPolicyRetain,
+		},
+	}
+}
+
+func succeededBackup(name, instance, storage string) *backupv1alpha1.Backup {
+	b := onDemandBackup(name, instance, storage)
+	ref := seaweedBackupRef(testSeaweedBackupName(name))
+	b.Status = backupv1alpha1.BackupStatus{
+		State:             backupv1alpha1.BackupStateSucceeded,
+		OperatorBackupRef: &ref,
+	}
+	return b
+}
+
+func succeededScheduledBackup(name, instance, storage, schedule string) *backupv1alpha1.Backup {
+	b := onDemandBackup(name, instance, storage)
+	b.Spec.ScheduleName = schedule
+	b.Labels = map[string]string{mirroredFromLabel: mirroredFromSeaweedBackup}
+	ref := seaweedBackupRef(name)
+	b.Status = backupv1alpha1.BackupStatus{
+		State:             backupv1alpha1.BackupStateSucceeded,
+		OperatorBackupRef: &ref,
+	}
+	return b
+}
+
+func restoreParams(filerPath string) *runtime.RawExtension {
+	raw, err := json.Marshal(map[string]any{
+		"filerPath": filerPath,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return &runtime.RawExtension{Raw: raw}
+}
+
+func restoreForBackup(name, instance, backupName string, params *runtime.RawExtension) *backupv1alpha1.Restore {
+	return &backupv1alpha1.Restore{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns", UID: types.UID(name + "-uid")},
+		Spec: backupv1alpha1.RestoreSpec{
+			InstanceRef: commonv1alpha1.ObjectRef{Name: instance},
+			DataSource: backupv1alpha1.DataSource{
+				Type: backupv1alpha1.DataSourceTypeBackup,
+				Backup: &backupv1alpha1.DataSourceBackup{
+					BackupRef: commonv1alpha1.ObjectRef{Name: backupName},
+				},
+			},
+			Parameters: params,
 		},
 	}
 }
