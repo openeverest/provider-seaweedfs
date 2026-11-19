@@ -198,8 +198,8 @@ spec:
   components:
     master:
       type: seaweedfs
-      version: "4.48"
-      image: chrislusf/seaweedfs:4.48
+      version: "4.54"
+      image: chrislusf/seaweedfs:4.54
       replicas: 1
     volume:
       type: seaweedfs
@@ -398,7 +398,8 @@ spec:
 
 | Version bundle | Default | seaweedfs |
 |---|---|---|
-| `4.48` | ✅ | `4.48` (`chrislusf/seaweedfs:4.48`) |
+| `4.54` | ✅ | `4.54` (`chrislusf/seaweedfs:4.54`) |
+| `4.48` | | `4.48` (`chrislusf/seaweedfs:4.48`) |
 | `4.47` | | `4.47` (`chrislusf/seaweedfs:4.47`). One filer only, see [Filer high availability](#filer-high-availability) |
 
 Source of truth: [definition/versions.yaml](definition/versions.yaml).

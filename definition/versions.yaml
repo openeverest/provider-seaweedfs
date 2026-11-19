@@ -14,8 +14,10 @@
 
 componentTypes:
   seaweedfs:
-    defaultVersion: "4.48"
+    defaultVersion: "4.54"
     versions:
+      - version: "4.54"
+        image: chrislusf/seaweedfs:4.54
       - version: "4.48"
         image: chrislusf/seaweedfs:4.48
       # 4.47 filers can lose metadata between peers on restart; the provider
@@ -26,8 +28,14 @@ componentTypes:
 # Version bundles — curated sets of component versions known to work together.
 # Users set spec.version on an Instance to select a bundle.
 # The bundle named by defaultVersion is used when spec.version is omitted.
-defaultVersion: "4.48"
+defaultVersion: "4.54"
 versions:
+  - name: "4.54"
+    components:
+      master: "4.54"
+      volume: "4.54"
+      filer: "4.54"
+      s3: "4.54"
   - name: "4.48"
     components:
       master: "4.48"

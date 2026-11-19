@@ -3,8 +3,10 @@
 spec:
   componentTypes:
     seaweedfs:
-      defaultVersion: "4.48"
+      defaultVersion: "4.54"
       versions:
+        - image: chrislusf/seaweedfs:4.54
+          version: "4.54"
         - image: chrislusf/seaweedfs:4.48
           version: "4.48"
         - image: chrislusf/seaweedfs:4.47
@@ -80,7 +82,7 @@ spec:
               type: integer
           type: object
       type: seaweedfs
-  defaultVersion: "4.48"
+  defaultVersion: "4.54"
   release:
     version: 0.1.0
   topologies:
@@ -744,6 +746,12 @@ spec:
         - monitoring
         - tls
   versions:
+    - components:
+        filer: "4.54"
+        master: "4.54"
+        s3: "4.54"
+        volume: "4.54"
+      name: "4.54"
     - components:
         filer: "4.48"
         master: "4.48"
