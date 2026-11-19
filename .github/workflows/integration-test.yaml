@@ -80,11 +80,6 @@ jobs:
       - name: Import OpenEverest controller image into k3d
         run: make load-openeverest-controller-image
 
-      - name: Install CRDs
-        run: make install-crds
-
-      - name: Deploy provider
-        run: make ${{ inputs.deploy_target }}
 
       - name: Deploy OpenEverest controller
         working-directory: _openeverest
@@ -93,6 +88,9 @@ jobs:
       - name: Wait for OpenEverest deployment to be ready
         working-directory: _openeverest
         run: make wait-test-controller
+
+      - name: Deploy provider
+        run: make ${{ inputs.deploy_target }}
 
       - name: Run ${{ inputs.make_target }}
         run: make ${{ inputs.make_target }}
