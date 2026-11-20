@@ -1,3 +1,9 @@
+# The scrape objects of earlier releases are deleted.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: metrics-seaweedfs-prometheus
+---
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMPodScrape
 metadata:

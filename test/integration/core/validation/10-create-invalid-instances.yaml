@@ -518,7 +518,7 @@ spec:
       type: seaweedfs
       replicas: 1
 ---
-# The S3 gateway cannot listen on the metrics port.
+# The S3 gateway cannot listen on the metrics port, which every component serves.
 apiVersion: core.openeverest.io/v1alpha1
 kind: Instance
 metadata:
@@ -526,10 +526,6 @@ metadata:
 spec:
   providerRef:
     name: provider-seaweedfs
-  topology:
-    type: standalone
-    parameters:
-      metrics: {}
   components:
     master:
       type: seaweedfs

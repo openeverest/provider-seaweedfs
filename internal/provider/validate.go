@@ -16,7 +16,6 @@ package provider
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -67,7 +66,10 @@ func invalid(path *field.Path, err error) *field.Error {
 // Validate checks the rules about the Instance alone and returns every error
 // with its field path. Rules that read the cluster are in ValidateReferences.
 func (p *Provider) Validate(in controller.ValidationInput) controller.ValidationResult {
-	return controller.ValidationResult{Errors: validateInstance(in)}
+	return controller.ValidationResult{
+		Errors:   validateInstance(in),
+		Warnings: metricsWarnings(in.Instance),
+	}
 }
 
 func validateInstance(in controller.ValidationInput) field.ErrorList {
@@ -124,7 +126,7 @@ func validateInstance(in controller.ValidationInput) field.ErrorList {
 	if err := validateReplication(effectiveReplication(topo.Replication, *volume.Replicas), *volume.Replicas); err != nil {
 		errs = append(errs, invalid(topologyParametersPath.Child("replication"), err))
 	}
-	if err := validateMetricsPort(topo.Metrics, s3CustomSpec); err != nil {
+	if err := validateMetricsPort(s3CustomSpec); err != nil {
 		errs = append(errs, invalid(componentsPath.Key(common.ComponentS3).Child("parameters", "port"), err))
 	}
 
@@ -135,23 +137,10 @@ func validateInstance(in controller.ValidationInput) field.ErrorList {
 	return errs
 }
 
-// ValidateReferences checks the rules that read the cluster: the operators
-// that metrics scraping needs, the StorageClasses a new cluster would use, and
-// the storage changes against the applied Seaweed cluster, for writes
-// admission didn't see.
+// ValidateReferences checks the rules that read the cluster: the
+// StorageClasses a new cluster would use, and the storage changes against the
+// applied Seaweed cluster, for writes admission didn't see.
 func (p *Provider) ValidateReferences(c *controller.Context) (field.ErrorList, error) {
-	var errs field.ErrorList
-
-	var topo standalone.StandaloneTopologyConfig
-	if c.TryDecodeTopologyParameters(&topo) {
-		if err := validateMetrics(c, topo.Metrics); err != nil {
-			if !errors.Is(err, errOperatorMissing) {
-				return nil, err
-			}
-			errs = append(errs, invalid(topologyParametersPath.Child("metrics"), err))
-		}
-	}
-
 	// The StorageClass only matters when PVCs are created. Checking it on a
 	// provisioned instance would block it if the class is later removed.
 	// Growth of an existing claim is checked separately.
@@ -160,17 +149,9 @@ func (p *Provider) ValidateReferences(c *controller.Context) (field.ErrorList, e
 		if !controller.IsNotFound(err) {
 			return nil, err
 		}
-		classErrs, err := validateStorageClasses(c)
-		if err != nil {
-			return nil, err
-		}
-		return append(errs, classErrs...), nil
+		return validateStorageClasses(c)
 	}
-	expansionErrs, err := validateStorageExpansion(c, sw)
-	if err != nil {
-		return nil, err
-	}
-	return append(errs, expansionErrs...), nil
+	return validateStorageExpansion(c, sw)
 }
 
 // decodeParameters decodes raw parameters into target and reports whether

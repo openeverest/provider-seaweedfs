@@ -1,6 +1,12 @@
 - apiGroups:
     - ""
   resources:
+    - namespaces
+  verbs:
+    - get
+- apiGroups:
+    - ""
+  resources:
     - persistentvolumeclaims
     - pods
     - services
@@ -107,9 +113,22 @@
   resources:
     - podmonitors
   verbs:
-    - create
     - delete
+- apiGroups:
+    - monitoring.openeverest.io
+  resources:
+    - monitoringbindings
+    - monitoringclasses
+    - monitoringdestinations
+  verbs:
     - get
+    - list
+    - watch
+- apiGroups:
+    - monitoring.openeverest.io
+  resources:
+    - monitoringbindings/status
+  verbs:
     - patch
 - apiGroups:
     - networking.k8s.io
@@ -124,10 +143,7 @@
   resources:
     - vmpodscrapes
   verbs:
-    - create
     - delete
-    - get
-    - patch
 - apiGroups:
     - operator.victoriametrics.com
   resources:

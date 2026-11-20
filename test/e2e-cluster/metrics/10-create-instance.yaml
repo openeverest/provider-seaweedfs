@@ -11,11 +11,6 @@ spec:
       replication: "000"
       admin:
         enabled: true
-      metrics:
-        prometheus:
-          enabled: true
-        victoriaMetrics:
-          enabled: true
   components:
     master:
       type: seaweedfs
