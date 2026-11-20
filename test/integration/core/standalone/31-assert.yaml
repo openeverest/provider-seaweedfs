@@ -4,5 +4,5 @@ metadata:
   name: test-seaweedfs
 status:
   # Connection details need an external address, so Ready waits for LB ingress.
-  phase: Provisioning
-  message: Waiting for LoadBalancer ingress
+  (conditions[?type == 'Ready'] | [0].status): "False"
+  (conditions[?type == 'Ready'] | [0].message): Waiting for LoadBalancer ingress

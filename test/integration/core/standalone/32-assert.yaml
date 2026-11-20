@@ -3,7 +3,7 @@ kind: Instance
 metadata:
   name: test-seaweedfs
 status:
-  phase: Ready
+  (conditions[?type == 'Ready'] | [0].status): "True"
 ---
 apiVersion: v1
 kind: Secret

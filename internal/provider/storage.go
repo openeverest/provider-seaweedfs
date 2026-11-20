@@ -135,7 +135,9 @@ func specStorage(comp corev1alpha1.ComponentSpec) (componentStorage, bool) {
 	return componentStorage{size: comp.Storage.Size, class: comp.Storage.StorageClass}, true
 }
 
-// storageExpansionStatus reports PVC growth after the Seaweed cluster is Ready.
+// storageExpansionStatus reports PVC growth after the Seaweed cluster is Ready,
+// as the StorageResizing operation, and a class that disallows expansion as a
+// terminal problem.
 // The operator does not copy expansion onto Seaweed status. Progress is the
 // PVC Resizing condition. FileSystemResizePending is ignored: with offline
 // expansion it stays until a pod restart that neither the operator nor the
@@ -194,16 +196,17 @@ func storageExpansionStatus(c *controller.Context, sw *seaweedv1.Seaweed) (*cont
 	if len(blocked) == 0 && len(waiting) == 0 {
 		return nil, nil
 	}
-	if len(blocked) > 0 {
-		return &controller.Status{
-			Phase:   corev1alpha1.InstancePhaseFailed,
-			Message: strings.Join(append(blocked, waiting...), "; "),
-		}, nil
+	// The cluster serves throughout: the PVCs grow online or wait for it.
+	status := controller.Progressing(strings.Join(append(blocked, waiting...), "; ")).
+		WithAvailable(controller.Available)
+	if len(waiting) > 0 {
+		status = status.WithOperation(corev1alpha1.ConditionStorageResizing, "VolumeExpansion", strings.Join(waiting, "; "))
 	}
-	return &controller.Status{
-		Phase:   corev1alpha1.InstancePhaseUpdating,
-		Message: strings.Join(waiting, "; "),
-	}, nil
+	if len(blocked) > 0 {
+		// Only a person can resize the class or move the claim.
+		status = status.WithTerminalProblem("VolumeExpansionNotSupported", strings.Join(blocked, "; "))
+	}
+	return &status, nil
 }
 
 var persistentComponents = []string{common.ComponentVolume, common.ComponentFiler, common.ComponentMaster}

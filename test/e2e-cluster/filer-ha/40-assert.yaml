@@ -3,7 +3,7 @@ kind: Instance
 metadata:
   name: e2e-filer-ha
 status:
-  phase: Ready
+  (conditions[?type == 'Ready'] | [0].status): "True"
 ---
 apiVersion: apps/v1
 kind: StatefulSet

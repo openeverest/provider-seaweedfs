@@ -187,13 +187,39 @@ func TestValidateStorageExpansion(t *testing.T) {
 	})
 }
 
+// assertResizing asserts PVC growth is reported as the StorageResizing
+// operation while the cluster keeps serving.
+func assertResizing(t *testing.T, status controller.Status) {
+	t.Helper()
+	assert.False(t, status.Converged)
+	assert.Equal(t, controller.Available, status.Available)
+	require.Len(t, status.Operations, 1)
+	assert.Equal(t, corev1alpha1.ConditionStorageResizing, status.Operations[0].Type)
+	assert.Empty(t, status.Problems)
+}
+
+func TestStatusReportsDesiredReplicas(t *testing.T) {
+	sw := readySeaweed()
+	sw.Spec.Master = &seaweedv1.MasterSpec{Replicas: 3}
+	sw.Spec.Volume = &seaweedv1.VolumeSpec{Replicas: 2}
+	sw.Spec.Filer = &seaweedv1.FilerSpec{Replicas: 2}
+	sw.Spec.S3 = nil
+	status, err := New().Status(expansionStatusContext(t, sw))
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []controller.ComponentReplicas{
+		{Component: common.ComponentMaster, Desired: 3},
+		{Component: common.ComponentVolume, Desired: 2},
+		{Component: common.ComponentFiler, Desired: 2},
+	}, status.DesiredReplicas, "a component missing from the Seaweed spec is not reported")
+}
+
 func TestStorageExpansionStatus(t *testing.T) {
 	ready := readySeaweed()
 
 	t.Run("no pvcs stays ready", func(t *testing.T) {
 		status, err := New().Status(expansionStatusContext(t, ready))
 		require.NoError(t, err)
-		assert.Equal(t, corev1alpha1.InstancePhaseReady, status.Phase)
+		assert.True(t, status.Converged)
 		assert.NotEmpty(t, status.ConnectionDetails.Host)
 		assert.Equal(t, "AKTEST", status.ConnectionDetails.Username)
 	})
@@ -207,7 +233,7 @@ func TestStorageExpansionStatus(t *testing.T) {
 		}}
 		status, err := New().Status(expansionStatusContext(t, ready, pvc))
 		require.NoError(t, err)
-		assert.Equal(t, corev1alpha1.InstancePhaseUpdating, status.Phase)
+		assertResizing(t, status)
 		assert.Contains(t, status.Message, "volume PVC mount0-test-instance-volume-0: Resizing: resizing volume")
 		assert.NotEmpty(t, status.ConnectionDetails.Host)
 	})
@@ -220,21 +246,25 @@ func TestStorageExpansionStatus(t *testing.T) {
 		}}
 		status, err := New().Status(expansionStatusContext(t, ready, pvc))
 		require.NoError(t, err)
-		assert.Equal(t, corev1alpha1.InstancePhaseReady, status.Phase)
+		assert.True(t, status.Converged)
 		assert.NotContains(t, status.Message, "FileSystemResizePending")
 	})
 
 	t.Run("request behind target waits", func(t *testing.T) {
 		status, err := New().Status(expansionStatusContext(t, ready, volumePVC("1Gi", "fast"), expandableClass("fast", true)))
 		require.NoError(t, err)
-		assert.Equal(t, corev1alpha1.InstancePhaseUpdating, status.Phase)
+		assertResizing(t, status)
 		assert.Contains(t, status.Message, "waiting for volume PVC mount0-test-instance-volume-0 to expand from 1Gi to 10Gi")
 	})
 
 	t.Run("class that disallows expansion fails", func(t *testing.T) {
 		status, err := New().Status(expansionStatusContext(t, ready, volumePVC("1Gi", "fast"), expandableClass("fast", false)))
 		require.NoError(t, err)
-		assert.Equal(t, corev1alpha1.InstancePhaseFailed, status.Phase)
+		assert.False(t, status.Converged)
+		require.Len(t, status.Problems, 1)
+		assert.Equal(t, "VolumeExpansionNotSupported", status.Problems[0].Reason)
+		assert.True(t, status.Problems[0].Terminal, "only a person can change the class")
+		assert.Equal(t, controller.Available, status.Available)
 		assert.Contains(t, status.Message, `storage class "fast" does not allow volume expansion`)
 		assert.NotEmpty(t, status.ConnectionDetails.Host)
 	})
@@ -248,7 +278,7 @@ func TestStorageExpansionStatus(t *testing.T) {
 			expandableClass("fast", true),
 		))
 		require.NoError(t, err)
-		assert.Equal(t, corev1alpha1.InstancePhaseUpdating, status.Phase)
+		assertResizing(t, status)
 		assert.Contains(t, status.Message, "mount0-test-instance-volume-0")
 		assert.Contains(t, status.Message, "mount1-test-instance-volume-0")
 	})
@@ -257,7 +287,7 @@ func TestStorageExpansionStatus(t *testing.T) {
 		other := namedPVC("data-other-0", "1Gi", "fast")
 		status, err := New().Status(expansionStatusContext(t, ready, other))
 		require.NoError(t, err)
-		assert.Equal(t, corev1alpha1.InstancePhaseReady, status.Phase)
+		assert.True(t, status.Converged)
 	})
 }
 

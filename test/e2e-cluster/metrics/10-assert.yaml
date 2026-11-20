@@ -3,7 +3,7 @@ kind: Instance
 metadata:
   name: e2e-metrics
 status:
-  phase: Ready
+  (conditions[?type == 'Ready'] | [0].status): "True"
   # One endpoint per Instance component, for monitoring extensions to scrape.
   monitoring:
     sources:

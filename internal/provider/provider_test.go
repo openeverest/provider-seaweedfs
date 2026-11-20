@@ -1088,15 +1088,15 @@ func TestStatus(t *testing.T) {
 		service           *corev1.Service
 		extraObjs         []client.Object
 		noS3Credentials   bool
-		expectPhase       corev1alpha1.InstancePhase
+		expectConverged   bool
+		expectAvailable   controller.Availability
 		expectConnection  bool
 		expectExternalURL string
 		expectMessagePart string
 	}{
 		{
-			name:        "cluster not found is pending",
-			seaweed:     nil,
-			expectPhase: corev1alpha1.InstancePhasePending,
+			name:    "cluster not found is pending",
+			seaweed: nil,
 		},
 		{
 			name: "ready with S3 Service publishes connection details",
@@ -1107,7 +1107,7 @@ func TestStatus(t *testing.T) {
 				},
 			},
 			service:          s3Service,
-			expectPhase:      corev1alpha1.InstancePhaseReady,
+			expectConverged:  true,
 			expectConnection: true,
 		},
 		{
@@ -1120,7 +1120,6 @@ func TestStatus(t *testing.T) {
 			},
 			service:           s3Service,
 			noS3Credentials:   true,
-			expectPhase:       corev1alpha1.InstancePhaseProvisioning,
 			expectMessagePart: "Waiting for S3 credentials Secret test-instance-s3-config",
 		},
 		{
@@ -1135,7 +1134,6 @@ func TestStatus(t *testing.T) {
 				},
 			},
 			service:           s3Service,
-			expectPhase:       corev1alpha1.InstancePhaseProvisioning,
 			expectMessagePart: "Waiting for TLS certificate",
 		},
 		{
@@ -1155,11 +1153,13 @@ func TestStatus(t *testing.T) {
 					Name: "test-instance-server-tls", Namespace: "default",
 				}},
 			},
-			expectPhase:      corev1alpha1.InstancePhaseReady,
+			expectConverged:  true,
 			expectConnection: true,
 		},
 		{
 			name: "ready LoadBalancer without ingress stays provisioning",
+			// Clients in the cluster can connect meanwhile.
+			expectAvailable: controller.Available,
 			seaweed: &seaweedv1.Seaweed{
 				ObjectMeta: metav1.ObjectMeta{Name: "test-instance", Namespace: "default"},
 				Status: seaweedv1.SeaweedStatus{
@@ -1173,7 +1173,6 @@ func TestStatus(t *testing.T) {
 					Ports: []corev1.ServicePort{{Name: "s3-http", Port: 8333}},
 				},
 			},
-			expectPhase: corev1alpha1.InstancePhaseProvisioning,
 		},
 		{
 			name: "ready LoadBalancer with ingress publishes external endpoint",
@@ -1195,7 +1194,7 @@ func TestStatus(t *testing.T) {
 					},
 				},
 			},
-			expectPhase:       corev1alpha1.InstancePhaseReady,
+			expectConverged:   true,
 			expectConnection:  true,
 			expectExternalURL: "http://lb.example.com:8333",
 		},
@@ -1207,7 +1206,6 @@ func TestStatus(t *testing.T) {
 					Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Ready"}},
 				},
 			},
-			expectPhase: corev1alpha1.InstancePhaseProvisioning,
 		},
 		{
 			name: "ready condition false is provisioning",
@@ -1217,7 +1215,6 @@ func TestStatus(t *testing.T) {
 					Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionFalse, Reason: "NotReady", Message: "scaling up"}},
 				},
 			},
-			expectPhase:       corev1alpha1.InstancePhaseProvisioning,
 			expectMessagePart: "scaling up",
 		},
 		{
@@ -1235,7 +1232,6 @@ func TestStatus(t *testing.T) {
 					}},
 				},
 			},
-			expectPhase:       corev1alpha1.InstancePhaseProvisioning,
 			expectMessagePart: `Waiting for admin credentials Secret "seaweed-admin"`,
 		},
 		{
@@ -1246,7 +1242,6 @@ func TestStatus(t *testing.T) {
 					Master: seaweedv1.ComponentStatus{Replicas: 3, ReadyReplicas: 1},
 				},
 			},
-			expectPhase: corev1alpha1.InstancePhaseProvisioning,
 		},
 		{
 			name: "no condition no replicas is initializing",
@@ -1254,7 +1249,6 @@ func TestStatus(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "test-instance", Namespace: "default"},
 				Status:     seaweedv1.SeaweedStatus{},
 			},
-			expectPhase: corev1alpha1.InstancePhaseInitializing,
 		},
 	}
 
@@ -1291,7 +1285,8 @@ func TestStatus(t *testing.T) {
 
 			status, err := New().Status(ctx)
 			require.NoError(t, err)
-			assert.Equal(t, tt.expectPhase, status.Phase)
+			assert.Equal(t, tt.expectConverged, status.Converged)
+			assert.Equal(t, tt.expectAvailable, status.Available)
 			if tt.expectMessagePart != "" {
 				assert.Contains(t, status.Message, tt.expectMessagePart)
 			}

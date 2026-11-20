@@ -3,7 +3,7 @@ kind: Instance
 metadata:
   name: e2e-seaweedfs
 status:
-  phase: Ready
+  (conditions[?type == 'Ready'] | [0].status): "True"
   connectionSecretRef:
     name: e2e-seaweedfs-conn
 ---

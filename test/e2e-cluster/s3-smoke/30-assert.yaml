@@ -13,7 +13,7 @@ kind: Instance
 metadata:
   name: e2e-seaweedfs
 status:
-  phase: Ready
+  (conditions[?type == 'Ready'] | [0].status): "True"
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
