@@ -18,6 +18,7 @@ spec:
           properties:
             maxMB:
               format: int32
+              minimum: 1
               type: integer
           type: object
       type: seaweedfs
@@ -27,9 +28,14 @@ spec:
           properties:
             masterVolumeSizeLimitMB:
               format: int32
+              minimum: 1
               type: integer
             volumeGrowthCount:
+              description: |-
+                VolumeGrowthCount is the number of logical volumes created at once when
+                a bucket needs a writable volume. Each uses one slot per data copy.
               format: int32
+              minimum: 1
               type: integer
           type: object
       type: seaweedfs
@@ -40,36 +46,75 @@ spec:
             domainName:
               type: string
             https:
+              description: |-
+                HTTPS serves the S3 gateway over TLS (seaweedfs-operator httpsPort and
+                tlsSecret). Nil, or enabled left unset, means HTTPS-only on port 8334.
+                Set enabled to false for plain HTTP. An Ingress keeps the HTTP listener:
+                the operator rejects HTTPS-only together with Ingress.
               properties:
                 enabled:
+                  description: Enabled defaults to true. Set false to serve plain HTTP on port.
                   type: boolean
                 secretName:
+                  description: |-
+                    SecretName is an existing kubernetes.io/tls Secret (tls.crt and tls.key).
+                    Empty means this provider creates Secret <instance>-s3-https.
                   type: string
                 verifyTLS:
+                  description: |-
+                    VerifyTLS is the hint for clients of the in-cluster HTTPS endpoint.
+                    Defaults to false for the provider-created certificate, and true when
+                    secretName is set.
                   type: boolean
               type: object
             ingress:
+              description: |-
+                Ingress exposes the S3 gateway via a Kubernetes Ingress. With TLS,
+                clients reach the API at https://<host>.
               properties:
                 annotations:
                   additionalProperties:
                     type: string
+                  description: Annotations applied to the Ingress (cert-manager issuer, nginx body size, …).
                   type: object
                 className:
+                  description: ClassName is the IngressClassName (e.g. nginx).
                   type: string
                 enabled:
+                  description: |-
+                    Enabled turns on Ingress generation. Nil means "on when Host is set" so
+                    the UI toggleable Ingress group can omit this field and only send nested
+                    values. Explicit false disables Ingress even if Host is set.
                   type: boolean
                 host:
+                  description: |-
+                    Host is the hostname the Ingress listens on. Required when Ingress is on;
+                    a non-empty host also enables Ingress when Enabled is omitted.
                   type: string
                 tls:
+                  description: TLS terminates HTTPS at the Ingress controller.
                   properties:
                     secretName:
+                      description: |-
+                        SecretName is the kubernetes.io/tls Secret holding the certificate.
+                        Create it by hand or via cert-manager (set an issuer annotation on the Ingress).
                       type: string
                     verifyTLS:
+                      description: |-
+                        VerifyTLS is the hint for clients using the HTTPS external endpoint.
+                        Defaults to true when TLS is configured. Set false for self-signed certs.
                       type: boolean
+                  required:
+                    - secretName
                   type: object
               type: object
             port:
+              description: |-
+                Port is the S3 HTTP port. weed s3 listens for gRPC on port+10000, so
+                the port is at most 55535.
               format: int32
+              maximum: 55535
+              minimum: 1
               type: integer
           type: object
       type: seaweedfs
@@ -78,7 +123,11 @@ spec:
         openAPIV3Schema:
           properties:
             maxVolumeCounts:
+              description: |-
+                MaxVolumeCounts caps volumes per disk. Unset lets SeaweedFS size it
+                from free disk space and the volume size limit.
               format: int32
+              minimum: 1
               type: integer
           type: object
       type: seaweedfs
@@ -94,32 +143,66 @@ spec:
         volume: {}
       parametersSchema:
         openAPIV3Schema:
+          description: |-
+            StandaloneTopologyConfig defines configuration for the standalone topology.
+            Add fields here when the standalone topology needs custom configuration
+            beyond what the base Instance spec provides.
           properties:
             admin:
+              description: |-
+                Admin runs the SeaweedFS admin UI when Enabled is true. This provider
+                creates the credentials Secret (user admin, generated password).
               properties:
                 enabled:
+                  description: |-
+                    Enabled runs one admin server. The username is admin. The password is
+                    generated and stored in Secret <instance>-admin-credentials.
                   type: boolean
               type: object
             metrics:
+              description: |-
+                Metrics exposes metrics in the Prometheus format on every SeaweedFS
+                component. If not specified, no metrics are exposed.
               properties:
                 prometheus:
+                  description: Prometheus configures scraping by the Prometheus Operator.
                   properties:
                     enabled:
+                      description: |-
+                        Enabled creates the monitoring system's scrape resource for the
+                        instance: a PodMonitor for Prometheus, a VMPodScrape for VictoriaMetrics.
                       type: boolean
                   type: object
                 victoriaMetrics:
+                  description: VictoriaMetrics configures scraping by the VictoriaMetrics Operator.
                   properties:
                     enabled:
+                      description: |-
+                        Enabled creates the monitoring system's scrape resource for the
+                        instance: a PodMonitor for Prometheus, a VMPodScrape for VictoriaMetrics.
                       type: boolean
                   type: object
               type: object
             replication:
+              description: |-
+                Replication is SeaweedFS master.defaultReplication: three digits XYZ.
+                X is extra copies in other data centers, Y extra copies on other racks
+                in the same data center, Z extra copies on other volume servers in the
+                same rack.
+                Volume servers are not assigned a rack or data center, so X and Y must
+                be 0, and Z+1 must not exceed the volume server count (000, 001, 002, …).
+                Empty uses 001 when volume replicas are at least 2, and 000 otherwise.
               type: string
             securityConfig:
+              description: |-
+                SecurityConfig configures JWT signing keys in the operator-rendered
+                security.toml. Independent of TLS; YAML/API only (no UI fields yet).
               properties:
                 jwtSigning:
+                  description: JWTSigningSpec mirrors seaweedfs-operator JWTSigningSpec.
                   properties:
                     expiresAfterSeconds:
+                      description: JWTExpiresAfterSecondsSpec mirrors seaweedfs-operator JWTExpiresAfterSecondsSpec.
                       properties:
                         filerRead:
                           format: int32
@@ -145,21 +228,33 @@ spec:
                   type: object
               type: object
             tls:
+              description: |-
+                TLS enables inter-component gRPC mTLS via the seaweedfs-operator.
+                This does not terminate HTTPS on the S3 gateway — see README.
               properties:
                 enabled:
+                  description: Enabled turns on mTLS. Defaults to false.
                   type: boolean
                 issuerRef:
+                  description: |-
+                    IssuerRef optionally references an existing cert-manager Issuer or
+                    ClusterIssuer. When empty the operator provisions a self-signed CA.
                   properties:
                     group:
+                      description: Group defaults to cert-manager.io in the operator when empty.
                       type: string
                     kind:
+                      description: Kind is Issuer (namespaced) or ClusterIssuer. Empty defaults to Issuer.
                       type: string
                     name:
                       type: string
+                  required:
+                    - name
                   type: object
               type: object
             volumeServerDiskCount:
               format: int32
+              minimum: 1
               type: integer
           type: object
   uiSchema:
@@ -192,6 +287,7 @@ spec:
                     disabled: true
                 optionsPath: spec.versions
                 optionsPathConfig:
+                  defaultValuePath: spec.defaultVersion
                   labelPath: name
                   valuePath: name
               path: spec.version

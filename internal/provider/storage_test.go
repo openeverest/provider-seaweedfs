@@ -46,7 +46,7 @@ func TestValidateStorageExpansion(t *testing.T) {
 		volume.Storage.StorageClass = class
 		components[common.ComponentVolume] = volume
 		sw := seaweedWithStorage("10Gi", "1Gi", class, nil)
-		err := New().Validate(newValidateContext(t, "test-instance", components, sw))
+		err := validateAll(newValidateContext(t, "test-instance", components, sw))
 		require.NoError(t, err)
 	})
 
@@ -57,10 +57,9 @@ func TestValidateStorageExpansion(t *testing.T) {
 		components[common.ComponentVolume] = volume
 		sw := seaweedWithStorage("10Gi", "1Gi", class, nil)
 		ctx := newValidateContext(t, "test-instance", components, sw)
-		err := New().Validate(ctx)
+		err := validateAll(ctx)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), `storage.size cannot shrink from 10Gi to 1Gi`)
-		assert.Equal(t, err.Error(), ctx.Instance().Status.Message)
 	})
 
 	t.Run("filer shrink", func(t *testing.T) {
@@ -69,7 +68,7 @@ func TestValidateStorageExpansion(t *testing.T) {
 		filer.Storage.Size = resource.MustParse("512Mi")
 		components[common.ComponentFiler] = filer
 		sw := seaweedWithStorage("10Gi", "1Gi", nil, nil)
-		err := New().Validate(newValidateContext(t, "test-instance", components, sw))
+		err := validateAll(newValidateContext(t, "test-instance", components, sw))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), `"filer" component: storage.size cannot shrink`)
 	})
@@ -88,7 +87,7 @@ func TestValidateStorageExpansion(t *testing.T) {
 				},
 			},
 		}
-		err := New().Validate(newValidateContext(t, "test-instance", components, sw))
+		err := validateAll(newValidateContext(t, "test-instance", components, sw))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), `"master" component: storage.size cannot shrink from 5Gi to 1Gi`)
 	})
@@ -96,7 +95,7 @@ func TestValidateStorageExpansion(t *testing.T) {
 	t.Run("growth rejected when the class disallows expansion", func(t *testing.T) {
 		components := sizedComponents("20Gi", "1Gi")
 		sw := seaweedWithStorage("10Gi", "1Gi", class, nil)
-		err := New().Validate(newValidateContext(t, "test-instance", components, sw, expandableClass("fast", false)))
+		err := validateAll(newValidateContext(t, "test-instance", components, sw, expandableClass("fast", false)))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), `storage class "fast" does not allow volume expansion`)
 	})
@@ -104,7 +103,7 @@ func TestValidateStorageExpansion(t *testing.T) {
 	t.Run("growth rejected when the named class is missing", func(t *testing.T) {
 		components := sizedComponents("20Gi", "1Gi")
 		sw := seaweedWithStorage("10Gi", "1Gi", class, nil)
-		err := New().Validate(newValidateContext(t, "test-instance", components, sw))
+		err := validateAll(newValidateContext(t, "test-instance", components, sw))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), `storage class "fast" does not exist`)
 	})
@@ -116,7 +115,7 @@ func TestValidateStorageExpansion(t *testing.T) {
 		components[common.ComponentFiler] = filer
 		sw := seaweedWithStorage("10Gi", "1Gi", class, pointer.ToString("slow"))
 		ctx := newValidateContext(t, "test-instance", components, sw, expandableClass("fast", true), expandableClass("slow", true))
-		require.NoError(t, New().Validate(ctx))
+		require.NoError(t, validateAll(ctx))
 	})
 
 	t.Run("growth uses the applied class when the instance omits it", func(t *testing.T) {
@@ -126,7 +125,7 @@ func TestValidateStorageExpansion(t *testing.T) {
 		components[common.ComponentVolume] = volume
 		sw := seaweedWithStorage("10Gi", "1Gi", class, nil)
 		ctx := newValidateContext(t, "test-instance", components, sw, expandableClass("fast", true))
-		require.NoError(t, New().Validate(ctx))
+		require.NoError(t, validateAll(ctx))
 	})
 
 	t.Run("growth uses the newest default class", func(t *testing.T) {
@@ -138,7 +137,7 @@ func TestValidateStorageExpansion(t *testing.T) {
 		older := defaultClass("old", false, time.Now().Add(-time.Hour))
 		newer := defaultClass("new", true, time.Now())
 		ctx := newValidateContext(t, "test-instance", components, sw, older, newer)
-		require.NoError(t, New().Validate(ctx))
+		require.NoError(t, validateAll(ctx))
 	})
 
 	t.Run("growth rejected when no default class allows expansion", func(t *testing.T) {
@@ -147,7 +146,7 @@ func TestValidateStorageExpansion(t *testing.T) {
 		volume.Storage.StorageClass = nil
 		components[common.ComponentVolume] = volume
 		sw := seaweedWithStorage("10Gi", "1Gi", nil, nil)
-		err := New().Validate(newValidateContext(t, "test-instance", components, sw, defaultClass("local", false, time.Now())))
+		err := validateAll(newValidateContext(t, "test-instance", components, sw, defaultClass("local", false, time.Now())))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "does not allow volume expansion")
 	})
@@ -158,7 +157,7 @@ func TestValidateStorageExpansion(t *testing.T) {
 		volume.Storage.StorageClass = nil
 		components[common.ComponentVolume] = volume
 		sw := seaweedWithStorage("10Gi", "1Gi", nil, nil)
-		err := New().Validate(newValidateContext(t, "test-instance", components, sw, expandableClass("fast", true)))
+		err := validateAll(newValidateContext(t, "test-instance", components, sw, expandableClass("fast", true)))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no StorageClass allows volume expansion")
 	})
@@ -171,7 +170,7 @@ func TestValidateStorageExpansion(t *testing.T) {
 		// "other" allows expansion. The applied class is "fast" and is not consulted:
 		// the operator refuses a class change even when the new class can grow.
 		sw := seaweedWithStorage("10Gi", "1Gi", class, nil)
-		err := New().Validate(newValidateContext(t, "test-instance", components, sw, expandableClass("other", true)))
+		err := validateAll(newValidateContext(t, "test-instance", components, sw, expandableClass("other", true)))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), `"volume" component: storage.storageClass cannot change while storage.size grows`)
 	})
@@ -182,7 +181,7 @@ func TestValidateStorageExpansion(t *testing.T) {
 		master.Storage = &corev1alpha1.Storage{Size: resource.MustParse("5Gi")}
 		components[common.ComponentMaster] = master
 		sw := seaweedWithStorage("10Gi", "1Gi", nil, nil)
-		err := New().Validate(newValidateContext(t, "test-instance", components, sw))
+		err := validateAll(newValidateContext(t, "test-instance", components, sw))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), `"master" component: storage cannot be enabled after creation`)
 	})

@@ -78,6 +78,7 @@ func metricsContext(t *testing.T, metrics *standalone.MetricsConfig, withScrapeK
 	require.NoError(t, corev1alpha1.AddToScheme(scheme))
 	require.NoError(t, monitoringv1.AddToScheme(scheme))
 	require.NoError(t, vmv1beta1.AddToScheme(scheme))
+	require.NoError(t, seaweedv1.AddToScheme(scheme))
 
 	scrapeKinds := []schema.GroupVersionKind{
 		monitoringv1.SchemeGroupVersion.WithKind(monitoringv1.PodMonitorsKind),
@@ -385,7 +386,7 @@ func TestValidateMetricsPort(t *testing.T) {
 func TestValidateRejectsMetricsWithoutOperator(t *testing.T) {
 	c, _ := metricsContext(t, exposeMetrics(true, false), false)
 
-	err := New().Validate(c)
+	err := validateAll(c)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Prometheus Operator is not installed")
 }

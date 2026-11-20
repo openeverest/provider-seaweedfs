@@ -51,16 +51,6 @@ func validateMaster(comp corev1alpha1.ComponentSpec, present bool) error {
 	return validateNoService(common.ComponentMaster, comp)
 }
 
-func validateMasterParameters(spec components.MasterCustomSpec) error {
-	if spec.MasterVolumeSizeLimitMB != nil && *spec.MasterVolumeSizeLimitMB < 1 {
-		return fmt.Errorf("masterVolumeSizeLimitMB must be at least 1")
-	}
-	if spec.VolumeGrowthCount != nil && *spec.VolumeGrowthCount < 1 {
-		return fmt.Errorf("volumeGrowthCount must be at least 1")
-	}
-	return nil
-}
-
 // masterConfigChecksumAnnotation rolls the master pods when master.toml
 // changes: `weed master` reads it only at startup.
 const masterConfigChecksumAnnotation = "seaweedfs.openeverest.io/master-config-checksum"

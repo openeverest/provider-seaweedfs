@@ -24,6 +24,7 @@ package standalone
 // Add fields here when the standalone topology needs custom configuration
 // beyond what the base Instance spec provides.
 type StandaloneTopologyConfig struct {
+	// +kubebuilder:validation:Minimum=1
 	VolumeServerDiskCount *int32 `json:"volumeServerDiskCount,omitempty"`
 
 	// Replication is SeaweedFS master.defaultReplication: three digits XYZ.

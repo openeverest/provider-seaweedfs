@@ -37,13 +37,6 @@ func validateFiler(comp corev1alpha1.ComponentSpec, present bool) error {
 	return validateNoService(common.ComponentFiler, comp)
 }
 
-func validateFilerParameters(spec components.FilerCustomSpec) error {
-	if spec.MaxMB != nil && *spec.MaxMB < 1 {
-		return fmt.Errorf("maxMB must be at least 1")
-	}
-	return nil
-}
-
 // minMultiFilerVersion is the first SeaweedFS release whose filer persists its
 // metadata change log on shutdown (seaweedfs/seaweedfs#11359). Before it, a
 // filer that restarts drops up to a minute of changes from the log, and a peer

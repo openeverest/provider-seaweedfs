@@ -1,13 +1,6 @@
 - apiGroups:
     - ""
   resources:
-    - events
-  verbs:
-    - create
-    - patch
-- apiGroups:
-    - ""
-  resources:
     - persistentvolumeclaims
     - pods
     - services
@@ -26,6 +19,14 @@
     - patch
     - update
     - watch
+- apiGroups:
+    - ""
+    - events.k8s.io
+  resources:
+    - events
+  verbs:
+    - create
+    - patch
 - apiGroups:
     - backup.openeverest.io
   resources:

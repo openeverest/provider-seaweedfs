@@ -36,11 +36,11 @@ import (
 	commonv1alpha1 "github.com/openeverest/openeverest/v2/api/common/v1alpha1"
 	corev1alpha1 "github.com/openeverest/openeverest/v2/api/core/v1alpha1"
 	"github.com/openeverest/openeverest/v2/provider-runtime/controller"
+	"github.com/openeverest/openeverest/v2/provider-runtime/controller/validationtest"
 
 	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
 
 	"github.com/openeverest/provider-seaweedfs/definition/components"
-	"github.com/openeverest/provider-seaweedfs/definition/topologies/standalone"
 	vmv1beta1 "github.com/openeverest/provider-seaweedfs/internal/apis/victoriametrics/v1beta1"
 	"github.com/openeverest/provider-seaweedfs/internal/common"
 )
@@ -136,28 +136,6 @@ func TestValidateMaster(t *testing.T) {
 	}
 }
 
-func TestValidateMasterParameters(t *testing.T) {
-	require.NoError(t, validateMasterParameters(components.MasterCustomSpec{}))
-	require.NoError(t, validateMasterParameters(components.MasterCustomSpec{
-		MasterVolumeSizeLimitMB: pointer.ToInt32(1024),
-	}))
-
-	err := validateMasterParameters(components.MasterCustomSpec{
-		MasterVolumeSizeLimitMB: pointer.ToInt32(0),
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "masterVolumeSizeLimitMB must be at least 1")
-
-	require.NoError(t, validateMasterParameters(components.MasterCustomSpec{
-		VolumeGrowthCount: pointer.ToInt32(1),
-	}))
-	err = validateMasterParameters(components.MasterCustomSpec{
-		VolumeGrowthCount: pointer.ToInt32(0),
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "volumeGrowthCount must be at least 1")
-}
-
 func TestValidateVolume(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -216,41 +194,6 @@ func TestValidateVolume(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
-}
-
-func TestValidateVolumeParameters(t *testing.T) {
-	require.NoError(t, validateVolumeParameters(components.VolumeCustomSpec{}))
-	require.NoError(t, validateVolumeParameters(components.VolumeCustomSpec{
-		MaxVolumeCounts: pointer.ToInt32(8),
-	}))
-
-	err := validateVolumeParameters(components.VolumeCustomSpec{
-		MaxVolumeCounts: pointer.ToInt32(0),
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "maxVolumeCounts must be at least 1")
-}
-
-func TestValidateTopologyParameters(t *testing.T) {
-	require.NoError(t, validateTopologyParameters(standalone.StandaloneTopologyConfig{}))
-	require.NoError(t, validateTopologyParameters(standalone.StandaloneTopologyConfig{
-		VolumeServerDiskCount: pointer.ToInt32(2),
-	}))
-
-	err := validateTopologyParameters(standalone.StandaloneTopologyConfig{
-		VolumeServerDiskCount: pointer.ToInt32(0),
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "volumeServerDiskCount must be at least 1")
-
-	err = validateTopologyParameters(standalone.StandaloneTopologyConfig{
-		TLS: &standalone.TLSSpec{
-			Enabled:   true,
-			IssuerRef: &standalone.TLSIssuerRef{Kind: "Issuer"},
-		},
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "tls.issuerRef.name is required")
 }
 
 func TestValidateService(t *testing.T) {
@@ -539,27 +482,11 @@ func TestValidateFiler(t *testing.T) {
 	}
 }
 
-func TestValidateFilerParameters(t *testing.T) {
-	require.NoError(t, validateFilerParameters(components.FilerCustomSpec{}))
-	require.NoError(t, validateFilerParameters(components.FilerCustomSpec{
-		MaxMB: pointer.ToInt32(8),
-	}))
-
-	err := validateFilerParameters(components.FilerCustomSpec{
-		MaxMB: pointer.ToInt32(0),
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "maxMB must be at least 1")
-}
-
 func TestValidateS3Parameters(t *testing.T) {
 	require.NoError(t, validateS3Parameters(components.S3CustomSpec{}))
 	require.NoError(t, validateS3Parameters(components.S3CustomSpec{
 		Port:       pointer.ToInt32(8333),
 		DomainName: pointer.To("s3.example.com"),
-	}))
-	require.NoError(t, validateS3Parameters(components.S3CustomSpec{
-		Port: pointer.ToInt32(MaxS3Port),
 	}))
 	require.NoError(t, validateS3Parameters(components.S3CustomSpec{
 		DomainName: pointer.To(""),
@@ -569,18 +496,6 @@ func TestValidateS3Parameters(t *testing.T) {
 	}))
 
 	err := validateS3Parameters(components.S3CustomSpec{
-		Port: pointer.ToInt32(0),
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), fmt.Sprintf("port must be between 1 and %d", MaxS3Port))
-
-	err = validateS3Parameters(components.S3CustomSpec{
-		Port: pointer.ToInt32(MaxS3Port + 1),
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), fmt.Sprintf("port must be between 1 and %d", MaxS3Port))
-
-	err = validateS3Parameters(components.S3CustomSpec{
 		DomainName: pointer.To("x;id"),
 	})
 	require.Error(t, err)
@@ -955,7 +870,7 @@ func TestValidate(t *testing.T) {
 				c[common.ComponentMaster] = master
 				return c
 			}(),
-			expectErr: "masterVolumeSizeLimitMB must be at least 1",
+			expectErr: "spec.components[master].parameters.masterVolumeSizeLimitMB",
 		},
 		{
 			name: "invalid master volume growth count",
@@ -966,7 +881,7 @@ func TestValidate(t *testing.T) {
 				c[common.ComponentMaster] = master
 				return c
 			}(),
-			expectErr: "volumeGrowthCount must be at least 1",
+			expectErr: "spec.components[master].parameters.volumeGrowthCount",
 		},
 		{
 			name: "missing volume storage",
@@ -995,7 +910,7 @@ func TestValidate(t *testing.T) {
 				c[common.ComponentFiler] = filer
 				return c
 			}(),
-			expectErr: "maxMB must be at least 1",
+			expectErr: "spec.components[filer].parameters.maxMB",
 		},
 		{
 			name: "invalid s3 parameters",
@@ -1006,7 +921,7 @@ func TestValidate(t *testing.T) {
 				c[common.ComponentS3] = s3
 				return c
 			}(),
-			expectErr: fmt.Sprintf("port must be between 1 and %d", MaxS3Port),
+			expectErr: "spec.components[s3].parameters.port",
 		},
 		{
 			name: "s3 port collides with HTTPS while HTTPS is on",
@@ -1039,7 +954,7 @@ func TestValidate(t *testing.T) {
 				c[common.ComponentVolume] = volume
 				return c
 			}(),
-			expectErr: "maxVolumeCounts must be at least 1",
+			expectErr: "spec.components[volume].parameters.maxVolumeCounts",
 		},
 		{
 			name: "topology spread constraints rejected",
@@ -1057,7 +972,7 @@ func TestValidate(t *testing.T) {
 				Type:       "standalone",
 				Parameters: &runtime.RawExtension{Raw: []byte(`{"volumeServerDiskCount":0}`)},
 			},
-			expectErr: "volumeServerDiskCount must be at least 1",
+			expectErr: "spec.topology.parameters.volumeServerDiskCount",
 		},
 		{
 			name:       "invalid tls issuerRef",
@@ -1067,7 +982,7 @@ func TestValidate(t *testing.T) {
 				Parameters: &runtime.RawExtension{Raw: []byte(
 					`{"tls":{"enabled":true,"issuerRef":{"kind":"Issuer"}}}`)},
 			},
-			expectErr: "tls.issuerRef.name is required",
+			expectErr: "spec.topology.parameters.tls.issuerRef.name: Required value",
 		},
 		{
 			name: "single volume server without replication uses 000",
@@ -1142,19 +1057,15 @@ func TestValidate(t *testing.T) {
 		},
 	}
 
+	v := validationtest.New(t, New(), providerSpecPath)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			instance := &corev1alpha1.Instance{
 				ObjectMeta: metav1.ObjectMeta{Name: "test-instance", Namespace: "default"},
 				Spec:       corev1alpha1.InstanceSpec{Components: tt.components, Topology: tt.topology},
 			}
-			scheme := runtime.NewScheme()
-			require.NoError(t, corev1alpha1.AddToScheme(scheme))
-			require.NoError(t, seaweedv1.AddToScheme(scheme))
-			fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(instance).Build()
-			ctx := controller.NewContext(context.Background(), fakeClient, instance, common.ProviderName)
 
-			err := New().Validate(ctx)
+			err := v.Run(instance, nil).Errors.ToAggregate()
 			if tt.expectErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.expectErr)

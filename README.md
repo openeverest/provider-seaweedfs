@@ -125,6 +125,7 @@ an MVP: several capabilities are stubbed or not wired yet.
 | Admin UI | ✅ | Off unless `topology.parameters.admin.enabled` is true. This provider creates Secret `<instance>-admin-credentials` with `adminUser=admin` and a generated `adminPassword` (kept across reconciles). ClusterIP Service `<instance>-admin`, port 23646. Connection details add `adminURL`, `adminUser`, and `adminCredentialsSecret` (the Secret name). Operator image `1.0.40` exits the admin container when `adminPassword` is missing. Workers are not created |
 | Monitoring | ✅ | Prometheus / VictoriaMetrics metrics on every component via `topology.parameters.metrics`, see [Metrics](#metrics-for-prometheus-and-victoriametrics). OpenEverest `MonitoringConfig` (PMM) is not used |
 | TLS | ✅ | Inter-component gRPC mTLS via `topology.parameters.tls`. The S3 gateway serves HTTPS by default (operator `httpsPort` 8334, `httpsOnly`, Secret `<instance>-s3-https`). Set `components.s3.parameters.https.enabled` to false for plain HTTP. Ingress TLS still publishes `externalEndpointURL=https://…`. The operator rejects `httpsOnly` together with Ingress, so an Ingress keeps the HTTP listener |
+| Validation at admission | ✅ | The provider serves an Instance admission webhook, so an invalid spec is rejected when it is written (`kubectl`, Argo CD, Flux, the API or the UI), with every error on its field path. Rules that read the cluster (a missing StorageClass, a monitoring operator that is not installed, storage growth the applied StorageClass cannot do) only warn at admission, since the object may be created later; the Instance then stays blocked with reason `InvalidReference` until it is fixed. The chart generates the webhook's serving certificate and keeps it across upgrades; set `admission.certManager.enabled=true` to issue it with cert-manager |
 | Status / readiness | ✅ | Maps Seaweed Ready condition; waits for TLS Secret / LoadBalancer / Ingress when configured |
 | Connection details | ✅ | Publishes in-cluster S3 endpoint and admin S3 credentials on Ready; NodePort / LoadBalancer / Ingress add `externalEndpointURL`. Admin UI adds `adminURL`, `adminUser`, and `adminCredentialsSecret` |
 | S3 authentication | ✅ | Always on. The provider generates an admin access key pair in Secret `<name>-s3-config` and starts the gateway with it, so anonymous requests are denied from the first boot. See [S3 credentials](#s3-credentials) |
@@ -493,7 +494,8 @@ The scrape resources are named `<instance>-prometheus` (`PodMonitor`) and
 it. They select the pods by the `core.openeverest.io/instance` label, and every series carries
 the `core_openeverest_io_instance` and `core_openeverest_io_component` labels. Keep in mind:
 
-- The matching operator must be installed; otherwise the Instance fails validation.
+- The matching operator must be installed; otherwise the Instance is blocked with reason
+  `InvalidReference` (admission only warns, since the operator may be installed later).
 - Prometheus must select the `PodMonitor`. kube-prometheus-stack, for example, selects only
   `PodMonitor`s labelled with its release unless
   `prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues=false` is set.
@@ -524,8 +526,8 @@ the scraped ones.
 - **Chart values:** [charts/provider-seaweedfs/values.yaml](charts/provider-seaweedfs/values.yaml)
 - **Instance parameters:** per-component and per-topology schemas under
   [definition/](definition/), published on the `Provider` resource
-  (`kubectl get provider provider-seaweedfs -o yaml`). The API server and the UI
-  validate user input against these schemas.
+  (`kubectl get provider provider-seaweedfs -o yaml`). The provider's admission
+  webhook, the API server and the UI validate user input against these schemas.
 
 Sync writes replica counts, CPU and memory resources, volume/filer/master
 persistence (including storage class), S3 service type and Ingress, the admin

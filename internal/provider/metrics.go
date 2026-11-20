@@ -15,6 +15,7 @@
 package provider
 
 import (
+	"errors"
 	"fmt"
 
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
@@ -210,6 +211,9 @@ func validateMetricsPort(metrics *standalone.MetricsConfig, s3 components.S3Cust
 	return fmt.Errorf("s3 port %d is the metrics port; pick another port or stop exposing metrics", MetricsPort)
 }
 
+// errOperatorMissing marks a monitoring operator the cluster does not serve.
+var errOperatorMissing = errors.New("operator missing")
+
 // validateMetrics rejects scraping by a monitoring system whose operator is
 // not installed, since its scrape resource could not be created.
 func validateMetrics(c *controller.Context, metrics *standalone.MetricsConfig) error {
@@ -232,7 +236,7 @@ func validateMetrics(c *controller.Context, metrics *standalone.MetricsConfig) e
 		}
 		if _, err := c.Client().RESTMapper().RESTMapping(check.kind, check.version); err != nil {
 			if meta.IsNoMatchError(err) {
-				return fmt.Errorf("metrics: %s is not installed: the cluster does not serve %s", check.operator, check.kind)
+				return fmt.Errorf("metrics: %s is not installed: the cluster does not serve %s: %w", check.operator, check.kind, errOperatorMissing)
 			}
 			return fmt.Errorf("metrics: look up %s: %w", check.kind, err)
 		}

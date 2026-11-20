@@ -29,7 +29,3 @@ const DefaultVolumeGrowthCount int32 = 2
 // A single volume server falls back to 000, which is the only placement
 // that fits one server in one rack and one data center.
 const DefaultReplication = "001"
-
-// MaxS3Port is the highest allowed S3 HTTP port. weed s3 listens for gRPC on
-// port + 10000 (seaweedv1.GRPCPortDelta), so anything above 55535 crash-loops.
-const MaxS3Port int32 = 55535

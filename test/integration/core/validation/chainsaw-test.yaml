@@ -5,8 +5,11 @@ metadata:
   name: core-validation
 spec:
   description: |
-    Instances that break a provider validation rule end up Failed and never
-    produce a Seaweed cluster.
+    The provider's admission webhook rejects Instances that break a provider
+    validation rule, each with the field path of the rule. A StorageClass that
+    does not exist is only known by reading the cluster: admission warns about
+    it, and the Instance stays blocked with InvalidReference and never produces
+    a Seaweed cluster.
   catch:
     - script:
         content: kubectl -n $NAMESPACE get instance,seaweed -o yaml
@@ -17,9 +20,41 @@ spec:
   steps:
     - name: reject-invalid-instances
       try:
-        - apply:
-            file: 10-create-invalid-instances.yaml
-        - assert:
-            file: 10-assert.yaml
+        - script:
+            content: kubectl apply -n $NAMESPACE -f 10-create-invalid-instances.yaml
+            check:
+              ($error != null): true
+              (contains($stderr, '"invalid-even-master-replicas" is invalid: spec.components[master]')): true
+              (contains($stderr, '"invalid-volume-no-storage" is invalid: spec.components[volume]')): true
+              (contains($stderr, '"invalid-filer-no-storage" is invalid: spec.components[filer]')): true
+              (contains($stderr, '"invalid-missing-s3" is invalid: spec.components[s3]')): true
+              (contains($stderr, '"invalid-master-exposed" is invalid: spec.components[master]')): true
+              (contains($stderr, '"invalid-s3-source-ranges" is invalid: spec.components[s3]')): true
+              (contains($stderr, '"invalid-s3-port" is invalid: spec.components[s3].parameters.port')): true
+              (contains($stderr, '"invalid-s3-domain-name" is invalid: spec.components[s3].parameters')): true
+              (contains($stderr, '"invalid-volume-server-disk-count" is invalid: spec.topology.parameters.volumeServerDiskCount')): true
+              (contains($stderr, '"invalid-topology-spread" is invalid: spec.components[volume]')): true
+              (contains($stderr, '"invalid-s3-ingress-no-host" is invalid: spec.components[s3].parameters')): true
+              (contains($stderr, '"invalid-s3-ingress-host" is invalid: spec.components[s3].parameters')): true
+              (contains($stderr, '"invalid-s3-ingress-tls-no-secret" is invalid: spec.components[s3].parameters.ingress.tls.secretName')): true
+              (contains($stderr, '"invalid-tls-issuer-kind" is invalid: spec.topology.parameters')): true
+              (contains($stderr, '"1invalid-name" is invalid: metadata.name')): true
+              (contains($stderr, '"invalid-name-length-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" is invalid: metadata.name')): true
+              (contains($stderr, '"invalid-replication-copies" is invalid: spec.topology.parameters.replication')): true
+              (contains($stderr, '"invalid-replication-format" is invalid: spec.topology.parameters.replication')): true
+              (contains($stderr, '"invalid-filers-on-4-47" is invalid: spec.components[filer].replicas')): true
+              (contains($stderr, '"invalid-s3-port-metrics" is invalid: spec.components[s3].parameters.port')): true
         - error:
             file: 10-errors.yaml
+
+    - name: block-missing-storage-class
+      try:
+        - script:
+            content: kubectl apply -n $NAMESPACE -f 20-create-missing-storage-class.yaml
+            check:
+              ($error == null): true
+              (contains($stderr, 'storage class "missing-storage-class" does not exist')): true
+        - assert:
+            file: 20-assert.yaml
+        - error:
+            file: 20-errors.yaml

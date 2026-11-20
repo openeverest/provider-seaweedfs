@@ -1,105 +1,100 @@
-# A rejected Instance must not produce a Seaweed cluster.
-apiVersion: seaweed.seaweedfs.com/v1
-kind: Seaweed
+# A rejected Instance must not be persisted.
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
 metadata:
   name: invalid-even-master-replicas
 ---
-apiVersion: seaweed.seaweedfs.com/v1
-kind: Seaweed
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
 metadata:
   name: invalid-volume-no-storage
 ---
-apiVersion: seaweed.seaweedfs.com/v1
-kind: Seaweed
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
 metadata:
   name: invalid-filer-no-storage
 ---
-apiVersion: seaweed.seaweedfs.com/v1
-kind: Seaweed
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
 metadata:
   name: invalid-missing-s3
 ---
-apiVersion: seaweed.seaweedfs.com/v1
-kind: Seaweed
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
 metadata:
   name: invalid-master-exposed
 ---
-apiVersion: seaweed.seaweedfs.com/v1
-kind: Seaweed
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
 metadata:
   name: invalid-s3-source-ranges
 ---
-apiVersion: seaweed.seaweedfs.com/v1
-kind: Seaweed
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
 metadata:
   name: invalid-s3-port
 ---
-apiVersion: seaweed.seaweedfs.com/v1
-kind: Seaweed
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
 metadata:
   name: invalid-s3-domain-name
 ---
-apiVersion: seaweed.seaweedfs.com/v1
-kind: Seaweed
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
 metadata:
   name: invalid-volume-server-disk-count
 ---
-apiVersion: seaweed.seaweedfs.com/v1
-kind: Seaweed
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
 metadata:
   name: invalid-topology-spread
 ---
-apiVersion: seaweed.seaweedfs.com/v1
-kind: Seaweed
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
 metadata:
   name: invalid-s3-ingress-no-host
 ---
-apiVersion: seaweed.seaweedfs.com/v1
-kind: Seaweed
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
 metadata:
   name: invalid-s3-ingress-host
 ---
-apiVersion: seaweed.seaweedfs.com/v1
-kind: Seaweed
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
 metadata:
   name: invalid-s3-ingress-tls-no-secret
 ---
-apiVersion: seaweed.seaweedfs.com/v1
-kind: Seaweed
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
 metadata:
   name: invalid-tls-issuer-kind
 ---
-apiVersion: seaweed.seaweedfs.com/v1
-kind: Seaweed
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
 metadata:
   name: 1invalid-name
 ---
-apiVersion: seaweed.seaweedfs.com/v1
-kind: Seaweed
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
 metadata:
   name: invalid-name-length-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 ---
-apiVersion: seaweed.seaweedfs.com/v1
-kind: Seaweed
-metadata:
-  name: invalid-storage-class
----
-apiVersion: seaweed.seaweedfs.com/v1
-kind: Seaweed
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
 metadata:
   name: invalid-replication-copies
 ---
-apiVersion: seaweed.seaweedfs.com/v1
-kind: Seaweed
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
 metadata:
   name: invalid-replication-format
 ---
-apiVersion: seaweed.seaweedfs.com/v1
-kind: Seaweed
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
 metadata:
   name: invalid-filers-on-4-47
 ---
-apiVersion: seaweed.seaweedfs.com/v1
-kind: Seaweed
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
 metadata:
   name: invalid-s3-port-metrics

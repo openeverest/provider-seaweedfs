@@ -36,13 +36,6 @@ func validateVolume(comp corev1alpha1.ComponentSpec, present bool) error {
 	return validateNoService(common.ComponentVolume, comp)
 }
 
-func validateVolumeParameters(spec components.VolumeCustomSpec) error {
-	if spec.MaxVolumeCounts != nil && *spec.MaxVolumeCounts < 1 {
-		return fmt.Errorf("maxVolumeCounts must be at least 1")
-	}
-	return nil
-}
-
 func buildVolumeSpec(comp corev1alpha1.ComponentSpec, volumeCustomSpec components.VolumeCustomSpec) *seaweedv1.VolumeSpec {
 	// Left unset, the operator passes -max=0 and each volume server derives
 	// its slot count from free disk space on every heartbeat, so slots follow

@@ -23,23 +23,31 @@
 package components
 
 type MasterCustomSpec struct {
+	// +kubebuilder:validation:Minimum=1
 	MasterVolumeSizeLimitMB *int32 `json:"masterVolumeSizeLimitMB,omitempty"`
 	// VolumeGrowthCount is the number of logical volumes created at once when
 	// a bucket needs a writable volume. Each uses one slot per data copy.
+	// +kubebuilder:validation:Minimum=1
 	VolumeGrowthCount *int32 `json:"volumeGrowthCount,omitempty"`
 }
 
 type VolumeCustomSpec struct {
 	// MaxVolumeCounts caps volumes per disk. Unset lets SeaweedFS size it
 	// from free disk space and the volume size limit.
+	// +kubebuilder:validation:Minimum=1
 	MaxVolumeCounts *int32 `json:"maxVolumeCounts,omitempty"`
 }
 
 type FilerCustomSpec struct {
+	// +kubebuilder:validation:Minimum=1
 	MaxMB *int32 `json:"maxMB,omitempty"`
 }
 
 type S3CustomSpec struct {
+	// Port is the S3 HTTP port. weed s3 listens for gRPC on port+10000, so
+	// the port is at most 55535.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=55535
 	Port       *int32  `json:"port,omitempty"`
 	DomainName *string `json:"domainName,omitempty"`
 

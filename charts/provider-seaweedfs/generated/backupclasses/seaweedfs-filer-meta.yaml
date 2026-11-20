@@ -14,8 +14,15 @@ spec:
   executionMode: ProviderManaged
   parametersSchema:
     openAPIV3Schema:
+      description: |-
+        SeaweedfsFilerMetaBackupParameters describes Backup.spec.parameters and
+        Instance schedule parameters for this class. filerPath is the only field
+        that changes the snapshot; it maps to SeaweedBackupSpec.FilerPath.
       properties:
         filerPath:
+          default: /
+          description: FilerPath is the filer subtree to snapshot. Defaults to "/".
+          pattern: ^/[A-Za-z0-9._/-]*$
           type: string
       type: object
   providerManaged:
@@ -24,6 +31,9 @@ spec:
     supportsPITR: false
   restoreParametersSchema:
     openAPIV3Schema:
+      description: |-
+        SeaweedfsFilerMetaRestoreParameters describes Restore.spec.parameters for
+        this class. Restore-time options are not exposed yet.
       type: object
   supportedProviders:
     - provider-seaweedfs

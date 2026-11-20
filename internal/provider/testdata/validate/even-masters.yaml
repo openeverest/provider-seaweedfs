@@ -1,0 +1,23 @@
+# A master quorum needs an odd number of masters.
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: example
+spec:
+  providerRef:
+    name: provider-seaweedfs
+  topology:
+    type: standalone
+  components:
+    master:
+      replicas: 2
+    volume:
+      replicas: 1
+      storage:
+        size: 10Gi
+    filer:
+      replicas: 1
+      storage:
+        size: 1Gi
+    s3:
+      replicas: 1

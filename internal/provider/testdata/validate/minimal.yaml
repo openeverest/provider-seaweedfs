@@ -1,0 +1,24 @@
+# The smallest Instance of this provider. Copy it per case and change what the
+# case is about.
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: example
+spec:
+  providerRef:
+    name: provider-seaweedfs
+  topology:
+    type: standalone
+  components:
+    master:
+      replicas: 1
+    volume:
+      replicas: 1
+      storage:
+        size: 10Gi
+    filer:
+      replicas: 1
+      storage:
+        size: 1Gi
+    s3:
+      replicas: 1

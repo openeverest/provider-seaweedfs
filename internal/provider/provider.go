@@ -277,17 +277,33 @@ func resolveImage(c *controller.Context, componentName string, comp corev1alpha1
 		return "", fmt.Errorf("resolving image for %q: %w", componentName, err)
 	}
 
-	if comp.Version != "" {
-		if image := controller.GetImageForVersion(spec, componentName, comp.Version); image != "" {
-			return image, nil
-		}
-	}
-
-	if image := controller.GetDefaultImageForComponent(spec, componentName); image != "" {
+	if image := catalogImage(spec, componentName, comp.Version); image != "" {
 		return image, nil
 	}
 
 	return "", fmt.Errorf("no image found for component %q", componentName)
+}
+
+// componentImage resolves the image of a component from the Instance and the
+// Provider alone, for Validate.
+func componentImage(provider *corev1alpha1.Provider, componentName string, comp corev1alpha1.ComponentSpec) (string, bool) {
+	if comp.Image != "" {
+		return comp.Image, true
+	}
+	if provider == nil {
+		return "", false
+	}
+	image := catalogImage(&provider.Spec, componentName, comp.Version)
+	return image, image != ""
+}
+
+func catalogImage(spec *corev1alpha1.ProviderSpec, componentName, version string) string {
+	if version != "" {
+		if image := controller.GetImageForVersion(spec, componentName, version); image != "" {
+			return image
+		}
+	}
+	return controller.GetDefaultImageForComponent(spec, componentName)
 }
 
 func getS3Service(c *controller.Context, svc *corev1.Service) error {

@@ -436,32 +436,6 @@ spec:
 apiVersion: core.openeverest.io/v1alpha1
 kind: Instance
 metadata:
-  name: invalid-storage-class
-spec:
-  providerRef:
-    name: provider-seaweedfs
-  components:
-    master:
-      type: seaweedfs
-      replicas: 1
-    volume:
-      type: seaweedfs
-      replicas: 1
-      storage:
-        size: 1Gi
-        storageClass: missing-storage-class
-    filer:
-      type: seaweedfs
-      replicas: 1
-      storage:
-        size: 1Gi
-    s3:
-      type: seaweedfs
-      replicas: 1
----
-apiVersion: core.openeverest.io/v1alpha1
-kind: Instance
-metadata:
   name: invalid-replication-copies
 spec:
   providerRef:
