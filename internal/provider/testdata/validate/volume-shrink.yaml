@@ -1,4 +1,5 @@
-# The minimal Instance with less volume storage; invalid as an update of minimal.yaml.
+# The minimal Instance with less volume storage; admission leaves the shrink to
+# the check against the applied Seaweed cluster.
 apiVersion: core.openeverest.io/v1alpha1
 kind: Instance
 metadata:

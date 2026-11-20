@@ -72,21 +72,24 @@ func validateStorageExpansion(c *controller.Context, sw *seaweedv1.Seaweed) (fie
 	return errs, nil
 }
 
-// validateStorageChanges checks the storage of each component against the
-// previous Instance on an update at admission.
+// validateStorageChanges rejects adding master storage to a stored Instance
+// without it, on an update at admission. Shrinks and class changes are only
+// checked against the applied Seaweed cluster in ValidateReferences: the
+// stored Instance holds the desired size, which may never have been applied,
+// and rolling back such a change must stay possible.
 func validateStorageChanges(old, instance *corev1alpha1.Instance) field.ErrorList {
-	var errs field.ErrorList
-	for _, component := range persistentComponents {
-		comp, found := instance.Spec.Components[component]
-		if !found {
-			continue
-		}
-		applied, ok := specStorage(old.Spec.Components[component])
-		if _, err := storageChange(componentsPath.Key(component).Child("storage"), component, comp, applied, ok); err != nil {
-			errs = append(errs, err)
-		}
+	master, found := instance.Spec.Components[common.ComponentMaster]
+	if !found {
+		return nil
 	}
-	return errs
+	if _, stored := specStorage(old.Spec.Components[common.ComponentMaster]); stored {
+		return nil
+	}
+	if _, err := storageChange(componentsPath.Key(common.ComponentMaster).Child("storage"),
+		common.ComponentMaster, master, componentStorage{}, false); err != nil {
+		return field.ErrorList{err}
+	}
+	return nil
 }
 
 // storageChange rejects a smaller storage.size, enabling master persistence

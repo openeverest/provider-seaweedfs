@@ -99,6 +99,11 @@ func validateTLSParameters(topo standalone.StandaloneTopologyConfig) error {
 		return nil
 	}
 	if ref := topo.TLS.IssuerRef; ref != nil {
+		// The schema requires the key but accepts an empty name, with which
+		// the operator would reference no issuer at all.
+		if ref.Name == "" {
+			return fmt.Errorf("tls.issuerRef.name is required when issuerRef is set")
+		}
 		switch ref.Kind {
 		case "", "Issuer", "ClusterIssuer":
 			// ok — empty kind defaults to Issuer in the operator

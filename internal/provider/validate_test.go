@@ -68,13 +68,14 @@ func TestValidateFixtures(t *testing.T) {
 			want:    []string{"spec.topology.parameters.replication"},
 		},
 		{
+			// The stored size may never have been applied, as after a rejected
+			// expansion: shrinks are checked against the Seaweed cluster.
 			fixture: "testdata/validate/volume-shrink.yaml",
 			old:     "testdata/validate/minimal.yaml",
-			want:    []string{"spec.components[volume].storage.size"},
 		},
 		{
-			// Shrinking is a change from the stored Instance, not a rule on one.
-			fixture: "testdata/validate/volume-shrink.yaml",
+			fixture: "testdata/validate/tls-issuer-empty-name.yaml",
+			want:    []string{"spec.topology.parameters"},
 		},
 		{
 			fixture: "testdata/validate/master-storage-added.yaml",

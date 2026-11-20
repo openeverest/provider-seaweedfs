@@ -135,6 +135,15 @@ func TestValidateTLSParameters(t *testing.T) {
 
 	err := validateTLSParameters(standalone.StandaloneTopologyConfig{
 		TLS: &standalone.TLSSpec{
+			Enabled:   true,
+			IssuerRef: &standalone.TLSIssuerRef{Name: "", Kind: "Issuer"},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "tls.issuerRef.name is required")
+
+	err = validateTLSParameters(standalone.StandaloneTopologyConfig{
+		TLS: &standalone.TLSSpec{
 			Enabled: true,
 			IssuerRef: &standalone.TLSIssuerRef{
 				Name: "x",
