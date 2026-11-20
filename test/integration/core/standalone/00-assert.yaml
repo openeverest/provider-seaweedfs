@@ -19,3 +19,14 @@ apiVersion: core.openeverest.io/v1alpha1
 kind: Provider
 metadata:
   name: provider-seaweedfs
+---
+# The chart ships a ClusterInstancePreset per topology.
+apiVersion: core.openeverest.io/v1alpha1
+kind: ClusterInstancePreset
+metadata:
+  name: seaweedfs-standalone
+spec:
+  providerRef:
+    name: provider-seaweedfs
+  topology:
+    type: standalone

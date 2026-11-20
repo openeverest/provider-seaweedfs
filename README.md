@@ -52,6 +52,7 @@ It never manages pods directly — all lifecycle work is delegated to the operat
 
 | provider-seaweedfs | OpenEverest | seaweedfs-operator | Kubernetes |
 |---|---|---|---|
+| `0.3.x` | `2.0.0-alpha.1` | chart `0.1.48` (image `1.0.45`) | `1.32` – `1.34` |
 | `0.2.x` (MVP) | `2.0.0-dev.x` | chart `0.1.48` (image `1.0.45`) | `1.30` – `1.34` |
 | `0.1.x` (MVP) | `2.0.0-dev.x` | chart `0.1.41` (image `1.0.38`) | `1.30` – `1.34` |
 
@@ -533,6 +534,7 @@ the scraped ones.
 ## Configuration
 
 - **Chart values:** [charts/provider-seaweedfs/values.yaml](charts/provider-seaweedfs/values.yaml)
+- **Presets:** the chart ships the `ClusterInstancePreset` `seaweedfs-standalone` (3 masters, 2 volume servers with 10Gi, 2 filers with 1Gi, 1 S3 gateway, the UI defaults). Change or disable it with the `presets` value; `provider.shortName` prefixes its name.
 - **Instance parameters:** per-component and per-topology schemas under
   [definition/](definition/), published on the `Provider` resource
   (`kubectl get provider provider-seaweedfs -o yaml`). The provider's admission

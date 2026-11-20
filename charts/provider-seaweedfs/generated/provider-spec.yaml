@@ -138,7 +138,7 @@ spec:
       seaweedfs:
         metrics: Native
   release:
-    version: 0.1.0
+    version: 0.3.0
   topologies:
     standalone:
       components:
@@ -331,25 +331,23 @@ spec:
               components:
                 cpu:
                   fieldParams:
-                    badge: core(s)
                     defaultValue: 1
                     label: CPU
-                    step: 1
+                    unitLabel: CPU
                   path: spec.components.filer.resources.limits.cpu
-                  uiType: number
+                  uiType: quantity
                   validation:
                     int: true
                     min: 1
                     required: true
                 disk:
                   fieldParams:
-                    badge: Gi
-                    badgeToApi: true
                     defaultValue: 1
                     helperText: Can be increased after creation when the storage class allows volume expansion. Cannot shrink.
                     label: Disk
+                    unit: Gi
                   path: spec.components.filer.storage.size
-                  uiType: number
+                  uiType: quantity
                   validation:
                     int: true
                     max: 100
@@ -357,13 +355,11 @@ spec:
                     required: true
                 memory:
                   fieldParams:
-                    badge: Gi
-                    badgeToApi: true
                     defaultValue: 0.5
                     label: Memory
-                    step: 0.1
+                    unit: Gi
                   path: spec.components.filer.resources.limits.memory
-                  uiType: number
+                  uiType: quantity
                   validation:
                     min: 0.25
                     required: true
@@ -422,27 +418,25 @@ spec:
               components:
                 cpu:
                   fieldParams:
-                    badge: core(s)
                     defaultValue: 1
                     label: CPU
-                    step: 1
+                    unitLabel: CPU
                   path: spec.components.master.resources.limits.cpu
-                  uiType: number
+                  uiType: quantity
                   validation:
                     int: true
                     min: 1
                     required: true
                 disk:
                   fieldParams:
-                    badge: Gi
-                    badgeToApi: true
                     helperText: Optional. Enables master persistence when set at creation. Can be increased after creation when the storage class allows volume expansion. Cannot be enabled, shrunk, or cleared after creation.
                     label: Disk
                     modes:
                       restore:
                         disabled: true
+                    unit: Gi
                   path: spec.components.master.storage.size
-                  uiType: number
+                  uiType: quantity
                   validation:
                     int: true
                     max: 100
@@ -450,13 +444,11 @@ spec:
                     required: false
                 memory:
                   fieldParams:
-                    badge: Gi
-                    badgeToApi: true
                     defaultValue: 0.5
                     label: Memory
-                    step: 0.1
+                    unit: Gi
                   path: spec.components.master.resources.limits.memory
-                  uiType: number
+                  uiType: quantity
                   validation:
                     min: 0.25
                     required: true
@@ -599,25 +591,22 @@ spec:
               components:
                 cpu:
                   fieldParams:
-                    badge: core(s)
                     defaultValue: 1
                     label: CPU
-                    step: 1
+                    unitLabel: CPU
                   path: spec.components.s3.resources.limits.cpu
-                  uiType: number
+                  uiType: quantity
                   validation:
                     int: true
                     min: 1
                     required: true
                 memory:
                   fieldParams:
-                    badge: Gi
-                    badgeToApi: true
                     defaultValue: 0.5
                     label: Memory
-                    step: 0.1
+                    unit: Gi
                   path: spec.components.s3.resources.limits.memory
-                  uiType: number
+                  uiType: quantity
                   validation:
                     min: 0.25
                     required: true
@@ -740,25 +729,23 @@ spec:
               components:
                 cpu:
                   fieldParams:
-                    badge: core(s)
                     defaultValue: 1
                     label: CPU
-                    step: 1
+                    unitLabel: CPU
                   path: spec.components.volume.resources.limits.cpu
-                  uiType: number
+                  uiType: quantity
                   validation:
                     int: true
                     min: 1
                     required: true
                 disk:
                   fieldParams:
-                    badge: Gi
-                    badgeToApi: true
                     defaultValue: 10
                     helperText: Can be increased after creation when the storage class allows volume expansion. Cannot shrink.
                     label: Disk
+                    unit: Gi
                   path: spec.components.volume.storage.size
-                  uiType: number
+                  uiType: quantity
                   validation:
                     int: true
                     max: 1000
@@ -766,13 +753,11 @@ spec:
                     required: true
                 memory:
                   fieldParams:
-                    badge: Gi
-                    badgeToApi: true
                     defaultValue: 1
                     label: Memory
-                    step: 0.1
+                    unit: Gi
                   path: spec.components.volume.resources.limits.memory
-                  uiType: number
+                  uiType: quantity
                   validation:
                     min: 0.25
                     required: true
