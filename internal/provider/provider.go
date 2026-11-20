@@ -244,7 +244,10 @@ func (p *Provider) Sync(c *controller.Context) error {
 	if err := syncPodDisruptionBudgets(c); err != nil {
 		return err
 	}
-	return deleteLegacyScrapes(c)
+	if err := deleteLegacyScrapes(c); err != nil {
+		return err
+	}
+	return deleteConvertedServiceMonitors(c)
 }
 
 // labelPods labels every component's pods so the runtime counts them into

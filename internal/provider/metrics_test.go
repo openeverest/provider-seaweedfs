@@ -244,8 +244,12 @@ func TestDeleteLegacyScrapes(t *testing.T) {
 		kept    []*unstructured.Unstructured
 	}{
 		{"cleanup", New().Cleanup, append(append([]*unstructured.Unstructured{}, named...), convertedScrapes...), kept},
-		// Sync leaves the converted VMServiceScrapes to Cleanup.
-		{"sync", deleteLegacyScrapes, named, append(append([]*unstructured.Unstructured{}, convertedScrapes...), kept...)},
+		{"sync", func(c *controller.Context) error {
+			if err := deleteLegacyScrapes(c); err != nil {
+				return err
+			}
+			return deleteConvertedServiceMonitors(c)
+		}, append(append([]*unstructured.Unstructured{}, named...), convertedScrapes...), kept},
 	} {
 		t.Run(run.name, func(t *testing.T) {
 			var copies []client.Object

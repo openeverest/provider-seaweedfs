@@ -505,8 +505,8 @@ still accepted with a warning, so Instances written by earlier releases keep syn
 component now serves metrics, so the pods of Instances that did not expose them restart once.
 The provider deletes the `PodMonitor` `<instance>-prometheus` and `VMPodScrape`
 `<instance>-victoriametrics` earlier releases created, and the VictoriaMetrics Operator's
-copy of the `PodMonitor`. The `VMServiceScrape`s it converted from seaweedfs-operator's
-ServiceMonitors are deleted with the Instance. To keep collecting metrics, list a destination
+copy of the `PodMonitor` and the `VMServiceScrape`s it converted from seaweedfs-operator's
+ServiceMonitors. To keep collecting metrics, list a destination
 in `spec.monitoring.destinations`.
 
 For Grafana, SeaweedFS publishes a Kubernetes dashboard,

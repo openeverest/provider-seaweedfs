@@ -19,6 +19,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
@@ -198,7 +199,9 @@ func deleteLegacyScrapes(c *controller.Context) error {
 // deleteConvertedServiceMonitors removes the VMServiceScrapes the
 // VictoriaMetrics Operator converted from the ServiceMonitors
 // seaweedfs-operator created before the provider turned them off. They have
-// no owner reference and carry the ServiceMonitors' labels.
+// no owner reference and carry the ServiceMonitors' labels. It runs on every
+// Sync, so a copy converted again before the operator removed its source is
+// deleted too.
 func deleteConvertedServiceMonitors(c *controller.Context) error {
 	scrapes := &metav1.PartialObjectMetadata{}
 	scrapes.SetGroupVersionKind(vmServiceScrapeGVK)
@@ -208,7 +211,9 @@ func deleteConvertedServiceMonitors(c *controller.Context) error {
 			labelManagedBy: managedBySeaweedOperator,
 			labelInstance:  c.Name(),
 		})
-	if err != nil && !meta.IsNoMatchError(err) {
+	// A scheme without the kind, as in clients that know only the provider's
+	// types, means the same as a cluster without the CRD.
+	if err != nil && !meta.IsNoMatchError(err) && !runtime.IsNotRegisteredError(err) {
 		return fmt.Errorf("delete VMServiceScrapes converted from the ServiceMonitors: %w", err)
 	}
 	return nil
