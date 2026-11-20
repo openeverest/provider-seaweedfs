@@ -3,8 +3,9 @@
 #
 # Fields:
 #   displayName/description: human-readable metadata.
-#   supportedProviders: providers this class can be used with.
-#   executionMode: "ProviderManaged" (operator-native) or "Job".
+#   backupStorageClasses: the BackupStorageClasses this class can write to,
+#     with the authentication modes, parameters and TLS options it supports.
+#     `provider-sdk generate` stamps providerManaged.providerRef and the release.
 #   providerManaged.supportsPITR: advertise PITR capability to Restore validation.
 #   providerManaged.limits: caps the runtime enforces against Instance.spec.backup.
 #     maxStorages, maxPITREnabledStorages, maxSchedulesPerStorage — unset means unlimited.
@@ -24,9 +25,21 @@ description: |
   This is not a copy of file bytes and does not support point-in-time recovery.
   OpenEverest does not run the backup Job; the provider creates SeaweedBackup /
   SeaweedRestore objects for the seaweedfs-operator.
-executionMode: ProviderManaged
-supportedProviders:
-  - provider-seaweedfs
+backupStorageClasses:
+  - name: s3
+    authModes:
+      - AccessKey
+    parametersSchema:
+      openAPIV3Schema:
+        properties:
+          # The weed S3 sink cannot reach GCS through its S3 client.
+          implementation:
+            enum: [aws, minio, ceph, other]
+    tls:
+      # The operator's S3 sink has no CA bundle and cannot skip verification:
+      # it trusts the system store only.
+      customCA: None
+      insecureSkipVerify: None
 
 providerManaged:
   supportsPITR: false

@@ -38,6 +38,7 @@ import (
 
 	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
 
+	"github.com/openeverest/provider-seaweedfs/definition/backupclasses"
 	"github.com/openeverest/provider-seaweedfs/definition/components"
 	"github.com/openeverest/provider-seaweedfs/definition/topologies/standalone"
 	"github.com/openeverest/provider-seaweedfs/internal/common"
@@ -53,7 +54,7 @@ type Provider struct {
 
 // New creates a new Provider instance.
 func New() *Provider {
-	return &Provider{
+	p := &Provider{
 		BaseProvider: controller.BaseProvider{
 			ProviderName: common.ProviderName,
 			SchemeFuncs: []func(*runtime.Scheme) error{
@@ -96,6 +97,9 @@ func New() *Provider {
 			},
 		},
 	}
+	// The runtime claims the classes the provider ships.
+	p.SetShippedBackupClasses(backupclasses.Shipped())
+	return p
 }
 
 // s3ServiceToInstance maps the operator-owned S3 Service to its Instance; the

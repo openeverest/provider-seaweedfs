@@ -19,7 +19,9 @@ spec:
           bucket: test-backup-bucket
           region: us-east-1
           endpoint: https://s3.example.com
-          directory: /
+          # The Instance's own path: backups/<namespace>/<instance>/<uid>/<storage>.
+          (starts_with(directory, join('', ['/backups/', $namespace, '/backup-seaweedfs/']))): true
+          (ends_with(directory, '/test-s3')): true
           forcePathStyle: true
         credentialsSecret: test-s3-creds
     schedule:
