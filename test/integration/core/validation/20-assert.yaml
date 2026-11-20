@@ -1,0 +1,8 @@
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: invalid-storage-class
+status:
+  (conditions[?type == 'Ready']):
+    - status: "False"
+      reason: InvalidReference

@@ -53,8 +53,8 @@ help: ## Display this help.
 ##@ Development
 
 .PHONY: run
-run: generate ## Run the provider locally.
-	go run cmd/provider/main.go
+run: generate ## Run the provider locally, without the admission webhook (it needs the chart's certificate).
+	go run cmd/provider/main.go --admission=false
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint.
@@ -105,10 +105,6 @@ test: ## Run unit tests.
 manifests: controller-gen ## Generate RBAC manifests using controller-gen from kubebuilder markers.
 	$(CONTROLLER_GEN) rbac:roleName=manager-role paths="./..." output:rbac:dir=config/rbac
 
-.PHONY: deepcopy
-deepcopy: controller-gen ## Generate DeepCopy methods for the provider's own API types.
-	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./internal/apis/..."
-
 .PHONY: helm-sync-rbac
 helm-sync-rbac: yq ## Sync generated RBAC rules into the Helm chart.
 	@echo "Syncing RBAC rules from config/rbac/role.yaml to Helm chart..."
@@ -116,18 +112,18 @@ helm-sync-rbac: yq ## Sync generated RBAC rules into the Helm chart.
 	@echo "Done."
 
 .PHONY: generate
-generate: manifests deepcopy helm-sync-rbac ## Run all code generation (RBAC + DeepCopy + Helm sync + provider spec from definition/).
+generate: manifests helm-sync-rbac ## Run all code generation (RBAC + Helm sync + provider spec from definition/).
 	go generate ./...
 	@echo "All generation complete."
 
 .PHONY: verify
 verify: ## Verify that generated files are up-to-date (for CI).
 	@$(MAKE) generate
-	@if git diff --quiet -- config/ internal/apis/ $(CHART_DIR)/generated/; then \
+	@if git diff --quiet -- config/ $(CHART_DIR)/generated/; then \
 		echo "Generated files are up-to-date."; \
 	else \
 		echo "ERROR: Generated files are out of date. Run 'make generate' and commit the changes."; \
-		git diff -- config/ internal/apis/ $(CHART_DIR)/generated/; \
+		git diff -- config/ $(CHART_DIR)/generated/; \
 		exit 1; \
 	fi
 

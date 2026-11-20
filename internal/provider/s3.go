@@ -42,9 +42,6 @@ func s3HTTPSEnabled(spec components.S3CustomSpec) bool {
 }
 
 func validateS3Parameters(spec components.S3CustomSpec) error {
-	if spec.Port != nil && (*spec.Port < 1 || *spec.Port > MaxS3Port) {
-		return fmt.Errorf("port must be between 1 and %d", MaxS3Port)
-	}
 	if s3HTTPSEnabled(spec) {
 		port := int32(defaultS3Port)
 		if spec.Port != nil {

@@ -7,10 +7,9 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - events
+  - namespaces
   verbs:
-  - create
-  - patch
+  - get
 - apiGroups:
   - ""
   resources:
@@ -33,14 +32,29 @@ rules:
   - update
   - watch
 - apiGroups:
+  - ""
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
   - backup.openeverest.io
   resources:
   - backupclasses
+  - backupstorageclasses
   - backupstorages
   verbs:
   - get
   - list
   - watch
+- apiGroups:
+  - backup.openeverest.io
+  resources:
+  - backupclasses/status
+  verbs:
+  - patch
 - apiGroups:
   - backup.openeverest.io
   resources:
@@ -112,9 +126,22 @@ rules:
   resources:
   - podmonitors
   verbs:
-  - create
   - delete
+- apiGroups:
+  - monitoring.openeverest.io
+  resources:
+  - monitoringbindings
+  - monitoringclasses
+  - monitoringdestinations
+  verbs:
   - get
+  - list
+  - watch
+- apiGroups:
+  - monitoring.openeverest.io
+  resources:
+  - monitoringbindings/status
+  verbs:
   - patch
 - apiGroups:
   - networking.k8s.io
@@ -129,10 +156,7 @@ rules:
   resources:
   - vmpodscrapes
   verbs:
-  - create
   - delete
-  - get
-  - patch
 - apiGroups:
   - operator.victoriametrics.com
   resources:

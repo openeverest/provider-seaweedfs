@@ -27,65 +27,117 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/openeverest/provider-seaweedfs/internal/common"
 )
 
-// validateStorageExpansion rejects a smaller storage.size, enabling master
-// persistence after creation, and a larger size whose applied StorageClass
-// does not set allowVolumeExpansion. seaweedfs-operator image 1.0.40 patches
-// live PVCs only when the claim template differs in the storage request
-// (pvcEqualExceptStorageRequests). A class change emits
-// VolumeClaimTemplatesMismatch and leaves the PVCs unchanged. Adding master
-// persistence deletes and recreates the master StatefulSet. A shrink is
-// ignored by the operator. A class that disallows expansion leaves the PVC
-// unchanged (Warning event VolumeExpansionNotSupported). StatefulSet
-// volumeClaimTemplates stay immutable either way.
-func validateStorageExpansion(c *controller.Context, sw *seaweedv1.Seaweed) error {
+// validateStorageExpansion checks the storage of each component against the
+// applied Seaweed cluster, and that a class that grows allows expansion.
+// seaweedfs-operator image 1.0.40 patches live PVCs only when the claim
+// template differs in the storage request (pvcEqualExceptStorageRequests). A
+// class that disallows expansion leaves the PVC unchanged (Warning event
+// VolumeExpansionNotSupported). StatefulSet volumeClaimTemplates stay
+// immutable either way. err is for a StorageClass lookup that failed.
+func validateStorageExpansion(c *controller.Context, sw *seaweedv1.Seaweed) (field.ErrorList, error) {
+	var errs field.ErrorList
 	for _, component := range persistentComponents {
 		comp, found := c.Instance().Spec.Components[component]
 		if !found {
 			continue
 		}
 		applied, ok := appliedStorage(sw, component)
-		if !ok {
-			// Volume and filer always have a claim. Master persistence is
-			// optional, turning it on later makes the operator delete the
-			// master StatefulSet and restart every master at once.
-			if component == common.ComponentMaster && comp.Storage != nil && !comp.Storage.Size.IsZero() {
-				return fmt.Errorf("%q component: storage cannot be enabled after creation", component)
-			}
+		path := componentsPath.Key(component).Child("storage")
+		grows, ferr := storageChange(path, component, comp, applied, ok)
+		if ferr != nil {
+			errs = append(errs, ferr)
 			continue
 		}
-		desired := resource.Quantity{}
-		if comp.Storage != nil {
-			desired = comp.Storage.Size
-		}
-		switch desired.Cmp(applied.size) {
-		case 0:
+		if !grows {
 			continue
-		case -1:
-			return fmt.Errorf("%q component: storage.size cannot shrink from %s to %s", component, applied.size.String(), desired.String())
-		}
-		// The operator only expands PVCs when the claim template differs in
-		// size alone, so the class must stay as applied.
-		if comp.Storage != nil && comp.Storage.StorageClass != nil && *comp.Storage.StorageClass != "" &&
-			(applied.class == nil || *applied.class != *comp.Storage.StorageClass) {
-			return fmt.Errorf("%q component: storage.storageClass cannot change while storage.size grows", component)
 		}
 		className := ""
 		if applied.class != nil {
 			className = *applied.class
 		}
-		if err := requireExpansionAllowed(c, component, className); err != nil {
-			return err
+		ferr, err := expansionAllowed(c, path, component, className)
+		if err != nil {
+			return nil, err
 		}
+		if ferr != nil {
+			errs = append(errs, ferr)
+		}
+	}
+	return errs, nil
+}
+
+// validateStorageChanges rejects adding master storage to a stored Instance
+// without it, on an update at admission. Shrinks and class changes are only
+// checked against the applied Seaweed cluster in ValidateReferences: the
+// stored Instance holds the desired size, which may never have been applied,
+// and rolling back such a change must stay possible.
+func validateStorageChanges(old, instance *corev1alpha1.Instance) field.ErrorList {
+	master, found := instance.Spec.Components[common.ComponentMaster]
+	if !found {
+		return nil
+	}
+	if _, stored := specStorage(old.Spec.Components[common.ComponentMaster]); stored {
+		return nil
+	}
+	if _, err := storageChange(componentsPath.Key(common.ComponentMaster).Child("storage"),
+		common.ComponentMaster, master, componentStorage{}, false); err != nil {
+		return field.ErrorList{err}
 	}
 	return nil
 }
 
-// storageExpansionStatus reports PVC growth after the Seaweed cluster is Ready.
+// storageChange rejects a smaller storage.size, enabling master persistence
+// after creation, and a class change while the size grows, and reports
+// whether the size grows. A class change emits VolumeClaimTemplatesMismatch
+// and leaves the PVCs unchanged. Adding master persistence deletes and
+// recreates the master StatefulSet. A shrink is ignored by the operator.
+func storageChange(path *field.Path, component string, comp corev1alpha1.ComponentSpec, applied componentStorage, hasApplied bool) (bool, *field.Error) {
+	if !hasApplied {
+		// Volume and filer always have a claim. Master persistence is
+		// optional, turning it on later makes the operator delete the
+		// master StatefulSet and restart every master at once.
+		if component == common.ComponentMaster && comp.Storage != nil && !comp.Storage.Size.IsZero() {
+			return false, field.Forbidden(path, fmt.Sprintf("%q component: storage cannot be enabled after creation", component))
+		}
+		return false, nil
+	}
+	desired := resource.Quantity{}
+	if comp.Storage != nil {
+		desired = comp.Storage.Size
+	}
+	switch desired.Cmp(applied.size) {
+	case 0:
+		return false, nil
+	case -1:
+		return false, field.Invalid(path.Child("size"), desired.String(),
+			fmt.Sprintf("%q component: storage.size cannot shrink from %s to %s", component, applied.size.String(), desired.String()))
+	}
+	// The operator only expands PVCs when the claim template differs in
+	// size alone, so the class must stay as applied.
+	if comp.Storage != nil && comp.Storage.StorageClass != nil && *comp.Storage.StorageClass != "" &&
+		(applied.class == nil || *applied.class != *comp.Storage.StorageClass) {
+		return false, field.Forbidden(path.Child("storageClass"),
+			fmt.Sprintf("%q component: storage.storageClass cannot change while storage.size grows", component))
+	}
+	return true, nil
+}
+
+func specStorage(comp corev1alpha1.ComponentSpec) (componentStorage, bool) {
+	if comp.Storage == nil || comp.Storage.Size.IsZero() {
+		return componentStorage{}, false
+	}
+	return componentStorage{size: comp.Storage.Size, class: comp.Storage.StorageClass}, true
+}
+
+// storageExpansionStatus reports PVC growth after the Seaweed cluster is Ready,
+// as the StorageResizing operation, and a class that disallows expansion as a
+// terminal problem.
 // The operator does not copy expansion onto Seaweed status. Progress is the
 // PVC Resizing condition. FileSystemResizePending is ignored: with offline
 // expansion it stays until a pod restart that neither the operator nor the
@@ -144,16 +196,17 @@ func storageExpansionStatus(c *controller.Context, sw *seaweedv1.Seaweed) (*cont
 	if len(blocked) == 0 && len(waiting) == 0 {
 		return nil, nil
 	}
-	if len(blocked) > 0 {
-		return &controller.Status{
-			Phase:   corev1alpha1.InstancePhaseFailed,
-			Message: strings.Join(append(blocked, waiting...), "; "),
-		}, nil
+	// The cluster serves throughout: the PVCs grow online or wait for it.
+	status := controller.Progressing(strings.Join(append(blocked, waiting...), "; ")).
+		WithAvailable(controller.Available)
+	if len(waiting) > 0 {
+		status = status.WithOperation(corev1alpha1.ConditionStorageResizing, "VolumeExpansion", strings.Join(waiting, "; "))
 	}
-	return &controller.Status{
-		Phase:   corev1alpha1.InstancePhaseUpdating,
-		Message: strings.Join(waiting, "; "),
-	}, nil
+	if len(blocked) > 0 {
+		// Only a person can resize the class or move the claim.
+		status = status.WithTerminalProblem("VolumeExpansionNotSupported", strings.Join(blocked, "; "))
+	}
+	return &status, nil
 }
 
 var persistentComponents = []string{common.ComponentVolume, common.ComponentFiler, common.ComponentMaster}
@@ -204,21 +257,24 @@ func persistenceStorageSpec(p *seaweedv1.PersistenceSpec) (componentStorage, boo
 	return componentStorage{size: q, class: p.StorageClassName}, true
 }
 
-func requireExpansionAllowed(c *controller.Context, component, className string) error {
+func expansionAllowed(c *controller.Context, path *field.Path, component, className string) (*field.Error, error) {
 	allowed, resolved, err := lookupExpansion(c, className)
 	if errors.Is(err, errStorageClassMissing) {
-		return fmt.Errorf("%q component: storage class %q does not exist", component, resolved)
+		return field.Invalid(path.Child("size"), field.OmitValueType{},
+			fmt.Sprintf("%q component: storage class %q does not exist", component, resolved)), nil
 	}
 	if err != nil {
-		return fmt.Errorf("%q component: %w", component, err)
+		return nil, fmt.Errorf("%q component: %w", component, err)
 	}
-	if !allowed {
-		if resolved == "" {
-			return fmt.Errorf("%q component: no StorageClass allows volume expansion", component)
-		}
-		return fmt.Errorf("%q component: storage class %q does not allow volume expansion", component, resolved)
+	if allowed {
+		return nil, nil
 	}
-	return nil
+	if resolved == "" {
+		return field.Invalid(path.Child("size"), field.OmitValueType{},
+			fmt.Sprintf("%q component: no StorageClass allows volume expansion", component)), nil
+	}
+	return field.Invalid(path.Child("size"), field.OmitValueType{},
+		fmt.Sprintf("%q component: storage class %q does not allow volume expansion", component, resolved)), nil
 }
 
 func expansionDenied(component, pvcName, className string) string {

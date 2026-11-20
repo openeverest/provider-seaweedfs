@@ -15,14 +15,16 @@
 package provider
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/openeverest/openeverest/v2/provider-runtime/controller"
 
@@ -52,111 +54,116 @@ var storageClassGVK = schema.GroupVersionKind{
 	Kind:    "StorageClass",
 }
 
-// Validate checks if the Instance spec is valid.
-func (p *Provider) Validate(c *controller.Context) error {
-	l := log.FromContext(c.Context())
-	l.Info("Validating instance", "name", c.Name())
+var componentsPath = field.NewPath("spec", "components")
 
-	if err := validateInstanceName(c.Name()); err != nil {
-		return err
+var topologyParametersPath = field.NewPath("spec", "topology", "parameters")
+
+// invalid wraps a rule's error as a field error on path.
+func invalid(path *field.Path, err error) *field.Error {
+	return field.Invalid(path, field.OmitValueType{}, err.Error())
+}
+
+// Validate checks the rules about the Instance alone and returns every error
+// with its field path. Rules that read the cluster are in ValidateReferences.
+func (p *Provider) Validate(in controller.ValidationInput) controller.ValidationResult {
+	return controller.ValidationResult{
+		Errors:   validateInstance(in),
+		Warnings: metricsWarnings(in.Instance),
+	}
+}
+
+func validateInstance(in controller.ValidationInput) field.ErrorList {
+	instance := in.Instance
+	var errs field.ErrorList
+
+	if err := validateInstanceName(instance.Name); err != nil {
+		errs = append(errs, invalid(field.NewPath("metadata", "name"), err))
 	}
 
-	master, isMasterPresent := c.Instance().Spec.Components[common.ComponentMaster]
-	if err := validateMaster(master, isMasterPresent); err != nil {
-		return err
+	master, isMasterPresent := instance.Spec.Components[common.ComponentMaster]
+	volume, isVolumePresent := instance.Spec.Components[common.ComponentVolume]
+	filer, isFilerPresent := instance.Spec.Components[common.ComponentFiler]
+	s3, isS3Present := instance.Spec.Components[common.ComponentS3]
+	componentChecks := []struct {
+		name string
+		err  error
+	}{
+		{common.ComponentMaster, validateMaster(master, isMasterPresent)},
+		{common.ComponentVolume, validateVolume(volume, isVolumePresent)},
+		{common.ComponentFiler, validateFiler(filer, isFilerPresent)},
+		{common.ComponentS3, validateS3(s3, isS3Present)},
+	}
+	for _, check := range componentChecks {
+		if check.err != nil {
+			errs = append(errs, invalid(componentsPath.Key(check.name), check.err))
+		}
+	}
+	// The rules below read replicas and storage, which the checks above require.
+	if len(errs) > 0 {
+		return errs
 	}
 
-	volume, isVolumePresent := c.Instance().Spec.Components[common.ComponentVolume]
-	if err := validateVolume(volume, isVolumePresent); err != nil {
-		return err
-	}
-
-	filer, isFilerPresent := c.Instance().Spec.Components[common.ComponentFiler]
-	if err := validateFiler(filer, isFilerPresent); err != nil {
-		return err
-	}
-	// An unresolvable image is reported by Sync; only a known release is checked.
-	if image, err := resolveImage(c, common.ComponentMaster, master); err == nil {
+	// An image without a release tag is not checked.
+	if image, ok := componentImage(in.Provider, common.ComponentMaster, master); ok {
 		if err := validateFilerVersion(image, *filer.Replicas); err != nil {
-			return err
-		}
-	}
-
-	s3, isS3Present := c.Instance().Spec.Components[common.ComponentS3]
-	if err := validateS3(s3, isS3Present); err != nil {
-		return err
-	}
-
-	var masterCustomSpec components.MasterCustomSpec
-	if c.TryDecodeComponentParameters(master, &masterCustomSpec) {
-		if err := validateMasterParameters(masterCustomSpec); err != nil {
-			return err
-		}
-	}
-
-	var volumeCustomSpec components.VolumeCustomSpec
-	if c.TryDecodeComponentParameters(volume, &volumeCustomSpec) {
-		if err := validateVolumeParameters(volumeCustomSpec); err != nil {
-			return err
-		}
-	}
-
-	var filerCustomSpec components.FilerCustomSpec
-	if c.TryDecodeComponentParameters(filer, &filerCustomSpec) {
-		if err := validateFilerParameters(filerCustomSpec); err != nil {
-			return err
+			errs = append(errs, invalid(componentsPath.Key(common.ComponentFiler).Child("replicas"), err))
 		}
 	}
 
 	var s3CustomSpec components.S3CustomSpec
-	if c.TryDecodeComponentParameters(s3, &s3CustomSpec) {
+	if decodeParameters(s3.Parameters, &s3CustomSpec) {
 		if err := validateS3Parameters(s3CustomSpec); err != nil {
-			return err
+			errs = append(errs, invalid(componentsPath.Key(common.ComponentS3).Child("parameters"), err))
 		}
 	}
 
 	var topo standalone.StandaloneTopologyConfig
-	if c.TryDecodeTopologyParameters(&topo) {
+	if instance.Spec.Topology != nil && decodeParameters(instance.Spec.Topology.Parameters, &topo) {
 		if err := validateTopologyParameters(topo); err != nil {
-			return err
+			errs = append(errs, invalid(topologyParametersPath, err))
 		}
 	}
 	if err := validateReplication(effectiveReplication(topo.Replication, *volume.Replicas), *volume.Replicas); err != nil {
-		return err
+		errs = append(errs, invalid(topologyParametersPath.Child("replication"), err))
 	}
-	if err := validateMetricsPort(topo.Metrics, s3CustomSpec); err != nil {
-		return err
+	if err := validateMetricsPort(s3CustomSpec); err != nil {
+		errs = append(errs, invalid(componentsPath.Key(common.ComponentS3).Child("parameters", "port"), err))
 	}
-	if err := validateMetrics(c, topo.Metrics); err != nil {
-		return err
+
+	if in.Old != nil {
+		errs = append(errs, validateStorageChanges(in.Old, instance)...)
 	}
+
+	return errs
+}
+
+// ValidateReferences checks the rules that read the cluster: the
+// StorageClasses a new cluster would use, and the storage changes against the
+// applied Seaweed cluster, for writes admission didn't see.
+func (p *Provider) ValidateReferences(c *controller.Context) (field.ErrorList, error) {
 	// The StorageClass only matters when PVCs are created. Checking it on a
-	// provisioned instance would mark it Failed if the class is later removed.
+	// provisioned instance would block it if the class is later removed.
 	// Growth of an existing claim is checked separately.
 	sw := &seaweedv1.Seaweed{}
 	if err := c.Get(sw, c.Name()); err != nil {
 		if !controller.IsNotFound(err) {
-			return err
+			return nil, err
 		}
-		if err := validateStorageClasses(c); err != nil {
-			return err
-		}
-		return nil
+		return validateStorageClasses(c)
 	}
-	if err := validateStorageExpansion(c, sw); err != nil {
-		// The reconciler records Failed but not the error text. The admission
-		// webhook returns the error itself and ignores this message.
-		c.Instance().Status.Message = err.Error()
-		return err
-	}
+	return validateStorageExpansion(c, sw)
+}
 
-	return nil
+// decodeParameters decodes raw parameters into target and reports whether
+// they were set and decoded.
+func decodeParameters(raw *runtime.RawExtension, target any) bool {
+	if raw == nil || raw.Raw == nil {
+		return false
+	}
+	return json.Unmarshal(raw.Raw, target) == nil
 }
 
 func validateTopologyParameters(topo standalone.StandaloneTopologyConfig) error {
-	if topo.VolumeServerDiskCount != nil && *topo.VolumeServerDiskCount < 1 {
-		return fmt.Errorf("volumeServerDiskCount must be at least 1")
-	}
 	if err := validateTLSParameters(topo); err != nil {
 		return err
 	}
@@ -178,7 +185,8 @@ func validateInstanceName(name string) error {
 // validateStorageClasses checks that each named StorageClass exists.
 // An unset or empty class is left to the cluster default. The lookup is one
 // API GET per distinct name (unstructured, so it is not cached).
-func validateStorageClasses(c *controller.Context) error {
+func validateStorageClasses(c *controller.Context) (field.ErrorList, error) {
+	var errs field.ErrorList
 	seen := map[string]struct{}{}
 	for _, component := range []string{common.ComponentMaster, common.ComponentVolume, common.ComponentFiler} {
 		comp, ok := c.Instance().Spec.Components[component]
@@ -190,21 +198,28 @@ func validateStorageClasses(c *controller.Context) error {
 			continue
 		}
 		seen[name] = struct{}{}
-		if err := validateStorageClassExists(c, component, name); err != nil {
-			return err
+		exists, err := storageClassExists(c, name)
+		if err != nil {
+			return nil, fmt.Errorf("%q component: checking storage class %q: %w", component, name, err)
+		}
+		if !exists {
+			errs = append(errs, field.Invalid(
+				componentsPath.Key(component).Child("storage", "storageClass"), name,
+				fmt.Sprintf("%q component: storage class %q does not exist", component, name),
+			))
 		}
 	}
-	return nil
+	return errs, nil
 }
 
-func validateStorageClassExists(c *controller.Context, component, name string) error {
+func storageClassExists(c *controller.Context, name string) (bool, error) {
 	sc := &unstructured.Unstructured{}
 	sc.SetGroupVersionKind(storageClassGVK)
 	if err := c.Client().Get(c.Context(), client.ObjectKey{Name: name}, sc); err != nil {
 		if controller.IsNotFound(err) {
-			return fmt.Errorf("%q component: storage class %q does not exist", component, name)
+			return false, nil
 		}
-		return fmt.Errorf("%q component: checking storage class %q: %w", component, name, err)
+		return false, err
 	}
-	return nil
+	return true, nil
 }

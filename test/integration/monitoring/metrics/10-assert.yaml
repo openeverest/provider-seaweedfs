@@ -1,9 +1,13 @@
-# Every component, admin included, serves metrics on the same port.
+# Every Instance component serves metrics on the same port, whatever the
+# deprecated metrics parameter says. The admin server is not an Instance
+# component and serves none. seaweedfs-operator's own ServiceMonitors are off.
 apiVersion: seaweed.seaweedfs.com/v1
 kind: Seaweed
 metadata:
   name: metrics-seaweedfs
 spec:
+  serviceMonitor:
+    enabled: false
   master:
     metricsPort: 9327
   volume:
@@ -13,28 +17,12 @@ spec:
   s3:
     metricsPort: 9327
   admin:
-    metricsPort: 9327
+    (metricsPort == null): true
 ---
-apiVersion: monitoring.coreos.com/v1
-kind: PodMonitor
+# Nothing is serving yet, so nothing is published.
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
 metadata:
-  name: metrics-seaweedfs-prometheus
-  (ownerReferences[?kind == 'Instance' && name == 'metrics-seaweedfs'] | length(@)): 1
-spec:
-  selector:
-    matchLabels:
-      core.openeverest.io/instance: metrics-seaweedfs
-  podTargetLabels:
-    - core.openeverest.io/instance
-    - core.openeverest.io/component
-  podMetricsEndpoints:
-    - port: master-metrics
-      path: /metrics
-    - port: volume-metrics
-      path: /metrics
-    - port: filer-metrics
-      path: /metrics
-    - port: s3-metrics
-      path: /metrics
-    - port: admin-metrics
-      path: /metrics
+  name: metrics-seaweedfs
+status:
+  (monitoring.sources.metrics == null): true

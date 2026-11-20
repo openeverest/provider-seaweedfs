@@ -23,6 +23,7 @@ import (
 	"github.com/AlekSi/pointer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -33,6 +34,7 @@ import (
 	backupv1alpha1 "github.com/openeverest/openeverest/v2/api/backup/v1alpha1"
 	commonv1alpha1 "github.com/openeverest/openeverest/v2/api/common/v1alpha1"
 	corev1alpha1 "github.com/openeverest/openeverest/v2/api/core/v1alpha1"
+	s3class "github.com/openeverest/openeverest/v2/backupstorageclasses/s3"
 	"github.com/openeverest/openeverest/v2/provider-runtime/controller"
 
 	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
@@ -64,34 +66,12 @@ func TestBuildBackupSpecDisabled(t *testing.T) {
 }
 
 func TestBuildBackupSpecMapsS3Storage(t *testing.T) {
-	forcePath := false
-	verifyTLS := true
-	bs := &backupv1alpha1.BackupStorage{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-s3", Namespace: "ns"},
-		Spec: backupv1alpha1.BackupStorageSpec{
-			Type: backupv1alpha1.BackupStorageTypeS3,
-			S3: &backupv1alpha1.BackupStorageS3Spec{
-				Bucket:               "my-bucket",
-				Region:               "us-west-2",
-				EndpointURL:          "https://s3.example.com",
-				VerifyTLS:            &verifyTLS,
-				ForcePathStyle:       &forcePath,
-				CredentialsSecretRef: commonv1alpha1.SecretRef{Name: "my-s3-creds"},
-			},
-		},
-	}
-	instance := &corev1alpha1.Instance{
-		ObjectMeta: metav1.ObjectMeta{Name: "sw", Namespace: "ns"},
-		Spec: corev1alpha1.InstanceSpec{
-			Backup: &corev1alpha1.InstanceBackupSpec{
-				Enabled: true,
-				Storages: []corev1alpha1.InstanceBackupStorage{{
-					StorageRef: commonv1alpha1.ObjectRef{Name: "my-s3"},
-				}},
-			},
-		},
-	}
-	ctx := backupSpecTestContext(t, instance, bs)
+	bs := s3BackupStorage("my-s3", pointer.To(false))
+	bs.Spec.Location.ObjectStore.Prefix = "team-a"
+	bs.Spec.Parameters = &runtime.RawExtension{Raw: []byte(
+		`{"region":"us-west-2","endpointURL":"https://s3.example.com","forcePathStyle":false}`,
+	)}
+	ctx := backupSpecTestContext(t, enabledBackupInstance("my-s3"), bs)
 
 	got, err := buildBackupSpec(ctx)
 	require.NoError(t, err)
@@ -103,7 +83,8 @@ func TestBuildBackupSpecMapsS3Storage(t *testing.T) {
 	assert.Equal(t, "my-bucket", st.S3.Bucket)
 	assert.Equal(t, "us-west-2", st.S3.Region)
 	assert.Equal(t, "https://s3.example.com", st.S3.Endpoint)
-	assert.Equal(t, "/", st.S3.Directory)
+	// Each Instance writes under its own path in the bucket.
+	assert.Equal(t, "/team-a/backups/ns/sw/"+string(testInstanceUID)+"/my-s3", st.S3.Directory)
 	require.NotNil(t, st.S3.ForcePathStyle)
 	assert.False(t, *st.S3.ForcePathStyle)
 	require.NotNil(t, st.CredentialsSecret)
@@ -124,33 +105,69 @@ func TestBuildBackupSpecForcePathStyleNilDefaultsFalse(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got.Storages["my-s3"].S3.ForcePathStyle)
 	assert.False(t, *got.Storages["my-s3"].S3.ForcePathStyle,
-		"nil OpenEverest forcePathStyle must stay false, not the operator default true")
+		"an unset forcePathStyle must stay false, not the operator default true")
 }
 
-func TestBuildBackupSpecRejectsVerifyTLSFalse(t *testing.T) {
-	bs := s3BackupStorage("my-s3", pointer.To(false))
-	bs.Spec.S3.VerifyTLS = pointer.To(false)
-	ctx := backupSpecTestContext(t, enabledBackupInstance("my-s3"), bs)
-
-	_, err := buildBackupSpec(ctx)
-	require.Error(t, err)
-	bce := controller.AsBackupConfigError(err)
-	require.NotNil(t, bce)
-	assert.Equal(t, "VerifyTLSUnsupported", bce.Reason)
-	assert.Contains(t, bce.Message, "verifyTLS false")
+// requireRejected asserts the storage is not rendered and is reported on the
+// Instance with reason.
+func requireRejected(t *testing.T, ctx *controller.Context, storage, reason, message string) {
+	t.Helper()
+	got, err := buildBackupSpec(ctx)
+	require.NoError(t, err)
+	if got != nil {
+		assert.NotContains(t, got.Storages, storage)
+	}
+	resolved, err := ctx.BackupStorages()
+	require.NoError(t, err)
+	require.Len(t, resolved, 1)
+	assert.False(t, resolved[0].Apply())
+	assert.Equal(t, reason, resolved[0].Reason)
+	assert.Contains(t, resolved[0].Message, message)
 }
 
-func TestBuildBackupSpecRejectsPITR(t *testing.T) {
-	bs := s3BackupStorage("my-s3", pointer.To(true))
-	instance := enabledBackupInstance("my-s3")
-	instance.Spec.Backup.Storages[0].PITR = &corev1alpha1.InstanceBackupStoragePITR{Enabled: true}
-	ctx := backupSpecTestContext(t, instance, bs)
-
-	_, err := buildBackupSpec(ctx)
-	require.Error(t, err)
-	bce := controller.AsBackupConfigError(err)
-	require.NotNil(t, bce)
-	assert.Equal(t, controller.PITRConfigInvalidReason, bce.Reason)
+func TestBuildBackupSpecRejectsWhatTheSinkCannotDo(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*backupv1alpha1.BackupStorage)
+		reason  string
+		message string
+	}{
+		{
+			name: "insecureSkipVerify",
+			mutate: func(bs *backupv1alpha1.BackupStorage) {
+				bs.Spec.TLS = &commonv1alpha1.TLSConfig{InsecureSkipVerify: true}
+			},
+			reason:  corev1alpha1.ReasonTLSOptionUnsupported,
+			message: "skip certificate verification",
+		},
+		{
+			name: "custom CA",
+			mutate: func(bs *backupv1alpha1.BackupStorage) {
+				bs.Spec.TLS = &commonv1alpha1.TLSConfig{CA: &commonv1alpha1.CABundleSource{
+					SecretKeyRef: &commonv1alpha1.SecretKeyRef{Name: "ca", Key: "ca.crt"},
+				}}
+			},
+			reason:  corev1alpha1.ReasonTLSOptionUnsupported,
+			message: "custom CA",
+		},
+		{
+			name: "GCS",
+			mutate: func(bs *backupv1alpha1.BackupStorage) {
+				bs.Spec.Parameters = &runtime.RawExtension{Raw: []byte(
+					`{"region":"auto","endpointURL":"https://storage.googleapis.com","implementation":"gcs"}`,
+				)}
+			},
+			reason:  corev1alpha1.ReasonImplementationUnsupported,
+			message: "cannot use GCS",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bs := s3BackupStorage("my-s3", pointer.To(true))
+			tt.mutate(bs)
+			requireRejected(t, backupSpecTestContext(t, enabledBackupInstance("my-s3"), bs), "my-s3", tt.reason, tt.message)
+		})
+	}
 }
 
 func TestBuildBackupSpecRejectsSelfS3Endpoint(t *testing.T) {
@@ -167,22 +184,16 @@ func TestBuildBackupSpecRejectsSelfS3Endpoint(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			bs := s3BackupStorage("my-s3", pointer.To(true))
-			bs.Spec.S3.EndpointURL = tt.endpoint
+			setEndpoint(bs, tt.endpoint)
 			ctx := backupSpecTestContext(t, enabledBackupInstance("my-s3"), bs)
-
-			_, err := buildBackupSpec(ctx)
-			require.Error(t, err)
-			bce := controller.AsBackupConfigError(err)
-			require.NotNil(t, bce)
-			assert.Equal(t, "StorageIsSelf", bce.Reason)
-			assert.Contains(t, bce.Message, "this Instance's S3 gateway")
+			requireRejected(t, ctx, "my-s3", corev1alpha1.ReasonBackupStorageNotAccepted, "this Instance's S3 gateway")
 		})
 	}
 }
 
 func TestBuildBackupSpecRejectsSelfS3IngressHost(t *testing.T) {
 	bs := s3BackupStorage("my-s3", pointer.To(true))
-	bs.Spec.S3.EndpointURL = "https://s3.example.com"
+	setEndpoint(bs, "https://s3.example.com")
 	instance := enabledBackupInstance("my-s3")
 	instance.Spec.Components = map[string]corev1alpha1.ComponentSpec{
 		common.ComponentS3: {
@@ -193,17 +204,12 @@ func TestBuildBackupSpecRejectsSelfS3IngressHost(t *testing.T) {
 		},
 	}
 	ctx := backupSpecTestContext(t, instance, bs)
-
-	_, err := buildBackupSpec(ctx)
-	require.Error(t, err)
-	bce := controller.AsBackupConfigError(err)
-	require.NotNil(t, bce)
-	assert.Equal(t, "StorageIsSelf", bce.Reason)
+	requireRejected(t, ctx, "my-s3", corev1alpha1.ReasonBackupStorageNotAccepted, "this Instance's S3 gateway")
 }
 
 func TestBuildBackupSpecAllowsExternalS3Endpoint(t *testing.T) {
 	bs := s3BackupStorage("my-s3", pointer.To(true))
-	bs.Spec.S3.EndpointURL = "https://s3.amazonaws.com"
+	setEndpoint(bs, "https://s3.amazonaws.com")
 	ctx := backupSpecTestContext(t, enabledBackupInstance("my-s3"), bs)
 
 	got, err := buildBackupSpec(ctx)
@@ -212,16 +218,46 @@ func TestBuildBackupSpecAllowsExternalS3Endpoint(t *testing.T) {
 	assert.Equal(t, "https://s3.amazonaws.com", got.Storages["my-s3"].S3.Endpoint)
 }
 
-func TestBuildBackupSpecRejectsInvalidStorageEndpoint(t *testing.T) {
-	bs := s3BackupStorage("my-s3", pointer.To(true))
-	bs.Spec.S3.EndpointURL = "not-a-url"
-	ctx := backupSpecTestContext(t, enabledBackupInstance("my-s3"), bs)
+func TestBuildBackupSpecSkipsMissingBackupStorage(t *testing.T) {
+	ctx := backupSpecTestContext(t, enabledBackupInstance("missing-s3"))
 
-	_, err := buildBackupSpec(ctx)
-	require.Error(t, err)
-	bce := controller.AsBackupConfigError(err)
-	require.NotNil(t, bce)
-	assert.Equal(t, "InvalidStorageEndpoint", bce.Reason)
+	got, err := buildBackupSpec(ctx)
+	require.NoError(t, err)
+	assert.Nil(t, got, "nothing to render and nothing live to hold")
+	resolved, err := ctx.BackupStorages()
+	require.NoError(t, err)
+	assert.Equal(t, corev1alpha1.ReasonBackupStorageNotFound, resolved[0].Reason)
+}
+
+func TestBuildBackupSpecHoldsLiveStorage(t *testing.T) {
+	instance := enabledBackupInstance("my-s3")
+	instance.Spec.Backup.Storages[0].Schedules = []corev1alpha1.InstanceBackupSchedule{{
+		Name: "daily", Enabled: true, Cron: "0 1 * * *",
+		Retention: &corev1alpha1.BackupScheduleRetention{
+			Type: corev1alpha1.BackupScheduleRetentionTypeCount, Count: pointer.To(int32(3)),
+		},
+	}}
+	live := seaweedClusterWithBackupStorage("sw", "my-s3")
+	live.Namespace = "ns"
+	held := live.Spec.Backup.Storages["my-s3"]
+
+	t.Run("not accepted yet", func(t *testing.T) {
+		bs := s3BackupStorage("my-s3", pointer.To(true))
+		bs.Status.Conditions = nil
+		got, err := buildBackupSpec(backupSpecTestContext(t, instance, bs, live.DeepCopy()))
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, held, got.Storages["my-s3"], "the live storage is kept")
+		assert.Len(t, got.Schedule, 1, "schedules keep running against the last configuration that worked")
+	})
+
+	t.Run("not accepted and not live", func(t *testing.T) {
+		bs := s3BackupStorage("my-s3", pointer.To(true))
+		bs.Status.Conditions = nil
+		got, err := buildBackupSpec(backupSpecTestContext(t, instance, bs))
+		require.NoError(t, err)
+		assert.Nil(t, got, "no schedule or mirror may name a storage the cluster does not have")
+	})
 }
 
 func TestBuildBackupSpecRejectsInvalidStorageName(t *testing.T) {
@@ -244,15 +280,6 @@ func TestBuildBackupSpecRejectsStorageNameTooLong(t *testing.T) {
 	_, err := buildBackupSpec(ctx)
 	require.Error(t, err)
 	assert.NotNil(t, controller.AsBackupConfigError(err))
-}
-
-func TestBuildBackupSpecWaitsForMissingBackupStorage(t *testing.T) {
-	ctx := backupSpecTestContext(t, enabledBackupInstance("missing-s3"))
-
-	_, err := buildBackupSpec(ctx)
-	require.Error(t, err)
-	assert.True(t, controller.IsWaitError(err))
-	assert.Contains(t, err.Error(), "missing-s3")
 }
 
 func TestBuildBackupSpecMapsSchedules(t *testing.T) {
@@ -1071,29 +1098,52 @@ func onDemandBackup(name, instance, storage string) *backupv1alpha1.Backup {
 }
 
 func s3BackupStorage(name string, forcePath *bool) *backupv1alpha1.BackupStorage {
+	params := `{"region":"us-east-1","endpointURL":"https://s3.amazonaws.com"}`
+	if forcePath != nil {
+		params = fmt.Sprintf(`{"region":"us-east-1","endpointURL":"https://s3.amazonaws.com","forcePathStyle":%t}`, *forcePath)
+	}
 	return &backupv1alpha1.BackupStorage{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns", Generation: 1},
 		Spec: backupv1alpha1.BackupStorageSpec{
-			Type: backupv1alpha1.BackupStorageTypeS3,
-			S3: &backupv1alpha1.BackupStorageS3Spec{
-				Bucket:               "b",
-				Region:               "us-east-1",
-				EndpointURL:          "https://s3.amazonaws.com",
-				ForcePathStyle:       forcePath,
-				CredentialsSecretRef: commonv1alpha1.SecretRef{Name: name + "-creds"},
+			BackupStorageClassRef: commonv1alpha1.ObjectRef{Name: s3class.ClassName},
+			Location: backupv1alpha1.BackupStorageLocation{
+				ObjectStore: &backupv1alpha1.ObjectStoreLocation{Bucket: "my-bucket"},
 			},
+			Parameters: &runtime.RawExtension{Raw: []byte(params)},
+			Authentication: commonv1alpha1.Authentication{
+				Mode:                 s3class.AuthModeAccessKey,
+				CredentialsSecretRef: &commonv1alpha1.SecretRef{Name: name + "-creds"},
+			},
+		},
+		Status: backupv1alpha1.BackupStorageStatus{
+			Conditions: []metav1.Condition{{
+				Type:               backupv1alpha1.BackupStorageConditionAccepted,
+				Status:             metav1.ConditionTrue,
+				Reason:             "Accepted",
+				ObservedGeneration: 1,
+			}},
 		},
 	}
 }
 
+// setEndpoint sets the endpointURL parameter of an s3 BackupStorage.
+func setEndpoint(bs *backupv1alpha1.BackupStorage, endpoint string) {
+	bs.Spec.Parameters = &runtime.RawExtension{Raw: []byte(
+		fmt.Sprintf(`{"region":"us-east-1","endpointURL":%q}`, endpoint),
+	)}
+}
+
+// Fixed UID so the per-Instance backup path is stable.
+const testInstanceUID = types.UID("1nst4nce-uid")
+
 func enabledBackupInstance(storageName string) *corev1alpha1.Instance {
 	return &corev1alpha1.Instance{
-		ObjectMeta: metav1.ObjectMeta{Name: "sw", Namespace: "ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "sw", Namespace: "ns", UID: testInstanceUID},
 		Spec: corev1alpha1.InstanceSpec{
 			ProviderRef: commonv1alpha1.ObjectRef{Name: common.ProviderName},
 			Backup: &corev1alpha1.InstanceBackupSpec{
 				Enabled:  true,
-				ClassRef: commonv1alpha1.ObjectRef{Name: "seaweedfs-filer-meta"},
+				ClassRef: commonv1alpha1.ObjectRef{Name: backupClassName},
 				Storages: []corev1alpha1.InstanceBackupStorage{{
 					StorageRef: commonv1alpha1.ObjectRef{Name: storageName},
 				}},
@@ -1109,7 +1159,22 @@ func backupSpecTestContext(t *testing.T, instance *corev1alpha1.Instance, objs .
 	require.NoError(t, backupv1alpha1.AddToScheme(scheme))
 	require.NoError(t, seaweedv1.AddToScheme(scheme))
 
-	builder := fake.NewClientBuilder().WithScheme(scheme).WithObjects(instance)
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	// Every BackupStorage gets the credentials Secret it names.
+	for _, o := range objs {
+		if bs, ok := o.(*backupv1alpha1.BackupStorage); ok && bs.Spec.Authentication.CredentialsSecretRef != nil {
+			objs = append(objs, &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: bs.Spec.Authentication.CredentialsSecretRef.Name, Namespace: bs.Namespace},
+				Data: map[string][]byte{
+					s3class.KeyAWSAccessKeyID:     []byte("key"),
+					s3class.KeyAWSSecretAccessKey: []byte("secret"),
+				},
+			})
+		}
+	}
+	builder := fake.NewClientBuilder().WithScheme(scheme).WithObjects(instance).
+		WithStatusSubresource(&backupv1alpha1.BackupStorage{})
 	if len(objs) > 0 {
 		builder = builder.WithObjects(objs...)
 	}

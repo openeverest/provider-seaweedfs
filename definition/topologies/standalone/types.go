@@ -24,6 +24,7 @@ package standalone
 // Add fields here when the standalone topology needs custom configuration
 // beyond what the base Instance spec provides.
 type StandaloneTopologyConfig struct {
+	// +kubebuilder:validation:Minimum=1
 	VolumeServerDiskCount *int32 `json:"volumeServerDiskCount,omitempty"`
 
 	// Replication is SeaweedFS master.defaultReplication: three digits XYZ.
@@ -51,29 +52,30 @@ type StandaloneTopologyConfig struct {
 	// +optional
 	Admin *AdminConfig `json:"admin,omitempty"`
 
-	// Metrics exposes metrics in the Prometheus format on every SeaweedFS
-	// component. If not specified, no metrics are exposed.
+	// Metrics is ignored: every component serves metrics, and a
+	// MonitoringDestination listed in spec.monitoring.destinations collects
+	// them. It is still accepted, with a warning, for Instances written by
+	// earlier releases.
+	//
+	// Deprecated: list a MonitoringDestination in spec.monitoring.destinations.
 	// +optional
 	Metrics *MetricsConfig `json:"metrics,omitempty"`
 }
 
-// MetricsConfig configures which monitoring systems scrape the exposed
-// metrics.
+// MetricsConfig is the deprecated scrape configuration of earlier releases.
 type MetricsConfig struct {
-	// Prometheus configures scraping by the Prometheus Operator.
+	// Prometheus is ignored.
 	// +optional
 	Prometheus *ScrapeConfig `json:"prometheus,omitempty"`
 
-	// VictoriaMetrics configures scraping by the VictoriaMetrics Operator.
+	// VictoriaMetrics is ignored.
 	// +optional
 	VictoriaMetrics *ScrapeConfig `json:"victoriaMetrics,omitempty"`
 }
 
-// ScrapeConfig configures scraping of the exposed metrics by one monitoring
-// system.
+// ScrapeConfig is the deprecated scrape toggle of earlier releases.
 type ScrapeConfig struct {
-	// Enabled creates the monitoring system's scrape resource for the
-	// instance: a PodMonitor for Prometheus, a VMPodScrape for VictoriaMetrics.
+	// Enabled is ignored.
 	Enabled bool `json:"enabled,omitempty"`
 }
 

@@ -52,6 +52,7 @@ It never manages pods directly — all lifecycle work is delegated to the operat
 
 | provider-seaweedfs | OpenEverest | seaweedfs-operator | Kubernetes |
 |---|---|---|---|
+| `0.3.x` | `2.0.0-alpha.1` | chart `0.1.48` (image `1.0.45`) | `1.32` – `1.34` |
 | `0.2.x` (MVP) | `2.0.0-dev.x` | chart `0.1.48` (image `1.0.45`) | `1.30` – `1.34` |
 | `0.1.x` (MVP) | `2.0.0-dev.x` | chart `0.1.41` (image `1.0.38`) | `1.30` – `1.34` |
 
@@ -63,9 +64,10 @@ The provider binary compiles against the Go module pin in
 Chart `0.1.42` (image `1.0.39`) changes admin startup and ServiceMonitor
 scraping, plus dependencies. Its ServiceMonitors select only the per-pod
 Services, so they no longer scrape every target twice through the headless
-peer Services. This provider sets `spec.admin` (see Admin UI below), and sets
-`spec.admin.metricsPort` only when metrics are exposed (see
-[Metrics](#metrics-for-prometheus-and-victoriametrics)).
+peer Services. This provider sets `spec.admin` (see Admin UI below). Image `1.0.43`
+([seaweedfs-operator#435](https://github.com/seaweedfs/seaweedfs-operator/pull/435))
+adds `spec.serviceMonitor.enabled`, which the provider sets to `false` (see
+[Monitoring](#monitoring)).
 
 Chart `0.1.43` (image `1.0.40`) changes Instance behavior beyond that. The GitHub release notes for `1.0.40`
 only mention a SeaweedFS library bump. The tag also contains
@@ -123,9 +125,10 @@ an MVP: several capabilities are stubbed or not wired yet.
 | Custom configuration | ✅ | Master `masterVolumeSizeLimitMB` and `volumeGrowthCount`; topology `replication` and `volumeServerDiskCount`; volume `maxVolumeCounts` (automatic when unset); filer `maxMB`; S3 `port` / `domainName` / `https` / Ingress; JWT signing via `topology.parameters.securityConfig`. See [Volume slots and buckets](#volume-slots-and-buckets) |
 | S3 service exposure | ✅ | `spec.components.s3.service.serviceType`: ClusterIP, NodePort, or LoadBalancer. `loadBalancerService.sourceRanges` is rejected. Only S3 can be exposed |
 | Admin UI | ✅ | Off unless `topology.parameters.admin.enabled` is true. This provider creates Secret `<instance>-admin-credentials` with `adminUser=admin` and a generated `adminPassword` (kept across reconciles). ClusterIP Service `<instance>-admin`, port 23646. Connection details add `adminURL`, `adminUser`, and `adminCredentialsSecret` (the Secret name). Operator image `1.0.40` exits the admin container when `adminPassword` is missing. Workers are not created |
-| Monitoring | ✅ | Prometheus / VictoriaMetrics metrics on every component via `topology.parameters.metrics`, see [Metrics](#metrics-for-prometheus-and-victoriametrics). OpenEverest `MonitoringConfig` (PMM) is not used |
+| Monitoring | ✅ | Through the OpenEverest monitoring contract: every component serves Prometheus metrics, published in `status.monitoring.sources` for the monitoring extension behind each `MonitoringDestination` listed in `spec.monitoring.destinations`, see [Monitoring](#monitoring). Binding a destination restarts nothing |
 | TLS | ✅ | Inter-component gRPC mTLS via `topology.parameters.tls`. The S3 gateway serves HTTPS by default (operator `httpsPort` 8334, `httpsOnly`, Secret `<instance>-s3-https`). Set `components.s3.parameters.https.enabled` to false for plain HTTP. Ingress TLS still publishes `externalEndpointURL=https://…`. The operator rejects `httpsOnly` together with Ingress, so an Ingress keeps the HTTP listener |
-| Status / readiness | ✅ | Maps Seaweed Ready condition; waits for TLS Secret / LoadBalancer / Ingress when configured |
+| Validation at admission | ✅ | The provider serves an Instance admission webhook, so an invalid spec is rejected when it is written (`kubectl`, Argo CD, Flux, the API or the UI), with every error on its field path. Rules that read the cluster (a missing StorageClass, a storage shrink or class change against the applied Seaweed cluster, growth the applied StorageClass cannot do) only warn at admission, since the object may be created later; the Instance then stays blocked with reason `InvalidReference` until it is fixed. The chart generates the webhook's serving certificate and keeps it across upgrades; set `admission.certManager.enabled=true` to issue it with cert-manager |
+| Status / readiness | ✅ | Reports facts the runtime turns into the Instance conditions (`Ready`, `Available`, …): converged once the Seaweed `Ready` condition is true and the TLS Secret / LoadBalancer / Ingress are in place when configured. While only the LoadBalancer or Ingress is pending, clients in the cluster can connect, so the Instance stays `Available`. A missing user-supplied `https.secretName` is reported as problem `S3HTTPSSecretMissing`. Desired replicas are reported per component |
 | Connection details | ✅ | Publishes in-cluster S3 endpoint and admin S3 credentials on Ready; NodePort / LoadBalancer / Ingress add `externalEndpointURL`. Admin UI adds `adminURL`, `adminUser`, and `adminCredentialsSecret` |
 | S3 authentication | ✅ | Always on. The provider generates an admin access key pair in Secret `<name>-s3-config` and starts the gateway with it, so anonymous requests are denied from the first boot. See [S3 credentials](#s3-credentials) |
 | Pod scheduling | ✅ | `schedulingPolicy` affinity, nodeSelector, tolerations and schedulerName, written on each Seaweed component. Master, volume and filer pods prefer separate nodes (preferred anti-affinity on hostname, weight 100); `affinity: {}` opts out. S3 has no default affinity. `topologySpreadConstraints` is rejected (no seaweedfs-operator field) |
@@ -135,8 +138,8 @@ Stateful workloads additionally report:
 | Capability | Status | Notes |
 |---|---|---|
 | Persistent storage | ✅ | Volume/filer `storage.size` required; optional master `storage.size`. Optional per-component `storage.storageClass` (UI picker for master/volume/filer) |
-| Storage expansion | ✅ | Volume, filer, and master `storage.size` can grow. A smaller size is rejected. Master `storage.size` cannot be set after creation when the master has no persistence, because the operator deletes and recreates the master StatefulSet. A larger size is rejected unless the StorageClass already on the Seaweed spec has `allowVolumeExpansion: true`, or the newest default class when the spec names none. Changing `storage.storageClass` in the same request as a size increase is rejected. Image `1.0.40` then patches the live PVCs and leaves StatefulSet `volumeClaimTemplates` unchanged ([seaweedfs-operator#394](https://github.com/seaweedfs/seaweedfs-operator/pull/394)). While a PVC is `Resizing`, or the operator has not patched it yet, the Instance phase is `Updating`. `FileSystemResizePending` does not hold the phase; offline expansion needs a pod restart. If the class on the PVC disallows expansion, the phase is `Failed`. Other claim-template edits are not applied; the operator emits Warning event `VolumeClaimTemplatesMismatch` (not a status condition) |
-| Backups | ⚠️ | On-demand and scheduled filer-metadata snapshots via `SeaweedBackup` (`seaweedfs-filer-meta`, ProviderManaged). Registers S3 `BackupStorage` on `Seaweed.spec.backup.storages` and maps `Instance` schedules to `Seaweed.spec.backup.schedule` (count retention → `keep`; time retention rejected; at most 32 schedules). A `BackupStorage` whose `endpointURL` is this Instance's own S3 Service DNS or Ingress host is rejected (`BackupConfigured`=`StorageIsSelf`) to avoid a self-mirror loop. When backup is enabled, Sync also writes one `spec.backup.dataMirror` per storage (`filerPath: /`) so `weed filer.backup` can copy the filer tree (including the catalog) off-cluster. That mirror is a **single always-current data copy** (`is_incremental=false`, no `-doDeleteFiles`): overwrites propagate quickly, deletes are never removed from the bucket, `keep` prunes only `filer.meta.gz` catalogs (not mirrored bytes), every mirror pod restart re-uploads the tree (`-initialSnapshot`), and SSE objects land in the backup bucket as plaintext. "N retained backups" is N metadata snapshots, not N point-in-time data copies. Mirroring `/` also copies `/etc` (including any filer-stored S3/IAM identities). Scheduler-created `SeaweedBackup`s are mirrored as `Backup`s with `scheduleName`, `deletionPolicy: Retain`, and a `mirrored-from` label; when `keep` prunes the operator object the mirrored `Backup` is deleted. Deleting a mirrored `Backup` removes its `SeaweedBackup` (Cleanup + owner-ref GC) and can make the operator fire an immediate catch-up run if that was the newest for the schedule. `Succeeded` means the catalog is on the filer (`/.seaweedfs-operator/backups/<name>/filer.meta.gz`); the data mirror is what copies it to the bucket. `deletionPolicy: Delete` is rejected; use `Retain` |
+| Storage expansion | ✅ | Volume, filer, and master `storage.size` can grow. A smaller size is rejected. Master `storage.size` cannot be set after creation when the master has no persistence, because the operator deletes and recreates the master StatefulSet. A larger size is rejected unless the StorageClass already on the Seaweed spec has `allowVolumeExpansion: true`, or the newest default class when the spec names none. Changing `storage.storageClass` in the same request as a size increase is rejected. Image `1.0.40` then patches the live PVCs and leaves StatefulSet `volumeClaimTemplates` unchanged ([seaweedfs-operator#394](https://github.com/seaweedfs/seaweedfs-operator/pull/394)). While a PVC is `Resizing`, or the operator has not patched it yet, the Instance reports the `StorageResizing` operation and stays `Available`. `FileSystemResizePending` does not hold it; offline expansion needs a pod restart. If the class on the PVC disallows expansion, the Instance reports the terminal problem `VolumeExpansionNotSupported`. Other claim-template edits are not applied; the operator emits Warning event `VolumeClaimTemplatesMismatch` (not a status condition) |
+| Backups | ⚠️ | On-demand and scheduled filer-metadata snapshots via `SeaweedBackup` (`seaweedfs-filer-meta`, ProviderManaged). Registers `s3` class `BackupStorage`s on `Seaweed.spec.backup.storages`, each writing under the Instance's own path in the bucket (`<prefix>/backups/<namespace>/<instance>/<uid>/<storage>`) and maps `Instance` schedules to `Seaweed.spec.backup.schedule` (count retention → `keep`; time retention rejected; at most 32 schedules). A `BackupStorage` whose `endpointURL` is this Instance's own S3 Service DNS or Ingress host is rejected to avoid a self-mirror loop. The operator's S3 sink trusts the system store only and cannot reach GCS, so storages with `tls.ca`, `tls.insecureSkipVerify` or `implementation: gcs` are incompatible with the class and reported on `BackupConfigured`. A storage that is not accepted keeps what the Seaweed cluster already has for it. When backup is enabled, Sync also writes one `spec.backup.dataMirror` per storage (`filerPath: /`) so `weed filer.backup` can copy the filer tree (including the catalog) off-cluster. That mirror is a **single always-current data copy** (`is_incremental=false`, no `-doDeleteFiles`): overwrites propagate quickly, deletes are never removed from the bucket, `keep` prunes only `filer.meta.gz` catalogs (not mirrored bytes), every mirror pod restart re-uploads the tree (`-initialSnapshot`), and SSE objects land in the backup bucket as plaintext. "N retained backups" is N metadata snapshots, not N point-in-time data copies. Mirroring `/` also copies `/etc` (including any filer-stored S3/IAM identities). Scheduler-created `SeaweedBackup`s are mirrored as `Backup`s with `scheduleName`, `deletionPolicy: Retain`, and a `mirrored-from` label; when `keep` prunes the operator object the mirrored `Backup` is deleted. Deleting a mirrored `Backup` removes its `SeaweedBackup` (Cleanup + owner-ref GC) and can make the operator fire an immediate catch-up run if that was the newest for the schedule. `Succeeded` means the catalog is on the filer (`/.seaweedfs-operator/backups/<name>/filer.meta.gz`); the data mirror is what copies it to the bucket. `deletionPolicy: Delete` is rejected; use `Retain` |
 | Restore | ❌ | Not implemented. `SyncRestore` fails with a clear message; `SeaweedRestore` is not created yet |
 
 ## Installation
@@ -296,12 +299,12 @@ kubectl get seaweed -A
 > NodePort and LoadBalancer publish `externalEndpointURL` on the same scheme
 > as the in-cluster endpoint, with `externalVerifyTLS` matching the gateway
 > cert hint (`false` for the provider-generated certificate). Ingress TLS
-> uses `ingress.tls.verifyTLS` instead. The Instance stays Provisioning until
+> uses `ingress.tls.verifyTLS` instead. The Instance is not `Ready` until
 > a LoadBalancer ingress address appears (or until the TLS Secret / Ingress /
 > user-supplied `https.secretName` exists when those are enabled).
 >
-> Inter-component mTLS requires cert-manager; without it the Instance stays
-> Provisioning until the `<name>-server-tls` Secret appears. seaweedfs-operator
+> Inter-component mTLS requires cert-manager; without it the Instance is not
+> `Ready` until the `<name>-server-tls` Secret appears. seaweedfs-operator
 > detects cert-manager CRDs once per process — restart it if cert-manager was
 > installed after the operator started. Do not toggle `tls.enabled` on a live
 > cluster: components roll one-by-one and TLS/non-TLS peers cannot talk mid-rollout.
@@ -377,16 +380,30 @@ kind: BackupStorage
 metadata:
   name: seaweedfs-backups
 spec:
-  type: s3
-  s3:
-    bucket: seaweedfs-standalone-backups
+  backupStorageClassRef:
+    name: s3
+  location:
+    objectStore:
+      bucket: seaweedfs-standalone-backups
+  parameters:
     region: us-east-1
     endpointURL: https://seaweedfs-standalone-s3.default.svc:8334
     forcePathStyle: true
-    verifyTLS: false
+    implementation: other
+  authentication:
+    mode: AccessKey
     credentialsSecretRef:
       name: seaweedfs-standalone-conn
+  # The gateway's generated certificate is self-signed, so it is its own CA.
+  tls:
+    ca:
+      secretKeyRef:
+        name: seaweedfs-standalone-s3-https
+        key: tls.crt
 ```
+
+Whether a database can use it depends on its BackupClass: one that cannot verify a custom
+CA reports the storage as incompatible.
 
 ## Topologies
 
@@ -462,55 +479,50 @@ volumes; lower `masterVolumeSizeLimitMB` for many small buckets on small disks.
 Changing either setting on a running instance restarts the affected pods one at a
 time.
 
-## Metrics for Prometheus and VictoriaMetrics
+## Monitoring
 
-```yaml
-spec:
-  topology:
-    type: standalone
-    parameters:
-      metrics:
-        prometheus:
-          enabled: true
-        victoriaMetrics:
-          enabled: false
-```
+Monitoring goes through OpenEverest monitoring extensions such as
+[monitoring-prometheus](https://github.com/openeverest/monitoring-prometheus) or
+[monitoring-victoriametrics](https://github.com/openeverest/monitoring-victoriametrics):
 
-| Parameter | Purpose |
-|---|---|
-| `metrics` | Expose metrics on every component; omit to expose none |
-| `metrics.prometheus.enabled` | Create a `PodMonitor` for the Prometheus Operator |
-| `metrics.victoriaMetrics.enabled` | Create a `VMPodScrape` for the VictoriaMetrics Operator |
+1. Install an extension. It installs a `MonitoringClass`.
+2. Create a `MonitoringDestination` of that class in the Instance's namespace.
+3. List it on the Instance:
 
-Setting `metrics` sets `metricsPort: 9327` on the master, volume, filer and S3 gateway, and on
-the admin server when it is enabled. Each pod then serves metrics at `:9327/metrics` on a port
-named `<component>-metrics` (`master-metrics`, `volume-metrics`, …). Adding or removing the
-port changes each component's command line, so the pods restart one at a time. With metrics
-exposed, the S3 `port` cannot be 9327.
+   ```yaml
+   spec:
+     monitoring:
+       destinations:
+         - name: prometheus
+           destinationRef:
+             name: prometheus
+   ```
 
-The scrape resources are named `<instance>-prometheus` (`PodMonitor`) and
-`<instance>-victoriametrics` (`VMPodScrape`), live next to the Instance, and are removed with
-it. They select the pods by the `core.openeverest.io/instance` label, and every series carries
-the `core_openeverest_io_instance` and `core_openeverest_io_component` labels. Keep in mind:
+The extension creates the scrape objects from the endpoints the provider publishes in
+`status.monitoring.sources.metrics`. The Provider declares the component type `seaweedfs`
+with `kind: seaweedfs` and `metrics: Native` (`definition/monitoring.yaml`).
 
-- The matching operator must be installed; otherwise the Instance fails validation.
-- Prometheus must select the `PodMonitor`. kube-prometheus-stack, for example, selects only
-  `PodMonitor`s labelled with its release unless
-  `prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues=false` is set.
-- seaweedfs-operator creates its own ServiceMonitors (`<instance>-master`, `-volume`, `-filer`,
-  `-s3`, `-admin`) whenever `metricsPort` is set and the Prometheus Operator CRDs are installed.
-  This provider cannot turn them off yet: the operator gains a switch for it in
-  [seaweedfs-operator#435](https://github.com/seaweedfs/seaweedfs-operator/pull/435), which the
-  provider will set once it ships. A Prometheus that selects both them and the `PodMonitor`
-  scrapes every pod twice. The operator checks for the CRD once and caches the answer, so restart it
-  after installing the Prometheus Operator. It removes the S3 ServiceMonitor when metrics are switched
-  off, but keeps the others until the Instance is deleted. They then have no targets.
-- The VictoriaMetrics Operator converts `PodMonitor`s and `ServiceMonitor`s into its own
-  scrape resources by default, so with its converter on VictoriaMetrics may scrape the instance
-  more than once. The converted copies have no owner reference; the provider deletes them
-  (`VMPodScrape` `<instance>-prometheus` and the `VMServiceScrape`s labelled with the instance)
-  when the Instance is deleted, and the `VMPodScrape` also when Prometheus scraping is turned
-  off.
+- Every master, volume, filer and S3 gateway pod serves metrics at `:9327/metrics`, on a port
+  named `<component>-metrics` (`master-metrics`, `volume-metrics`, …). Nothing is switched on
+  when a destination is bound, so binding one restarts nothing. The admin server serves none:
+  it is not an Instance component.
+- A component's endpoint is published once one of its pods is ready, and stays published
+  while later changes roll the pods. It selects the pods by the `core.openeverest.io/instance`
+  and `core.openeverest.io/component` labels.
+- To scrape with something OpenEverest does not configure (your own `PodMonitor`, an agent),
+  read the endpoints from the Instance status. They are published without a destination.
+- The S3 `port` cannot be 9327.
+- seaweedfs-operator's own ServiceMonitors are turned off (`spec.serviceMonitor.enabled:
+  false`, operator image `1.0.43` or newer): they would scrape every pod a second time.
+
+**Upgrading from 0.2.x.** `spec.topology.parameters.metrics` is deprecated and ignored, and
+still accepted with a warning, so Instances written by earlier releases keep syncing. Every
+component now serves metrics, so the pods of Instances that did not expose them restart once.
+The provider deletes the `PodMonitor` `<instance>-prometheus` and `VMPodScrape`
+`<instance>-victoriametrics` earlier releases created, and the VictoriaMetrics Operator's
+copy of the `PodMonitor` and the `VMServiceScrape`s it converted from seaweedfs-operator's
+ServiceMonitors. To keep collecting metrics, list a destination
+in `spec.monitoring.destinations`.
 
 For Grafana, SeaweedFS publishes a Kubernetes dashboard,
 [grafana_seaweedfs_k8s.json](https://github.com/seaweedfs/seaweedfs/blob/master/other/metrics/grafana_seaweedfs_k8s.json),
@@ -522,10 +534,11 @@ the scraped ones.
 ## Configuration
 
 - **Chart values:** [charts/provider-seaweedfs/values.yaml](charts/provider-seaweedfs/values.yaml)
+- **Presets:** the chart ships the `ClusterInstancePreset` `seaweedfs-standalone` (3 masters, 2 volume servers with 10Gi, 2 filers with 1Gi, 1 S3 gateway, the UI defaults). Change or disable it with the `presets` value; `provider.shortName` prefixes its name.
 - **Instance parameters:** per-component and per-topology schemas under
   [definition/](definition/), published on the `Provider` resource
-  (`kubectl get provider provider-seaweedfs -o yaml`). The API server and the UI
-  validate user input against these schemas.
+  (`kubectl get provider provider-seaweedfs -o yaml`). The provider's admission
+  webhook, the API server and the UI validate user input against these schemas.
 
 Sync writes replica counts, CPU and memory resources, volume/filer/master
 persistence (including storage class), S3 service type and Ingress, the admin
@@ -542,8 +555,8 @@ StorageClass already on the Seaweed spec allows expansion. Operator image
 `1.0.40` grows the PVCs (see the capabilities table). Shrinks are rejected.
 Setting master `storage.size` when the master has no disk yet is rejected.
 Changing `storage.storageClass` together with a size increase is rejected.
-With `topology.parameters.metrics` set, every component's `metricsPort` is set
-and the provider creates the requested `PodMonitor` / `VMPodScrape`.
+Every component's `metricsPort` is set, and seaweedfs-operator's ServiceMonitors are
+turned off (see [Monitoring](#monitoring)).
 Backups and restores are not applied.
 
 ## Development
@@ -576,7 +589,6 @@ markers, watches, and code generation are documented once for all providers in
 | `cmd/provider/` | Entry point |
 | `internal/provider/` | `ProviderInterface` implementation, RBAC markers |
 | `internal/common/` | Provider and component name constants |
-| `internal/apis/` | Subset of third-party APIs the provider writes (`VMPodScrape`); DeepCopy is generated by `make generate` |
 | `definition/` | Provider identity, component types, versions, topologies |
 | `charts/provider-seaweedfs/` | Helm chart (`generated/` is produced by `make generate`) |
 | `config/rbac/role.yaml` | Generated `ClusterRole` — do not edit |
@@ -608,9 +620,9 @@ kubectl logs -n everest-system deploy/provider-seaweedfs -f
 
 | Symptom | Where to look |
 |---|---|
-| `Instance` stuck in `Provisioning` | `kubectl describe instance <name>` conditions, then the provider logs. Common waits: Seaweed Ready, S3 Service, S3 credentials Secret `<name>-s3-config`, LoadBalancer ingress, S3 Ingress, or `<name>-server-tls` Secret when TLS is enabled |
+| `Instance` not `Ready` (`Creating` or `ApplyingChanges`) | `kubectl describe instance <name>` conditions, then the provider logs. Common waits: Seaweed Ready, S3 Service, S3 credentials Secret `<name>-s3-config`, LoadBalancer ingress, S3 Ingress, or `<name>-server-tls` Secret when TLS is enabled |
 | S3 requests fail with `AccessDenied` | Requests must be signed with the keys from `<name>-conn` (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`). Anonymous access is disabled |
-| `Instance` stays `Updating` after a disk increase | `kubectl get pvc -o wide` for `Resizing`. Image `1.0.40` patches the PVC request and leaves the StatefulSet claim template unchanged. `FileSystemResizePending` does not keep the Instance in `Updating`. When the CSI driver only expands offline, restart the pod that mounts the PVC so the kubelet grows the filesystem. An older image only emits Warning event `VolumeClaimTemplatesMismatch` and does not grow the PVC. Deleting the StatefulSet does not resize claims that already exist. Patch each PVC yourself when `allowVolumeExpansion` is true: `kubectl patch pvc <name> --type=merge -p '{"spec":{"resources":{"requests":{"storage":"<size>"}}}}'`. Names are `mount<N>-<instance>-volume-<ordinal>`, `<instance>-filer-<instance>-filer-<ordinal>`, and `<instance>-master-<instance>-master-<ordinal>` |
+| `Instance` stays `StorageResizing` after a disk increase | `kubectl get pvc -o wide` for `Resizing`. Image `1.0.40` patches the PVC request and leaves the StatefulSet claim template unchanged. `FileSystemResizePending` does not keep the Instance in `StorageResizing`. When the CSI driver only expands offline, restart the pod that mounts the PVC so the kubelet grows the filesystem. An older image only emits Warning event `VolumeClaimTemplatesMismatch` and does not grow the PVC. Deleting the StatefulSet does not resize claims that already exist. Patch each PVC yourself when `allowVolumeExpansion` is true: `kubectl patch pvc <name> --type=merge -p '{"spec":{"resources":{"requests":{"storage":"<size>"}}}}'`. Names are `mount<N>-<instance>-volume-<ordinal>`, `<instance>-filer-<instance>-filer-<ordinal>`, and `<instance>-master-<instance>-master-<ordinal>` |
 | Disk increase rejected | The StorageClass needs `allowVolumeExpansion: true`. Shrinking `storage.size` is rejected |
 | No `Provider` resource in the cluster | Is the chart installed? Check the provider deployment logs |
 | `Instance` ignored entirely | `spec.providerRef.name` must be `provider-seaweedfs` |

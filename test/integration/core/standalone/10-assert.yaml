@@ -6,7 +6,7 @@ metadata:
     core.openeverest.io/provider: provider-seaweedfs
 status:
   # Nothing reports component replicas until the operator acts.
-  phase: Initializing
+  (conditions[?type == 'Ready'] | [0].status): "False"
 ---
 apiVersion: seaweed.seaweedfs.com/v1
 kind: Seaweed

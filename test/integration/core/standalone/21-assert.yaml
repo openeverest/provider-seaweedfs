@@ -13,7 +13,7 @@ spec:
                 podAffinityTerm:
                   topologyKey: kubernetes.io/hostname
 status:
-  phase: Ready
+  (conditions[?type == 'Ready'] | [0].status): "True"
 ---
 apiVersion: seaweed.seaweedfs.com/v1
 kind: Seaweed

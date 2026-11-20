@@ -1,0 +1,24 @@
+# The minimal Instance with less volume storage; admission leaves the shrink to
+# the check against the applied Seaweed cluster.
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: example
+spec:
+  providerRef:
+    name: provider-seaweedfs
+  topology:
+    type: standalone
+  components:
+    master:
+      replicas: 1
+    volume:
+      replicas: 1
+      storage:
+        size: 5Gi
+    filer:
+      replicas: 1
+      storage:
+        size: 1Gi
+    s3:
+      replicas: 1

@@ -35,13 +35,12 @@ import (
 	"github.com/AlekSi/pointer"
 	corev1alpha1 "github.com/openeverest/openeverest/v2/api/core/v1alpha1"
 	"github.com/openeverest/openeverest/v2/provider-runtime/controller"
-	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 
 	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
 
+	"github.com/openeverest/provider-seaweedfs/definition/backupclasses"
 	"github.com/openeverest/provider-seaweedfs/definition/components"
 	"github.com/openeverest/provider-seaweedfs/definition/topologies/standalone"
-	vmv1beta1 "github.com/openeverest/provider-seaweedfs/internal/apis/victoriametrics/v1beta1"
 	"github.com/openeverest/provider-seaweedfs/internal/common"
 )
 
@@ -55,16 +54,13 @@ type Provider struct {
 
 // New creates a new Provider instance.
 func New() *Provider {
-	return &Provider{
+	p := &Provider{
 		BaseProvider: controller.BaseProvider{
 			ProviderName: common.ProviderName,
 			SchemeFuncs: []func(*runtime.Scheme) error{
 				seaweedv1.AddToScheme,
 				networkingv1.AddToScheme,
 				policyv1.AddToScheme,
-				// Scrape resources for the exposed metrics.
-				monitoringv1.AddToScheme,
-				vmv1beta1.AddToScheme,
 			},
 			WatchConfigs: []controller.WatchConfig{
 				controller.WatchOwned(&seaweedv1.Seaweed{}),
@@ -101,6 +97,9 @@ func New() *Provider {
 			},
 		},
 	}
+	// The runtime claims the classes the provider ships.
+	p.SetShippedBackupClasses(backupclasses.Shipped())
+	return p
 }
 
 // s3ServiceToInstance maps the operator-owned S3 Service to its Instance; the
@@ -239,7 +238,7 @@ func (p *Provider) Sync(c *controller.Context) error {
 		sw.Spec.VolumeServerDiskCount = topo.VolumeServerDiskCount
 	}
 	applyS3Auth(sw.Spec.S3, c.Name(), s3ConfigChecksum)
-	applyMetricsPorts(sw, topo.Metrics)
+	applyMetricsPorts(sw)
 	labelPods(c, sw)
 	applyScheduling(c, sw)
 
@@ -249,7 +248,10 @@ func (p *Provider) Sync(c *controller.Context) error {
 	if err := syncPodDisruptionBudgets(c); err != nil {
 		return err
 	}
-	return reconcileMetricsScrapes(c, topo.Metrics)
+	if err := deleteLegacyScrapes(c); err != nil {
+		return err
+	}
+	return deleteConvertedServiceMonitors(c)
 }
 
 // labelPods labels every component's pods so the runtime counts them into
@@ -277,17 +279,33 @@ func resolveImage(c *controller.Context, componentName string, comp corev1alpha1
 		return "", fmt.Errorf("resolving image for %q: %w", componentName, err)
 	}
 
-	if comp.Version != "" {
-		if image := controller.GetImageForVersion(spec, componentName, comp.Version); image != "" {
-			return image, nil
-		}
-	}
-
-	if image := controller.GetDefaultImageForComponent(spec, componentName); image != "" {
+	if image := catalogImage(spec, componentName, comp.Version); image != "" {
 		return image, nil
 	}
 
 	return "", fmt.Errorf("no image found for component %q", componentName)
+}
+
+// componentImage resolves the image of a component from the Instance and the
+// Provider alone, for Validate.
+func componentImage(provider *corev1alpha1.Provider, componentName string, comp corev1alpha1.ComponentSpec) (string, bool) {
+	if comp.Image != "" {
+		return comp.Image, true
+	}
+	if provider == nil {
+		return "", false
+	}
+	image := catalogImage(&provider.Spec, componentName, comp.Version)
+	return image, image != ""
+}
+
+func catalogImage(spec *corev1alpha1.ProviderSpec, componentName, version string) string {
+	if version != "" {
+		if image := controller.GetImageForVersion(spec, componentName, version); image != "" {
+			return image
+		}
+	}
+	return controller.GetDefaultImageForComponent(spec, componentName)
 }
 
 func getS3Service(c *controller.Context, svc *corev1.Service) error {
@@ -308,11 +326,38 @@ func (p *Provider) Status(c *controller.Context) (controller.Status, error) {
 	sw := &seaweedv1.Seaweed{}
 	if err := c.Get(sw, c.Name()); err != nil {
 		if controller.IsNotFound(err) {
-			return controller.Pending("Waiting to get SeaweedFS cluster resource"), nil
+			return controller.Progressing("Waiting for the Seaweed cluster to be created"), nil
 		}
 		return controller.Status{}, err
 	}
+	status, err := seaweedStatus(c, sw)
+	if err != nil {
+		return controller.Status{}, err
+	}
+	return withDesiredReplicas(status, sw), nil
+}
 
+// withDesiredReplicas reports the pods each component has once the applied
+// Seaweed spec has converged.
+func withDesiredReplicas(status controller.Status, sw *seaweedv1.Seaweed) controller.Status {
+	if sw.Spec.Master != nil {
+		status = status.WithDesiredReplicas(common.ComponentMaster, sw.Spec.Master.Replicas)
+	}
+	if sw.Spec.Volume != nil {
+		status = status.WithDesiredReplicas(common.ComponentVolume, sw.Spec.Volume.Replicas)
+	}
+	if sw.Spec.Filer != nil {
+		status = status.WithDesiredReplicas(common.ComponentFiler, sw.Spec.Filer.Replicas)
+	}
+	if sw.Spec.S3 != nil {
+		status = status.WithDesiredReplicas(common.ComponentS3, sw.Spec.S3.Replicas)
+	}
+	return status
+}
+
+// seaweedStatus reports what the Seaweed cluster and the objects around it
+// show: converged with connection details once everything is in place.
+func seaweedStatus(c *controller.Context, sw *seaweedv1.Seaweed) (controller.Status, error) {
 	var s3Params components.S3CustomSpec
 	if s3Comp, ok := c.Instance().Spec.Components[common.ComponentS3]; ok {
 		c.TryDecodeComponentParameters(s3Comp, &s3Params)
@@ -324,91 +369,87 @@ func (p *Provider) Status(c *controller.Context) (controller.Status, error) {
 		return controller.Status{}, err
 	}
 	if waitingS3TLS {
-		return controller.Provisioning(fmt.Sprintf(
-			"Waiting for S3 HTTPS TLS Secret %q (tls.crt and tls.key)", s3Params.HTTPS.SecretName)), nil
+		msg := fmt.Sprintf("Waiting for S3 HTTPS TLS Secret %q (tls.crt and tls.key)", s3Params.HTTPS.SecretName)
+		return controller.Progressing(msg).WithProblem("S3HTTPSSecretMissing", msg), nil
 	}
 
-	if cond := meta.FindStatusCondition(sw.Status.Conditions, "Ready"); cond != nil {
-		if cond.Status == metav1.ConditionTrue {
-			// Inter-component mTLS: the operator has no TLSReady condition and
-			// silently no-ops when cert-manager is missing. Gate Ready on the
-			// server TLS Secret so a missing cert-manager surfaces clearly.
-			waiting, err := waitingForTLSSecret(c, sw)
-			if err != nil {
-				return controller.Status{}, err
-			}
-			if waiting {
-				return controller.Provisioning(
-					"Waiting for TLS certificate Secret (requires cert-manager; restart seaweedfs-operator if cert-manager was installed after it)"), nil
-			}
-
-			svc := &corev1.Service{}
-			if err := getS3Service(c, svc); err != nil {
-				if controller.IsNotFound(err) {
-					return controller.Provisioning("Waiting for S3 Service"), nil
-				}
-				return controller.Status{}, err
-			}
-			// Stay Provisioning until LoadBalancer ingress is assigned so
-			// connection details can include an actionable externalEndpointURL.
-			if svc.Spec.Type == corev1.ServiceTypeLoadBalancer && len(svc.Status.LoadBalancer.Ingress) == 0 {
-				return controller.Provisioning("Waiting for LoadBalancer ingress"), nil
-			}
-			waitingIng, err := waitingForS3Ingress(c, sw)
-			if err != nil {
-				return controller.Status{}, err
-			}
-			if waitingIng {
-				return controller.Provisioning("Waiting for S3 Ingress"), nil
-			}
-
-			creds, err := readS3Credentials(c)
-			if err != nil {
-				return controller.Status{}, err
-			}
-			if !creds.complete() {
-				return controller.Provisioning("Waiting for S3 credentials Secret " + s3ConfigSecretName(c.Name())), nil
-			}
-
-			details, err := buildConnectionDetailsFromService(c, svc, sw, s3Params)
-			if err != nil {
-				return controller.Status{}, err
-			}
-			details = withS3Credentials(details, creds)
-			expansion, err := storageExpansionStatus(c, sw)
-			if err != nil {
-				return controller.Status{}, err
-			}
-			if expansion != nil {
-				expansion.ConnectionDetails = details
-				return *expansion, nil
-			}
-			return controller.ReadyWithConnectionDetails(details), nil
-		}
+	cond := meta.FindStatusCondition(sw.Status.Conditions, "Ready")
+	if cond == nil || cond.Status != metav1.ConditionTrue {
 		if msg, err := adminNotReadyMessage(c, sw); err != nil {
 			return controller.Status{}, err
 		} else if msg != "" {
-			return controller.Provisioning(msg), nil
+			return controller.Progressing(msg), nil
 		}
-		return controller.Provisioning(cond.Message), nil
+		if cond != nil {
+			return controller.Progressing(cond.Message), nil
+		}
+		if sw.Status.Master.Replicas > 0 {
+			return controller.Progressing(fmt.Sprintf(
+				"Master: (%d/%d ready), Volume: (%d/%d ready), Filer: (%d/%d ready), S3: (%d/%d ready)",
+				sw.Status.Master.ReadyReplicas, sw.Status.Master.Replicas,
+				sw.Status.Volume.ReadyReplicas, sw.Status.Volume.Replicas,
+				sw.Status.Filer.ReadyReplicas, sw.Status.Filer.Replicas,
+				sw.Status.S3.ReadyReplicas, sw.Status.S3.Replicas,
+			)), nil
+		}
+		return controller.Progressing("Waiting for the SeaweedFS cluster to initialize"), nil
 	}
-	if msg, err := adminNotReadyMessage(c, sw); err != nil {
+
+	// Inter-component mTLS: the operator has no TLSReady condition and
+	// silently no-ops when cert-manager is missing. Gate Ready on the server
+	// TLS Secret so a missing cert-manager surfaces clearly.
+	waiting, err := waitingForTLSSecret(c, sw)
+	if err != nil {
 		return controller.Status{}, err
-	} else if msg != "" {
-		return controller.Provisioning(msg), nil
+	}
+	if waiting {
+		return controller.Progressing(
+			"Waiting for TLS certificate Secret (requires cert-manager; restart seaweedfs-operator if cert-manager was installed after it)"), nil
 	}
 
-	if sw.Status.Master.Replicas > 0 {
-		return controller.Provisioning(fmt.Sprintf(
-			"Master: (%d/%d ready), Volume: (%d/%d ready), Filer: (%d/%d ready), S3: (%d/%d ready)",
-			sw.Status.Master.ReadyReplicas, sw.Status.Master.Replicas,
-			sw.Status.Volume.ReadyReplicas, sw.Status.Volume.Replicas,
-			sw.Status.Filer.ReadyReplicas, sw.Status.Filer.Replicas,
-			sw.Status.S3.ReadyReplicas, sw.Status.S3.Replicas,
-		)), nil
+	svc := &corev1.Service{}
+	if err := getS3Service(c, svc); err != nil {
+		if controller.IsNotFound(err) {
+			return controller.Progressing("Waiting for S3 Service"), nil
+		}
+		return controller.Status{}, err
+	}
+	// Wait for LoadBalancer ingress so connection details can include an
+	// actionable externalEndpointURL. Clients in the cluster can connect
+	// meanwhile.
+	if svc.Spec.Type == corev1.ServiceTypeLoadBalancer && len(svc.Status.LoadBalancer.Ingress) == 0 {
+		return controller.Progressing("Waiting for LoadBalancer ingress").WithAvailable(controller.Available), nil
+	}
+	waitingIng, err := waitingForS3Ingress(c, sw)
+	if err != nil {
+		return controller.Status{}, err
+	}
+	if waitingIng {
+		return controller.Progressing("Waiting for S3 Ingress").WithAvailable(controller.Available), nil
 	}
 
-	return controller.Initializing("waiting for SeaweedFS cluster to initialize"), nil
+	creds, err := readS3Credentials(c)
+	if err != nil {
+		return controller.Status{}, err
+	}
+	if !creds.complete() {
+		return controller.Progressing("Waiting for S3 credentials Secret " + s3ConfigSecretName(c.Name())), nil
+	}
+
+	details, err := buildConnectionDetailsFromService(c, svc, sw, s3Params)
+	if err != nil {
+		return controller.Status{}, err
+	}
+	details = withS3Credentials(details, creds)
+	expansion, err := storageExpansionStatus(c, sw)
+	if err != nil {
+		return controller.Status{}, err
+	}
+	if expansion != nil {
+		expansion.ConnectionDetails = details
+		return *expansion, nil
+	}
+	return controller.ReadyWithConnectionDetails(details), nil
 }
 
 // Cleanup handles deletion of provider-managed resources.
@@ -421,10 +462,9 @@ func (p *Provider) Cleanup(c *controller.Context) error {
 	l.Info("Cleaning up instance", "name", c.Name())
 
 	// Resources with owner references set via c.Apply() are garbage
-	// collected, the scrape resources included. The VictoriaMetrics Operator's
-	// copies of the PodMonitor and of seaweedfs-operator's ServiceMonitors
-	// have none.
-	if err := deleteConvertedPodMonitor(c); err != nil {
+	// collected. The scrape objects of earlier releases and the VictoriaMetrics
+	// Operator's copies of them have none.
+	if err := deleteLegacyScrapes(c); err != nil {
 		return err
 	}
 	return deleteConvertedServiceMonitors(c)

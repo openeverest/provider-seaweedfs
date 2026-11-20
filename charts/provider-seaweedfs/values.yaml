@@ -62,7 +62,7 @@ securityContext:
 service:
   # -- Service type
   type: ClusterIP
-  # -- Service port for the HTTP server (schema/validation endpoints)
+  # -- Service port for the HTTP server (health endpoints)
   port: 8082
 
 # -- Resource limits and requests
@@ -100,6 +100,48 @@ affinity: {}
 provider:
   # -- The name to register for the Provider custom resource
   name: provider-seaweedfs
+  # -- Prefix of the ClusterInstancePresets the chart ships
+  shortName: seaweedfs
+
+# -- ClusterInstancePresets the chart ships, one per topology, with the UI
+# defaults. Each is named <provider.shortName>-<name>; spec is an Instance spec
+# without providerRef, which the chart sets. The version is left to the
+# provider's default.
+presets:
+  - name: standalone
+    enabled: true
+    spec:
+      topology:
+        type: standalone
+      components:
+        master:
+          replicas: 3
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+        volume:
+          replicas: 2
+          resources:
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          storage:
+            size: 10Gi
+        filer:
+          replicas: 2
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          storage:
+            size: 1Gi
+        s3:
+          replicas: 1
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
 
 # -- Additional environment variables to set on the provider container
 extraEnv: []
@@ -111,6 +153,17 @@ extraVolumeMounts: []
 
 # -- Additional volumes to add to the pod
 extraVolumes: []
+
+admission:
+  # -- PEM serving certificate for the Instance admission webhook. Left empty,
+  # the chart generates one and keeps it across upgrades.
+  certs:
+    tls.crt: ""
+    tls.key: ""
+    ca.crt: ""
+  certManager:
+    # -- Issue the serving certificate with cert-manager, which must be installed.
+    enabled: false
 
 # -- Leader election configuration
 leaderElection:

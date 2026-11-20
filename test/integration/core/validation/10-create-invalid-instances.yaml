@@ -436,32 +436,6 @@ spec:
 apiVersion: core.openeverest.io/v1alpha1
 kind: Instance
 metadata:
-  name: invalid-storage-class
-spec:
-  providerRef:
-    name: provider-seaweedfs
-  components:
-    master:
-      type: seaweedfs
-      replicas: 1
-    volume:
-      type: seaweedfs
-      replicas: 1
-      storage:
-        size: 1Gi
-        storageClass: missing-storage-class
-    filer:
-      type: seaweedfs
-      replicas: 1
-      storage:
-        size: 1Gi
-    s3:
-      type: seaweedfs
-      replicas: 1
----
-apiVersion: core.openeverest.io/v1alpha1
-kind: Instance
-metadata:
   name: invalid-replication-copies
 spec:
   providerRef:
@@ -544,7 +518,7 @@ spec:
       type: seaweedfs
       replicas: 1
 ---
-# The S3 gateway cannot listen on the metrics port.
+# The S3 gateway cannot listen on the metrics port, which every component serves.
 apiVersion: core.openeverest.io/v1alpha1
 kind: Instance
 metadata:
@@ -552,10 +526,6 @@ metadata:
 spec:
   providerRef:
     name: provider-seaweedfs
-  topology:
-    type: standalone
-    parameters:
-      metrics: {}
   components:
     master:
       type: seaweedfs

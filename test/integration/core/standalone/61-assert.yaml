@@ -3,5 +3,5 @@ kind: Instance
 metadata:
   name: test-seaweedfs
 status:
-  phase: Provisioning
-  message: Waiting for S3 Ingress
+  (conditions[?type == 'Ready'] | [0].status): "False"
+  (conditions[?type == 'Ready'] | [0].message): Waiting for S3 Ingress

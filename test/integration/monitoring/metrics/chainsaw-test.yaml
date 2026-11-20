@@ -5,9 +5,11 @@ metadata:
   name: monitoring-metrics
 spec:
   description: |
-    Metrics exposure lifecycle: expose metrics on every component with
-    Prometheus scraping, switch scraping to VictoriaMetrics, stop exposing
-    metrics, and delete the Instance together with its scrape resources.
+    The monitoring contract: every component serves metrics, and the provider
+    publishes one endpoint per component in status.monitoring.sources once
+    its pods are ready, for monitoring extensions to scrape. The deprecated
+    spec.topology.parameters.metrics is accepted with a warning and ignored,
+    and the scrape objects earlier releases created are deleted.
   catch:
     - script:
         content: kubectl -n $NAMESPACE get instance,seaweed,podmonitor,vmpodscrape -o yaml
@@ -16,9 +18,9 @@ spec:
         selector: app.kubernetes.io/name=provider-seaweedfs
         tail: 100
   steps:
-    # Only the CRDs are needed: the provider creates the scrape resources,
-    # no monitoring operator has to act on them. CRDs a cluster already has
-    # are left alone, so the suite does not downgrade an installed operator.
+    # The CRDs hold the scrape objects of an earlier release. CRDs a cluster
+    # already has are left alone, so the suite does not downgrade an
+    # installed operator.
     - name: setup
       try:
         - script:
@@ -32,41 +34,35 @@ spec:
               kubectl wait --for=condition=Established --timeout=60s crd/podmonitors.monitoring.coreos.com crd/vmpodscrapes.operator.victoriametrics.com
         - assert:
             file: 00-assert.yaml
-
-    - name: expose-metrics-to-prometheus
-      try:
         - apply:
-            file: 10-create-cluster.yaml
+            file: 05-legacy-scrapes.yaml
+
+    - name: serve-metrics-and-delete-legacy-scrapes
+      try:
+        - script:
+            content: kubectl apply -n $NAMESPACE -f 10-create-cluster.yaml
+            check:
+              ($error == null): true
+              '(contains($stderr, ''spec.topology.parameters.metrics: deprecated and ignored''))': true
         - assert:
             file: 10-assert.yaml
         - error:
             file: 10-errors.yaml
 
-    - name: switch-to-victoriametrics
+    - name: publish-sources
       try:
-        - apply:
-            file: 20-switch-to-victoriametrics.yaml
+        - script:
+            content: |
+              kubectl patch seaweed/metrics-seaweedfs --subresource status -n $NAMESPACE --type=merge -p '{"status":{
+                "master":{"replicas":1,"readyReplicas":1},
+                "volume":{"replicas":1,"readyReplicas":1},
+                "filer":{"replicas":1,"readyReplicas":1},
+                "s3":{"replicas":1,"readyReplicas":1}}}'
         - assert:
             file: 20-assert.yaml
-        - error:
-            file: 20-errors.yaml
 
-    - name: stop-exposing-metrics
-      try:
-        - apply:
-            file: 30-disable-metrics.yaml
-        - assert:
-            file: 30-assert.yaml
-        - error:
-            file: 30-errors.yaml
-
-    # Owner references take the scrape resources down with the Instance.
     - name: delete-cluster
       try:
-        - apply:
-            file: 20-switch-to-victoriametrics.yaml
-        - assert:
-            file: 20-assert.yaml
         - delete:
             ref:
               apiVersion: core.openeverest.io/v1alpha1
@@ -76,11 +72,5 @@ spec:
             apiVersion: seaweed.seaweedfs.com/v1
             kind: Seaweed
             name: metrics-seaweedfs
-            for:
-              deletion: {}
-        - wait:
-            apiVersion: operator.victoriametrics.com/v1beta1
-            kind: VMPodScrape
-            name: metrics-seaweedfs-victoriametrics
             for:
               deletion: {}

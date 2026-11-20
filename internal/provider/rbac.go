@@ -25,6 +25,8 @@ package provider
 // +kubebuilder:rbac:groups=core.openeverest.io,resources=providers,verbs=get;list;watch
 // +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// The runtime records validation warnings as events.k8s.io Events.
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 // SeaweedFS operator resources:
 // +kubebuilder:rbac:groups=seaweed.seaweedfs.com,resources=seaweeds,verbs=get;list;watch;create;update;patch;delete
@@ -36,15 +38,26 @@ package provider
 // +kubebuilder:rbac:groups=backup.openeverest.io,resources=backups,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=backup.openeverest.io,resources=backups/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=backup.openeverest.io,resources=backupclasses,verbs=get;list;watch
+// The runtime claims the BackupClasses the provider ships, and judges
+// storages through their BackupStorageClass.
+// +kubebuilder:rbac:groups=backup.openeverest.io,resources=backupclasses/status,verbs=patch
+// +kubebuilder:rbac:groups=backup.openeverest.io,resources=backupstorageclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=backup.openeverest.io,resources=backupstorages,verbs=get;list;watch
 // +kubebuilder:rbac:groups=backup.openeverest.io,resources=restores,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=backup.openeverest.io,resources=restores/status,verbs=get;update;patch
 
-// Scrape resources created when the topology exposes metrics:
-// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=podmonitors,verbs=get;create;patch;delete
-// +kubebuilder:rbac:groups=operator.victoriametrics.com,resources=vmpodscrapes,verbs=get;create;patch;delete
-// VMServiceScrapes the VictoriaMetrics Operator converts from seaweedfs-operator's
-// ServiceMonitors, removed with the Instance:
+// Monitoring contract: the runtime watches the Instances' bindings, their
+// destinations and classes, writes the binding status, and reads the
+// kube-system UID that identifies the cluster.
+// +kubebuilder:rbac:groups=monitoring.openeverest.io,resources=monitoringclasses;monitoringdestinations;monitoringbindings,verbs=get;list;watch
+// +kubebuilder:rbac:groups=monitoring.openeverest.io,resources=monitoringbindings/status,verbs=patch
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get
+
+// Scrape objects of earlier releases, and the VictoriaMetrics Operator's
+// copies of them and of seaweedfs-operator's ServiceMonitors, deleted on
+// Sync and Cleanup:
+// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=podmonitors,verbs=delete
+// +kubebuilder:rbac:groups=operator.victoriametrics.com,resources=vmpodscrapes,verbs=delete
 // +kubebuilder:rbac:groups=operator.victoriametrics.com,resources=vmservicescrapes,verbs=deletecollection
 
 // Operator-managed S3 Service (read for connection details):

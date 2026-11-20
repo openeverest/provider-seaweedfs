@@ -32,5 +32,5 @@ metadata:
   name: test-seaweedfs
 status:
   # cert-manager is not installed, so the server TLS Secret never appears.
-  phase: Provisioning
-  (contains(message, 'Waiting for TLS certificate Secret')): true
+  (conditions[?type == 'Ready'] | [0].status): "False"
+  (contains((conditions[?type == 'Ready'] | [0].message), 'Waiting for TLS certificate Secret')): true

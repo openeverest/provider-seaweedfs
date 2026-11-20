@@ -17,6 +17,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"path"
@@ -36,10 +37,12 @@ import (
 	backupv1alpha1 "github.com/openeverest/openeverest/v2/api/backup/v1alpha1"
 	commonv1alpha1 "github.com/openeverest/openeverest/v2/api/common/v1alpha1"
 	corev1alpha1 "github.com/openeverest/openeverest/v2/api/core/v1alpha1"
+	s3class "github.com/openeverest/openeverest/v2/backupstorageclasses/s3"
 	"github.com/openeverest/openeverest/v2/provider-runtime/controller"
 
 	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
 
+	"github.com/openeverest/provider-seaweedfs/definition/backupclasses"
 	seaweedfsfilermeta "github.com/openeverest/provider-seaweedfs/definition/backupclasses/seaweedfs-filer-meta"
 	"github.com/openeverest/provider-seaweedfs/definition/components"
 	"github.com/openeverest/provider-seaweedfs/internal/common"
@@ -69,9 +72,8 @@ const seaweedBackupScheduleMax = 32
 const mirroredFromLabel = "seaweedfs.openeverest.io/mirrored-from"
 const mirroredFromSeaweedBackup = "SeaweedBackup"
 
-// defaultBackupDirectory is the sink prefix OpenEverest BackupStorage has no
-// field for. The proposal and operator examples use "/".
-const defaultBackupDirectory = "/"
+// backupClassName is the BackupClass this provider ships.
+const backupClassName = "seaweedfs-filer-meta"
 
 func buildBackupSpec(c *controller.Context) (*seaweedv1.BackupSpec, error) {
 	cfg := c.Instance().Spec.Backup
@@ -86,7 +88,18 @@ func buildBackupSpec(c *controller.Context) (*seaweedv1.BackupSpec, error) {
 	if err != nil {
 		return nil, err
 	}
-	schedules, err := buildSeaweedSchedules(cfg.Storages)
+	if len(storages) == 0 {
+		return nil, nil
+	}
+	// Mirrors and schedules only for the storages on the cluster: the
+	// operator rejects ones that name a storage it does not have.
+	rendered := make([]corev1alpha1.InstanceBackupStorage, 0, len(cfg.Storages))
+	for _, entry := range cfg.Storages {
+		if _, ok := storages[entry.StorageRef.Name]; ok {
+			rendered = append(rendered, entry)
+		}
+	}
+	schedules, err := buildSeaweedSchedules(rendered)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +107,7 @@ func buildBackupSpec(c *controller.Context) (*seaweedv1.BackupSpec, error) {
 	return &seaweedv1.BackupSpec{
 		Storages:   storages,
 		Schedule:   schedules,
-		DataMirror: buildSeaweedDataMirrors(cfg.Storages),
+		DataMirror: buildSeaweedDataMirrors(rendered),
 	}, nil
 }
 
@@ -247,11 +260,16 @@ func mapScheduleKeep(sched corev1alpha1.InstanceBackupSchedule) (int32, error) {
 	}
 }
 
+// buildSeaweedStorages renders the Instance's backup storages as the
+// operator's storages, keyed by BackupStorage name, each writing under the
+// Instance's path in its bucket. An entry that must not or cannot be rendered
+// keeps what the live Seaweed cluster has for it, and stays out while the
+// cluster has nothing.
 func buildSeaweedStorages(
 	c *controller.Context,
 	entries []corev1alpha1.InstanceBackupStorage,
 ) (map[string]seaweedv1.BackupStorageSpec, error) {
-	out := make(map[string]seaweedv1.BackupStorageSpec, len(entries))
+	seen := make(map[string]struct{}, len(entries))
 	for _, entry := range entries {
 		name := entry.StorageRef.Name
 		if err := validateSeaweedBackupStorageName(name); err != nil {
@@ -260,69 +278,114 @@ func buildSeaweedStorages(
 				Message: err.Error(),
 			}
 		}
-		if _, exists := out[name]; exists {
+		if _, exists := seen[name]; exists {
 			return nil, &controller.BackupConfigError{
 				Reason:  "DuplicateStorage",
 				Message: fmt.Sprintf("backup storage %q is registered more than once", name),
 			}
 		}
+		seen[name] = struct{}{}
 		if entry.PITR != nil && entry.PITR.Enabled {
 			return nil, &controller.BackupConfigError{
 				Reason:  controller.PITRConfigInvalidReason,
 				Message: fmt.Sprintf("storage %q: PITR is not supported for SeaweedFS filer metadata backups", name),
 			}
 		}
+	}
 
-		bs, err := c.BackupStorage(name)
-		if err != nil {
-			if apierrors.IsNotFound(err) {
-				return nil, controller.WaitFor(fmt.Sprintf("BackupStorage %q not yet present", name))
+	live, err := liveSeaweedStorages(c)
+	if err != nil {
+		return nil, err
+	}
+	resolved, err := c.BackupStorages()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]seaweedv1.BackupStorageSpec, len(resolved))
+	for _, s := range resolved {
+		if s.Apply() {
+			spec, err := seaweedStorage(c, s.Storage, s.Path)
+			if err == nil {
+				out[s.Name()] = spec
+				continue
 			}
-			return nil, err
+			c.RejectBackupStorage(s.Name(), err)
 		}
-
-		if err := rejectSelfS3Endpoint(c, bs); err != nil {
-			return nil, err
+		if held, ok := live[s.Name()]; ok {
+			out[s.Name()] = held
 		}
-
-		spec, err := mapBackupStorageToSeaweed(bs)
-		if err != nil {
-			return nil, err
-		}
-		out[name] = *spec
 	}
 	return out, nil
 }
 
-// rejectSelfS3Endpoint fails when BackupStorage.spec.s3.endpointURL points at
-// this Instance's own S3 gateway. dataMirror copies filerPath "/" including
-// /buckets/<backup-bucket>, so a self sink would mirror its own writes forever.
-func rejectSelfS3Endpoint(c *controller.Context, bs *backupv1alpha1.BackupStorage) error {
-	if bs.Spec.S3 == nil {
-		return nil
-	}
-	host, err := backupStorageEndpointHost(bs.Spec.S3.EndpointURL)
+// liveSeaweedStorages returns the backup storages on the live Seaweed
+// cluster, for the entries the provider must hold.
+func liveSeaweedStorages(c *controller.Context) (map[string]seaweedv1.BackupStorageSpec, error) {
+	sw := &seaweedv1.Seaweed{}
+	found, err := c.Exists(sw, c.Name())
 	if err != nil {
-		return &controller.BackupConfigError{
-			Reason: "InvalidStorageEndpoint",
-			Message: fmt.Sprintf(
-				"BackupStorage %q: invalid endpointURL %q: %v",
-				bs.Name, bs.Spec.S3.EndpointURL, err,
-			),
-		}
+		return nil, fmt.Errorf("get Seaweed: %w", err)
+	}
+	if !found || sw.Spec.Backup == nil {
+		return nil, nil
+	}
+	return sw.Spec.Backup.Storages, nil
+}
+
+// seaweedStorage renders an s3 BackupStorage as the operator's S3 sink,
+// writing under dir in its bucket. The sink reads the AWS_ACCESS_KEY_ID and
+// AWS_SECRET_ACCESS_KEY of the storage's Secret, and trusts the system store
+// only.
+func seaweedStorage(c *controller.Context, bs *backupv1alpha1.BackupStorage, dir string) (seaweedv1.BackupStorageSpec, error) {
+	s3, _, err := c.BackupStorageS3(bs)
+	if err != nil {
+		return seaweedv1.BackupStorageSpec{}, err
+	}
+	if s3.EffectiveImplementation() == s3class.ImplementationGCS {
+		return seaweedv1.BackupStorageSpec{}, fmt.Errorf("the weed S3 sink cannot use GCS: %w", controller.ErrImplementationUnsupported)
+	}
+	if _, err := c.BackupStorageTLS(bs, backupclasses.TLSSupport(backupClassName, s3class.ClassName)); err != nil {
+		return seaweedv1.BackupStorageSpec{}, err
+	}
+	if err := rejectSelfS3Endpoint(c, s3.EndpointURL); err != nil {
+		return seaweedv1.BackupStorageSpec{}, err
+	}
+	store := bs.Spec.Location.ObjectStore
+	if store == nil {
+		return seaweedv1.BackupStorageSpec{}, errors.New("location.objectStore is required")
+	}
+	ref := bs.Spec.Authentication.CredentialsSecretRef
+	if ref == nil {
+		return seaweedv1.BackupStorageSpec{}, errors.New("authentication.credentialsSecretRef is required")
+	}
+	return seaweedv1.BackupStorageSpec{
+		Type: seaweedv1.BackupStorageS3,
+		S3: &seaweedv1.S3BackupStore{
+			Bucket:    store.Bucket,
+			Region:    s3.Region,
+			Endpoint:  s3.EndpointURL,
+			Directory: "/" + strings.TrimPrefix(dir, "/"),
+			// The operator defaults an omitted forcePathStyle to true.
+			ForcePathStyle: pointer.To(s3.ForcePathStyle),
+		},
+		CredentialsSecret: pointer.To(ref.Name),
+	}, nil
+}
+
+// rejectSelfS3Endpoint fails when the storage's endpoint points at this
+// Instance's own S3 gateway. dataMirror copies filerPath "/" including the
+// backup bucket, so a self sink would mirror its own writes forever.
+func rejectSelfS3Endpoint(c *controller.Context, endpointURL string) error {
+	host, err := backupStorageEndpointHost(endpointURL)
+	if err != nil {
+		return fmt.Errorf("invalid endpointURL %q: %w", endpointURL, err)
 	}
 	if host == "" {
 		return nil
 	}
 	for _, self := range instanceSelfS3Hosts(c) {
 		if strings.EqualFold(host, self) {
-			return &controller.BackupConfigError{
-				Reason: "StorageIsSelf",
-				Message: fmt.Sprintf(
-					"BackupStorage %q: endpoint %q points at this Instance's S3 gateway; mirroring into the cluster being protected is not supported",
-					bs.Name, bs.Spec.S3.EndpointURL,
-				),
-			}
+			return fmt.Errorf("endpoint %q points at this Instance's S3 gateway; mirroring into the cluster being protected is not supported", endpointURL)
 		}
 	}
 	return nil
@@ -364,54 +427,6 @@ func instanceSelfS3Hosts(c *controller.Context) []string {
 		}
 	}
 	return hosts
-}
-
-// mapBackupStorageToSeaweed translates one OpenEverest BackupStorage into the
-// operator's BackupStorageSpec. Only type s3 is supported.
-func mapBackupStorageToSeaweed(bs *backupv1alpha1.BackupStorage) (*seaweedv1.BackupStorageSpec, error) {
-	if bs.Spec.Type != backupv1alpha1.BackupStorageTypeS3 || bs.Spec.S3 == nil {
-		return nil, &controller.BackupConfigError{
-			Reason:  "UnsupportedStorageType",
-			Message: fmt.Sprintf("BackupStorage %q: only type s3 is supported", bs.Name),
-		}
-	}
-
-	s3 := bs.Spec.S3
-	// OpenEverest defaults verifyTLS to true. The operator has no equivalent
-	// field; false would silently become verified TLS on the mirror/sink.
-	if s3.VerifyTLS != nil && !*s3.VerifyTLS {
-		return nil, &controller.BackupConfigError{
-			Reason:  "VerifyTLSUnsupported",
-			Message: fmt.Sprintf("BackupStorage %q: verifyTLS false is not supported (seaweedfs-operator has no insecure TLS option)", bs.Name),
-		}
-	}
-
-	credName := s3.CredentialsSecretRef.Name
-	if credName == "" {
-		return nil, &controller.BackupConfigError{
-			Reason:  "MissingCredentialsSecret",
-			Message: fmt.Sprintf("BackupStorage %q: credentialsSecretRef.name is required", bs.Name),
-		}
-	}
-
-	// OpenEverest defaults forcePathStyle to false; the operator defaults the
-	// omitted field to true. Always set the pointer so false stays false.
-	forcePath := false
-	if s3.ForcePathStyle != nil {
-		forcePath = *s3.ForcePathStyle
-	}
-
-	return &seaweedv1.BackupStorageSpec{
-		Type: seaweedv1.BackupStorageS3,
-		S3: &seaweedv1.S3BackupStore{
-			Bucket:         s3.Bucket,
-			Region:         s3.Region,
-			Endpoint:       s3.EndpointURL,
-			Directory:      defaultBackupDirectory,
-			ForcePathStyle: pointer.To(forcePath),
-		},
-		CredentialsSecret: pointer.To(credName),
-	}, nil
 }
 
 func validateSeaweedBackupStorageName(name string) error {
@@ -795,7 +810,7 @@ func (p *Provider) SyncRestore(c *controller.Context, restore *backupv1alpha1.Re
 
 	return controller.RestoreExecutionStatus{
 		State:   backupv1alpha1.RestoreStateFailed,
-		Message: "restore is not implemented for seaweedfs-filer-meta",
+		Message: "restore is not implemented for " + backupClassName,
 	}, nil
 }
 

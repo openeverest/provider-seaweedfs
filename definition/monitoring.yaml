@@ -1,0 +1,14 @@
+# Monitoring contract, published by `provider-sdk generate` as
+# Provider.spec.monitoring.
+#
+# componentTypes: what each component type from provider.yaml exposes (its
+# kind is declared in provider.yaml). The master, volume, filer and S3 gateway
+# serve Prometheus metrics themselves on port <component>-metrics (9327,
+# /metrics), which the provider always turns on, so no exporter is switched on
+# or off for a bound class. There are no operator-native integrations:
+# monitoring extensions scrape the endpoints the provider publishes in
+# Instance.status.monitoring.sources.
+
+componentTypes:
+  seaweedfs:
+    metrics: Native

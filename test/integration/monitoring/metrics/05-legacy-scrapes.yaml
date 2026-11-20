@@ -1,0 +1,23 @@
+# The scrape objects a release before the monitoring contract created for
+# spec.topology.parameters.metrics. The provider deletes them.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: metrics-seaweedfs-prometheus
+spec:
+  selector:
+    matchLabels:
+      core.openeverest.io/instance: metrics-seaweedfs
+  podMetricsEndpoints:
+    - port: master-metrics
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMPodScrape
+metadata:
+  name: metrics-seaweedfs-victoriametrics
+spec:
+  selector:
+    matchLabels:
+      core.openeverest.io/instance: metrics-seaweedfs
+  podMetricsEndpoints:
+    - port: master-metrics
