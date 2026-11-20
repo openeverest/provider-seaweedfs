@@ -43,7 +43,7 @@ spec:
             content: kubectl apply -n $NAMESPACE -f 10-create-cluster.yaml
             check:
               ($error == null): true
-              (contains($stderr, 'spec.topology.parameters.metrics: deprecated and ignored')): true
+              '(contains($stderr, ''spec.topology.parameters.metrics: deprecated and ignored''))': true
         - assert:
             file: 10-assert.yaml
         - error:
