@@ -26,8 +26,11 @@ kind: BackupClass
 metadata:
   name: seaweedfs-filer-meta
 spec:
-  executionMode: ProviderManaged
-  supportedProviders:
-    - provider-seaweedfs
+  backupStorageClasses:
+    - name: s3
+      authModes:
+        - AccessKey
   providerManaged:
+    providerRef:
+      name: provider-seaweedfs
     supportsPITR: false
