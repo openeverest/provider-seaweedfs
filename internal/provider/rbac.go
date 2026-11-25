@@ -77,6 +77,10 @@ package provider
 // PodDisruptionBudgets the provider creates per component:
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 
+// cert-manager Certificate for the S3 gateway when spec.parameters.tls.issuer
+// signs it:
+// +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
+
 // Storage classes named on master, volume, or filer. list resolves the default
 // class when storage.size grows and no class is set:
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list

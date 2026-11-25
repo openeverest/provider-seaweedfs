@@ -1,0 +1,28 @@
+# The shape provider versions up to 0.3 read: rejected with a migration hint.
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: example
+spec:
+  providerRef:
+    name: provider-seaweedfs
+  topology:
+    type: standalone
+    parameters:
+      tls:
+        enabled: true
+        issuerRef:
+          name: ""
+  components:
+    master:
+      replicas: 1
+    volume:
+      replicas: 1
+      storage:
+        size: 10Gi
+    filer:
+      replicas: 1
+      storage:
+        size: 1Gi
+    s3:
+      replicas: 1

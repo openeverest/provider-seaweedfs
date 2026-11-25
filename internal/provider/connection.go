@@ -28,6 +28,7 @@ import (
 	"github.com/openeverest/openeverest/v2/provider-runtime/controller"
 	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
 
+	"github.com/openeverest/provider-seaweedfs/definition"
 	"github.com/openeverest/provider-seaweedfs/definition/components"
 	"github.com/openeverest/provider-seaweedfs/internal/common"
 )
@@ -64,6 +65,7 @@ func buildConnectionDetailsFromService(
 	svc *corev1.Service,
 	sw *seaweedv1.Seaweed,
 	s3Params components.S3CustomSpec,
+	tlsParams definition.TLSParameters,
 ) (controller.ConnectionDetails, error) {
 	host := fmt.Sprintf("%s.%s.svc", svc.Name, svc.Namespace)
 	port, https := serviceS3Listen(svc)
@@ -72,7 +74,7 @@ func buildConnectionDetailsFromService(
 	verifyTLS := "false"
 	if https {
 		scheme = "https"
-		verifyTLS = strconv.FormatBool(s3VerifyTLS(s3Params))
+		verifyTLS = strconv.FormatBool(s3VerifyTLS(tlsParams))
 	}
 	endpoint := s3URL(scheme, host, port)
 
@@ -94,11 +96,21 @@ func buildConnectionDetailsFromService(
 		if strings.HasPrefix(externalURL, "https://") {
 			// Ingress TLS uses its own verify hint. LB/NodePort hit the gateway
 			// cert (self-signed by default), so reuse the in-cluster hint.
-			verify := s3VerifyTLS(s3Params)
+			verify := s3VerifyTLS(tlsParams)
 			if _, fromIngress := s3IngressExternalURL(sw); fromIngress {
 				verify = externalHTTPSVerifyTLS(s3Params)
 			}
 			props["externalVerifyTLS"] = strconv.FormatBool(verify)
+		}
+	}
+	if https && sw != nil && sw.Spec.S3 != nil && sw.Spec.S3.TLSSecret != nil {
+		// Clients verify the gateway against it, e.g. aws --ca-bundle.
+		ca, err := s3ClientCA(c, tlsParams, sw.Spec.S3.TLSSecret.Name)
+		if err != nil {
+			return controller.ConnectionDetails{}, err
+		}
+		if len(ca) > 0 {
+			props[tlsKeyCA] = string(ca)
 		}
 	}
 	addAdminConnectionDetails(c, sw, props)
@@ -113,14 +125,11 @@ func buildConnectionDetailsFromService(
 	}, nil
 }
 
-// s3VerifyTLS is the client hint for the gateway's own HTTPS listener.
-// The provider-created certificate is self-signed, so the default is false.
-// A user-supplied secretName defaults to true.
-func s3VerifyTLS(spec components.S3CustomSpec) bool {
-	if spec.HTTPS != nil && spec.HTTPS.VerifyTLS != nil {
-		return *spec.HTTPS.VerifyTLS
-	}
-	return spec.HTTPS != nil && spec.HTTPS.SecretName != ""
+// s3VerifyTLS is the client hint for the gateway's own HTTPS listener: true
+// for a certificate from certificateSecretName or the issuer, which clients
+// are expected to trust. The provider's CA is only in ca.crt, so false.
+func s3VerifyTLS(params definition.TLSParameters) bool {
+	return s3CertificateSource(params) != sourceManaged
 }
 
 func externalHTTPSVerifyTLS(s3Params components.S3CustomSpec) bool {

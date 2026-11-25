@@ -126,6 +126,17 @@ type: kubernetes.io/tls
 data:
   (starts_with(base64_decode("tls.crt"), '-----BEGIN CERTIFICATE-----')): true
   (starts_with(base64_decode("tls.key"), '-----BEGIN')): true
+  # The leaf is signed by the provider CA below; clients trust ca.crt.
+  (starts_with(base64_decode("ca.crt"), '-----BEGIN CERTIFICATE-----')): true
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: test-seaweedfs-s3-ca
+  (ownerReferences[?kind == 'Instance' && name == 'test-seaweedfs'] | length(@)): 1
+type: kubernetes.io/tls
+data:
+  (starts_with(base64_decode("tls.crt"), '-----BEGIN CERTIFICATE-----')): true
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget

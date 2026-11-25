@@ -39,6 +39,7 @@ import (
 
 	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
 
+	"github.com/openeverest/provider-seaweedfs/definition"
 	"github.com/openeverest/provider-seaweedfs/definition/components"
 	"github.com/openeverest/provider-seaweedfs/internal/common"
 )
@@ -481,27 +482,27 @@ func TestValidateFiler(t *testing.T) {
 }
 
 func TestValidateS3Parameters(t *testing.T) {
-	require.NoError(t, validateS3Parameters(components.S3CustomSpec{}))
+	require.NoError(t, validateS3Parameters(components.S3CustomSpec{}, true))
 	require.NoError(t, validateS3Parameters(components.S3CustomSpec{
 		Port:       pointer.ToInt32(8333),
 		DomainName: pointer.To("s3.example.com"),
-	}))
+	}, true))
 	require.NoError(t, validateS3Parameters(components.S3CustomSpec{
 		DomainName: pointer.To(""),
-	}))
+	}, true))
 	require.NoError(t, validateS3Parameters(components.S3CustomSpec{
 		DomainName: pointer.To("s3.example.com,cdn.example.com"),
-	}))
+	}, true))
 
 	err := validateS3Parameters(components.S3CustomSpec{
 		DomainName: pointer.To("x;id"),
-	})
+	}, true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "domainName")
 
 	err = validateS3Parameters(components.S3CustomSpec{
 		DomainName: pointer.To("s3.example.com,$(id)"),
-	})
+	}, true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "domainName")
 
@@ -511,42 +512,28 @@ func TestValidateS3Parameters(t *testing.T) {
 			Host:    "s3.example.com",
 			TLS:     &components.S3IngressTLS{SecretName: "s3-tls"},
 		},
-	}))
+	}, true))
 	// UI toggleable group sends host without enabled.
 	require.NoError(t, validateS3Parameters(components.S3CustomSpec{
 		Ingress: &components.S3IngressSpec{Host: "s3.example.com"},
-	}))
+	}, true))
 	// Explicit false disables Ingress even with a host.
 	require.NoError(t, validateS3Parameters(components.S3CustomSpec{
 		Ingress: &components.S3IngressSpec{Enabled: pointer.ToBool(false), Host: "s3.example.com"},
-	}))
+	}, true))
 	require.NoError(t, validateS3Parameters(components.S3CustomSpec{
-		Port:  pointer.ToInt32(defaultS3HTTPSPort),
-		HTTPS: &components.S3HTTPSSpec{Enabled: pointer.ToBool(false)},
-	}))
+		Port: pointer.ToInt32(defaultS3HTTPSPort),
+	}, false))
 
 	err = validateS3Parameters(components.S3CustomSpec{
 		Port: pointer.ToInt32(defaultS3HTTPSPort),
-	})
+	}, true)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), fmt.Sprintf("S3 port cannot be %d while HTTPS is on", defaultS3HTTPSPort))
-
-	err = validateS3Parameters(components.S3CustomSpec{
-		Port:  pointer.ToInt32(defaultS3HTTPSPort),
-		HTTPS: &components.S3HTTPSSpec{Enabled: pointer.ToBool(true)},
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), fmt.Sprintf("S3 port cannot be %d while HTTPS is on", defaultS3HTTPSPort))
-
-	err = validateS3Parameters(components.S3CustomSpec{
-		HTTPS: &components.S3HTTPSSpec{SecretName: "Not_A_Name"},
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "https.secretName")
+	assert.Contains(t, err.Error(), fmt.Sprintf("S3 port cannot be %d while TLS is on", defaultS3HTTPSPort))
 
 	err = validateS3Parameters(components.S3CustomSpec{
 		Ingress: &components.S3IngressSpec{Enabled: pointer.ToBool(true)},
-	})
+	}, true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ingress.host is required")
 
@@ -556,14 +543,14 @@ func TestValidateS3Parameters(t *testing.T) {
 			Host:    "s3.example.com",
 			TLS:     &components.S3IngressTLS{},
 		},
-	})
+	}, true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ingress.tls.secretName is required")
 }
 
 func TestBuildS3Spec(t *testing.T) {
 	t.Run("replicas only", func(t *testing.T) {
-		spec := buildS3Spec(corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(2)}, components.S3CustomSpec{}, "")
+		spec := buildS3Spec(corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(2)}, components.S3CustomSpec{}, "", definition.TLSModePrefer)
 		assert.Equal(t, int32(2), spec.Replicas)
 		assert.Nil(t, spec.Port)
 		assert.Nil(t, spec.DomainName)
@@ -576,7 +563,7 @@ func TestBuildS3Spec(t *testing.T) {
 		spec := buildS3Spec(corev1alpha1.ComponentSpec{
 			Replicas: pointer.ToInt32(1),
 			Service:  &corev1alpha1.Service{ServiceType: corev1.ServiceTypeLoadBalancer},
-		}, components.S3CustomSpec{}, "")
+		}, components.S3CustomSpec{}, "", definition.TLSModePrefer)
 		require.NotNil(t, spec.Service)
 		assert.Equal(t, corev1.ServiceTypeLoadBalancer, spec.Service.Type)
 		assert.Nil(t, spec.Service.Annotations)
@@ -590,6 +577,7 @@ func TestBuildS3Spec(t *testing.T) {
 				DomainName: pointer.To("s3.example.com"),
 			},
 			"",
+			definition.TLSModePrefer,
 		)
 		require.NotNil(t, spec.Port)
 		assert.Equal(t, int32(9000), *spec.Port)
@@ -608,7 +596,7 @@ func TestBuildS3Spec(t *testing.T) {
 					corev1.ResourceMemory: resource.MustParse("512Mi"),
 				},
 			},
-		}, components.S3CustomSpec{}, "")
+		}, components.S3CustomSpec{}, "", definition.TLSModePrefer)
 		assert.Equal(t, resource.MustParse("100m"), spec.Requests[corev1.ResourceCPU])
 		assert.Equal(t, resource.MustParse("512Mi"), spec.Limits[corev1.ResourceMemory])
 	})
@@ -618,6 +606,7 @@ func TestBuildS3Spec(t *testing.T) {
 			corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(1)},
 			components.S3CustomSpec{},
 			"sw-s3-https",
+			definition.TLSModePrefer,
 		)
 		require.NotNil(t, spec.HTTPSPort)
 		assert.Equal(t, defaultS3HTTPSPort, *spec.HTTPSPort)
@@ -633,10 +622,33 @@ func TestBuildS3Spec(t *testing.T) {
 				Ingress: &components.S3IngressSpec{Enabled: pointer.ToBool(true), Host: "s3.example.com"},
 			},
 			"sw-s3-https",
+			definition.TLSModePrefer,
 		)
 		require.NotNil(t, spec.HTTPSPort)
 		assert.False(t, spec.HTTPSOnly)
 		require.NotNil(t, spec.Ingress)
+	})
+
+	t.Run("requireTLS is HTTPS only", func(t *testing.T) {
+		spec := buildS3Spec(
+			corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(1)},
+			components.S3CustomSpec{},
+			"sw-s3-https",
+			definition.TLSModeRequire,
+		)
+		assert.True(t, spec.HTTPSOnly)
+	})
+
+	t.Run("disabled serves HTTP only", func(t *testing.T) {
+		spec := buildS3Spec(
+			corev1alpha1.ComponentSpec{Replicas: pointer.ToInt32(1)},
+			components.S3CustomSpec{},
+			"",
+			definition.TLSModeDisabled,
+		)
+		assert.Nil(t, spec.HTTPSPort)
+		assert.Nil(t, spec.TLSSecret)
+		assert.False(t, spec.HTTPSOnly)
 	})
 }
 
@@ -922,7 +934,7 @@ func TestValidate(t *testing.T) {
 			expectErr: "spec.components[s3].parameters.port",
 		},
 		{
-			name: "s3 port collides with HTTPS while HTTPS is on",
+			name: "s3 port collides with HTTPS while TLS is on",
 			components: func() map[string]corev1alpha1.ComponentSpec {
 				c := validComponents()
 				s3 := c[common.ComponentS3]
@@ -930,7 +942,18 @@ func TestValidate(t *testing.T) {
 				c[common.ComponentS3] = s3
 				return c
 			}(),
-			expectErr: fmt.Sprintf("S3 port cannot be %d while HTTPS is on", defaultS3HTTPSPort),
+			expectErr: fmt.Sprintf("S3 port cannot be %d while TLS is on", defaultS3HTTPSPort),
+		},
+		{
+			name: "legacy s3 https is rejected",
+			components: func() map[string]corev1alpha1.ComponentSpec {
+				c := validComponents()
+				s3 := c[common.ComponentS3]
+				s3.Parameters = &runtime.RawExtension{Raw: []byte(`{"https":{"enabled":false}}`)}
+				c[common.ComponentS3] = s3
+				return c
+			}(),
+			expectErr: "spec.components[s3].parameters.https: Unsupported value",
 		},
 		{
 			name: "invalid s3 domainName",
@@ -973,14 +996,14 @@ func TestValidate(t *testing.T) {
 			expectErr: "spec.topology.parameters.volumeServerDiskCount",
 		},
 		{
-			name:       "invalid tls issuerRef",
+			name:       "legacy topology tls is rejected",
 			components: validComponents(),
 			topology: &corev1alpha1.TopologySpec{
 				Type: "standalone",
 				Parameters: &runtime.RawExtension{Raw: []byte(
 					`{"tls":{"enabled":true,"issuerRef":{"kind":"Issuer"}}}`)},
 			},
-			expectErr: "spec.topology.parameters.tls.issuerRef.name: Required value",
+			expectErr: "spec.topology.parameters.tls: Unsupported value",
 		},
 		{
 			name: "single volume server without replication uses 000",
@@ -1326,10 +1349,13 @@ func TestSyncPassesTLSAndSecurityConfig(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "sw-tls", Namespace: "default"},
 		Spec: corev1alpha1.InstanceSpec{
 			Components: components,
+			Parameters: &runtime.RawExtension{Raw: []byte(`{"tls":{
+				"certificateSecretName":"my-s3-tls","internalTLS":true,
+				"issuer":{"name":"my-ca","kind":"ClusterIssuer"}
+			}}`)},
 			Topology: &corev1alpha1.TopologySpec{
 				Type: "standalone",
 				Parameters: &runtime.RawExtension{Raw: []byte(`{
-					"tls":{"enabled":true,"issuerRef":{"name":"my-ca","kind":"ClusterIssuer"}},
 					"securityConfig":{"jwtSigning":{"volumeWrite":true,"filerWrite":true}}
 				}`)},
 			},
@@ -1356,6 +1382,8 @@ func TestSyncPassesTLSAndSecurityConfig(t *testing.T) {
 	require.NotNil(t, sw.Spec.TLS.IssuerRef)
 	assert.Equal(t, "my-ca", sw.Spec.TLS.IssuerRef.Name)
 	assert.Equal(t, "ClusterIssuer", sw.Spec.TLS.IssuerRef.Kind)
+	require.NotNil(t, sw.Spec.S3.TLSSecret)
+	assert.Equal(t, "my-s3-tls", sw.Spec.S3.TLSSecret.Name)
 
 	require.NotNil(t, sw.Spec.SecurityConfig)
 	require.NotNil(t, sw.Spec.SecurityConfig.JWTSigning)
@@ -1484,6 +1512,9 @@ func TestSync(t *testing.T) {
 		assert.Equal(t, corev1.SecretTypeTLS, sec.Type)
 		assert.NotEmpty(t, sec.Data[corev1.TLSCertKey])
 		assert.NotEmpty(t, sec.Data[corev1.TLSPrivateKeyKey])
+		assert.NotEmpty(t, sec.Data["ca.crt"])
+		assert.NotContains(t, sw.Spec.S3.Annotations, s3TLSNamesAnnotation)
+		assert.NotContains(t, sw.Annotations, tlsNamesAnnotation)
 		assert.Nil(t, sw.Spec.Admin)
 		assert.ElementsMatch(t,
 			[]string{common.ComponentMaster, common.ComponentVolume, common.ComponentFiler, common.ComponentS3},
@@ -1515,12 +1546,9 @@ func TestSync(t *testing.T) {
 		assert.Equal(t, "000", *sw.Spec.Master.DefaultReplication)
 	})
 
-	t.Run("https disabled leaves the gateway on HTTP", func(t *testing.T) {
-		comps := validComponents()
-		s3 := comps[common.ComponentS3]
-		s3.Parameters = &runtime.RawExtension{Raw: []byte(`{"https":{"enabled":false}}`)}
-		comps[common.ComponentS3] = s3
-		instance := newSyncInstance(comps)
+	t.Run("disabled TLS leaves the gateway on HTTP", func(t *testing.T) {
+		instance := newSyncInstance(validComponents())
+		instance.Spec.Parameters = &runtime.RawExtension{Raw: []byte(`{"tls":{"mode":"disabled"}}`)}
 		_, sw := syncSeaweed(t, newSyncClient(t, instance), instance)
 		assert.Nil(t, sw.Spec.S3.HTTPSPort)
 		assert.Nil(t, sw.Spec.S3.TLSSecret)
@@ -1537,6 +1565,35 @@ func TestSync(t *testing.T) {
 		syncSeaweed(t, cl, instance)
 		require.NoError(t, ctx.Get(sec, s3HTTPSSecretName(instance.Name)))
 		assert.Equal(t, first, sec.Data[corev1.TLSCertKey])
+	})
+
+	t.Run("additionalNames go into the certificate and a name change waits for maintenance", func(t *testing.T) {
+		instance := newSyncInstance(validComponents())
+		instance.Spec.Parameters = &runtime.RawExtension{Raw: []byte(`{"tls":{"additionalNames":["s3.example.com"]}}`)}
+		cl := newSyncClient(t, instance)
+		ctx, sw := syncSeaweed(t, cl, instance)
+		assert.Equal(t, "s3.example.com", sw.Annotations[tlsNamesAnnotation])
+		assert.Equal(t, namesHash([]string{"s3.example.com"}), sw.Spec.S3.Annotations[s3TLSNamesAnnotation])
+		assert.NotEmpty(t, sw.Spec.S3.Annotations[s3ConfigChecksumAnnotation])
+		sec := &corev1.Secret{}
+		require.NoError(t, ctx.Get(sec, s3HTTPSSecretName(instance.Name)))
+		assertSignedFor(t, sec, "s3.example.com")
+		first := append([]byte(nil), sec.Data[corev1.TLSCertKey]...)
+
+		instance.Spec.Parameters = &runtime.RawExtension{Raw: []byte(`{"tls":{"additionalNames":["new.example.com"]}}`)}
+		ctx, sw = syncSeaweed(t, cl, instance)
+		require.Len(t, ctx.GetPendingMaintenance(), 1)
+		assert.Equal(t, "s3.example.com", sw.Annotations[tlsNamesAnnotation])
+		require.NoError(t, ctx.Get(sec, s3HTTPSSecretName(instance.Name)))
+		assert.Equal(t, first, sec.Data[corev1.TLSCertKey], "not reissued before approval")
+
+		instance.Spec.Maintenance = &corev1alpha1.MaintenanceSpec{Approved: ctx.GetPendingMaintenance()[0].ApprovalToken}
+		ctx, sw = syncSeaweed(t, cl, instance)
+		assert.Empty(t, ctx.GetPendingMaintenance())
+		assert.Equal(t, "new.example.com", sw.Annotations[tlsNamesAnnotation])
+		assert.Equal(t, namesHash([]string{"new.example.com"}), sw.Spec.S3.Annotations[s3TLSNamesAnnotation])
+		require.NoError(t, ctx.Get(sec, s3HTTPSSecretName(instance.Name)))
+		assertSignedFor(t, sec, "new.example.com")
 	})
 
 	t.Run("one volume server defaults replication to 000", func(t *testing.T) {

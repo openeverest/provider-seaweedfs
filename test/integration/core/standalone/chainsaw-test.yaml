@@ -168,6 +168,23 @@ spec:
         - assert:
             file: 60-assert.yaml
 
+    - name: reject-tls-source-change
+      try:
+        - script:
+            content: |
+              kubectl patch instance/test-seaweedfs -n $NAMESPACE --type merge \
+                -p '{"spec":{"parameters":{"tls":{"issuer":{"name":"other-ca"}}}}}'
+            check:
+              ($error != null): true
+              (contains($stderr, 'spec.parameters.tls.issuer')): true
+        - script:
+            content: |
+              kubectl patch instance/test-seaweedfs -n $NAMESPACE --type merge \
+                -p '{"spec":{"parameters":{"tls":{"mode":"disabled"}}}}'
+            check:
+              ($error != null): true
+              (contains($stderr, 'spec.parameters.tls.mode')): true
+
     - name: tls-secret-issued
       try:
         - apply:

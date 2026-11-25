@@ -31,6 +31,7 @@ import (
 	"github.com/openeverest/openeverest/v2/provider-runtime/controller"
 	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
 
+	"github.com/openeverest/provider-seaweedfs/definition"
 	"github.com/openeverest/provider-seaweedfs/definition/components"
 	"github.com/openeverest/provider-seaweedfs/internal/common"
 )
@@ -59,7 +60,7 @@ func TestBuildConnectionDetailsFromService(t *testing.T) {
 			},
 		}
 
-		details, err := buildConnectionDetailsFromService(ctx, svc, nil, emptyParams)
+		details, err := buildConnectionDetailsFromService(ctx, svc, nil, emptyParams, definition.TLSParameters{})
 		require.NoError(t, err)
 		assert.Equal(t, "s3", details.Type)
 		assert.Equal(t, common.ProviderName, details.Provider)
@@ -85,7 +86,7 @@ func TestBuildConnectionDetailsFromService(t *testing.T) {
 			},
 		}
 
-		details, err := buildConnectionDetailsFromService(ctx, svc, nil, emptyParams)
+		details, err := buildConnectionDetailsFromService(ctx, svc, nil, emptyParams, definition.TLSParameters{})
 		require.NoError(t, err)
 		assert.Equal(t, "8334", details.Port)
 		assert.Equal(t, "https://sw-s3.ns.svc:8334", details.URI)
@@ -100,12 +101,41 @@ func TestBuildConnectionDetailsFromService(t *testing.T) {
 				Ports: []corev1.ServicePort{{Name: "s3-https", Port: 8334}},
 			},
 		}
-		params := components.S3CustomSpec{HTTPS: &components.S3HTTPSSpec{SecretName: "my-s3-tls"}}
+		for _, tls := range []definition.TLSParameters{
+			{CertificateSecretName: "my-s3-tls"},
+			{Issuer: &definition.IssuerReference{Name: "corp"}},
+		} {
+			details, err := buildConnectionDetailsFromService(ctx, svc, nil, emptyParams, tls)
+			require.NoError(t, err)
+			assert.Equal(t, "https://sw-s3.ns.svc:8334", details.AdditionalProperties["endpointURL"])
+			assert.Equal(t, "true", details.AdditionalProperties["verifyTLS"])
+		}
+	})
 
-		details, err := buildConnectionDetailsFromService(ctx, svc, nil, params)
+	t.Run("ca.crt of the served certificate is published", func(t *testing.T) {
+		svc := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "sw-s3", Namespace: "ns"},
+			Spec: corev1.ServiceSpec{
+				Ports: []corev1.ServicePort{{Name: "s3-https", Port: 8334}},
+			},
+		}
+		sec := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "sw-s3-https", Namespace: "ns"},
+			Data:       map[string][]byte{"tls.crt": []byte("leaf"), "tls.key": []byte("key"), "ca.crt": []byte("CA PEM")},
+		}
+		sw := &seaweedv1.Seaweed{Spec: seaweedv1.SeaweedSpec{S3: &seaweedv1.S3GatewaySpec{
+			TLSSecret: &corev1.LocalObjectReference{Name: "sw-s3-https"},
+		}}}
+
+		details, err := buildConnectionDetailsFromService(newCtx(sec), svc, sw, emptyParams, definition.TLSParameters{})
 		require.NoError(t, err)
-		assert.Equal(t, "https://sw-s3.ns.svc:8334", details.AdditionalProperties["endpointURL"])
-		assert.Equal(t, "true", details.AdditionalProperties["verifyTLS"])
+		assert.Equal(t, "CA PEM", details.AdditionalProperties["ca.crt"])
+		assert.Equal(t, "false", details.AdditionalProperties["verifyTLS"])
+
+		svc.Spec.Ports = []corev1.ServicePort{{Name: "s3-http", Port: 8333}}
+		details, err = buildConnectionDetailsFromService(newCtx(sec), svc, sw, emptyParams, definition.TLSParameters{})
+		require.NoError(t, err)
+		assert.NotContains(t, details.AdditionalProperties, "ca.crt", "no CA for a plain HTTP endpoint")
 	})
 
 	t.Run("LoadBalancer with hostname ingress", func(t *testing.T) {
@@ -122,7 +152,7 @@ func TestBuildConnectionDetailsFromService(t *testing.T) {
 			},
 		}
 
-		details, err := buildConnectionDetailsFromService(ctx, svc, nil, emptyParams)
+		details, err := buildConnectionDetailsFromService(ctx, svc, nil, emptyParams, definition.TLSParameters{})
 		require.NoError(t, err)
 		assert.Equal(t, "sw-s3.ns.svc", details.Host)
 		assert.Equal(t, "http://sw-s3.ns.svc:8333", details.AdditionalProperties["endpointURL"])
@@ -143,7 +173,7 @@ func TestBuildConnectionDetailsFromService(t *testing.T) {
 			},
 		}
 
-		details, err := buildConnectionDetailsFromService(ctx, svc, nil, emptyParams)
+		details, err := buildConnectionDetailsFromService(ctx, svc, nil, emptyParams, definition.TLSParameters{})
 		require.NoError(t, err)
 		assert.Equal(t, "http://203.0.113.10:8333", details.AdditionalProperties["externalEndpointURL"])
 	})
@@ -162,7 +192,7 @@ func TestBuildConnectionDetailsFromService(t *testing.T) {
 			},
 		}
 
-		details, err := buildConnectionDetailsFromService(ctx, svc, nil, emptyParams)
+		details, err := buildConnectionDetailsFromService(ctx, svc, nil, emptyParams, definition.TLSParameters{})
 		require.NoError(t, err)
 		assert.Equal(t, "https://203.0.113.10:8334", details.AdditionalProperties["externalEndpointURL"])
 		assert.Equal(t, "false", details.AdditionalProperties["verifyTLS"])
@@ -183,7 +213,7 @@ func TestBuildConnectionDetailsFromService(t *testing.T) {
 			},
 		}
 
-		details, err := buildConnectionDetailsFromService(ctx, svc, nil, emptyParams)
+		details, err := buildConnectionDetailsFromService(ctx, svc, nil, emptyParams, definition.TLSParameters{})
 		require.NoError(t, err)
 		assert.Equal(t, "http://[2001:db8::10]:8333", details.AdditionalProperties["externalEndpointURL"])
 	})
@@ -220,7 +250,7 @@ func TestBuildConnectionDetailsFromService(t *testing.T) {
 			},
 		}
 
-		details, err := buildConnectionDetailsFromService(ctx, svc, sw, params)
+		details, err := buildConnectionDetailsFromService(ctx, svc, sw, params, definition.TLSParameters{})
 		require.NoError(t, err)
 		assert.Equal(t, "http://sw-s3.ns.svc:8333", details.URI)
 		assert.Equal(t, "false", details.AdditionalProperties["verifyTLS"])
@@ -259,7 +289,7 @@ func TestBuildConnectionDetailsFromService(t *testing.T) {
 			},
 		}
 
-		details, err := buildConnectionDetailsFromService(ctx, svc, sw, params)
+		details, err := buildConnectionDetailsFromService(ctx, svc, sw, params, definition.TLSParameters{})
 		require.NoError(t, err)
 		assert.Equal(t, "https://s3.example.com", details.AdditionalProperties["externalEndpointURL"])
 		assert.Equal(t, "false", details.AdditionalProperties["externalVerifyTLS"])
@@ -298,7 +328,7 @@ func TestBuildConnectionDetailsFromService(t *testing.T) {
 			s3Pod("sw-s3-b", "10.0.0.2", true),
 		)
 
-		details, err := buildConnectionDetailsFromService(ctx, nodePortSvc, nil, emptyParams)
+		details, err := buildConnectionDetailsFromService(ctx, nodePortSvc, nil, emptyParams, definition.TLSParameters{})
 		require.NoError(t, err)
 		assert.Equal(t, "sw-s3.ns.svc", details.Host)
 		assert.Equal(t, "http://10.0.0.2:30080", details.AdditionalProperties["externalEndpointURL"])
@@ -307,7 +337,7 @@ func TestBuildConnectionDetailsFromService(t *testing.T) {
 	t.Run("NodePort without ready S3 pod omits external endpoint", func(t *testing.T) {
 		ctx := newCtx(s3Pod("sw-s3-a", "10.0.0.1", false))
 
-		details, err := buildConnectionDetailsFromService(ctx, nodePortSvc, nil, emptyParams)
+		details, err := buildConnectionDetailsFromService(ctx, nodePortSvc, nil, emptyParams, definition.TLSParameters{})
 		require.NoError(t, err)
 		assert.NotContains(t, details.AdditionalProperties, "externalEndpointURL")
 	})

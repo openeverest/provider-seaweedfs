@@ -40,6 +40,8 @@ data:
   (base64_decode(region)): us-east-1
   (base64_decode(forcePathStyle)): "true"
   (base64_decode(verifyTLS)): "false"
+  # The provider CA that signs the gateway certificate.
+  (starts_with(base64_decode("ca.crt"), '-----BEGIN CERTIFICATE-----')): true
   # Admin S3 credentials from test-seaweedfs-s3-config (checked in chainsaw-test.yaml).
   (length(base64_decode(username))): 20
   (length(base64_decode(password))): 40

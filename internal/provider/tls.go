@@ -16,7 +16,7 @@ package provider
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -24,28 +24,53 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	corev1alpha1 "github.com/openeverest/openeverest/v2/api/core/v1alpha1"
 	"github.com/openeverest/openeverest/v2/provider-runtime/controller"
 	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
 
+	"github.com/openeverest/provider-seaweedfs/definition"
 	"github.com/openeverest/provider-seaweedfs/definition/topologies/standalone"
 )
 
-// TLS server secret suffix used by seaweedfs-operator (see TLSServerSecretName).
-const tlsServerSecretSuffix = "-server-tls"
+const (
+	// TLS server secret suffix used by seaweedfs-operator (see TLSServerSecretName).
+	tlsServerSecretSuffix = "-server-tls"
+
+	// tlsKeyCA is the CA certificate key in certificate Secrets and in the
+	// connection Secret.
+	tlsKeyCA = "ca.crt"
+
+	certManagerGroup = "cert-manager.io"
+)
+
+// certificateSource is where the S3 server certificate comes from.
+type certificateSource int
+
+const (
+	// sourceManaged is a CA this provider creates for the instance.
+	sourceManaged certificateSource = iota
+	// sourceSecret is the user's certificateSecretName.
+	sourceSecret
+	// sourceIssuer is a cert-manager Certificate signed by the user's issuer.
+	sourceIssuer
+)
 
 func tlsServerSecretName(instanceName string) string {
 	return instanceName + tlsServerSecretSuffix
 }
 
-// tlsSecretToInstance maps the operator/cert-manager server TLS Secret to its
-// Instance. The Secret is owned by a cert-manager Certificate (not Seaweed), so
-// we match by the well-known "<name>-server-tls" naming convention.
+// tlsSecretToInstance maps a certificate Secret to its Instance by name: the
+// operator's server Secret (<name>-server-tls) and the S3 server certificate
+// (<name>-s3-https). cert-manager owns them, not the Instance or Seaweed.
 func tlsSecretToInstance(_ context.Context, obj client.Object) []reconcile.Request {
 	name := obj.GetName()
-	if !strings.HasSuffix(name, tlsServerSecretSuffix) {
-		return nil
+	var instanceName string
+	switch {
+	case strings.HasSuffix(name, tlsServerSecretSuffix):
+		instanceName = strings.TrimSuffix(name, tlsServerSecretSuffix)
+	case strings.HasSuffix(name, s3HTTPSSecretSuffix):
+		instanceName = strings.TrimSuffix(name, s3HTTPSSecretSuffix)
 	}
-	instanceName := strings.TrimSuffix(name, tlsServerSecretSuffix)
 	if instanceName == "" {
 		return nil
 	}
@@ -54,16 +79,92 @@ func tlsSecretToInstance(_ context.Context, obj client.Object) []reconcile.Reque
 	}}
 }
 
-func buildTLSSpec(topo standalone.StandaloneTopologyConfig) *seaweedv1.TLSSpec {
-	if topo.TLS == nil || !topo.TLS.Enabled {
+func isTLSSecretName(name string) bool {
+	return strings.HasSuffix(name, tlsServerSecretSuffix) || strings.HasSuffix(name, s3HTTPSSecretSuffix)
+}
+
+// tlsParameters returns spec.parameters.tls of the reconciled Instance.
+// Validate rejects parameters that don't decode.
+func tlsParameters(c *controller.Context) definition.TLSParameters {
+	params, _ := decodeTLSParameters(c.Instance())
+	return params
+}
+
+func decodeTLSParameters(instance *corev1alpha1.Instance) (definition.TLSParameters, error) {
+	if instance == nil || instance.Spec.Parameters == nil || len(instance.Spec.Parameters.Raw) == 0 {
+		return definition.TLSParameters{}, nil
+	}
+	var params definition.Parameters
+	if err := json.Unmarshal(instance.Spec.Parameters.Raw, &params); err != nil {
+		return definition.TLSParameters{}, err
+	}
+	if params.TLS == nil {
+		return definition.TLSParameters{}, nil
+	}
+	// The UI can send an empty issuer group when its fields are left empty.
+	if ref := params.TLS.Issuer; ref != nil && *ref == (definition.IssuerReference{}) {
+		params.TLS.Issuer = nil
+	}
+	return *params.TLS, nil
+}
+
+func tlsMode(params definition.TLSParameters) definition.TLSMode {
+	if params.Mode == "" {
+		return definition.TLSModePrefer
+	}
+	return params.Mode
+}
+
+// s3TLSEnabled reports whether the S3 gateway serves HTTPS.
+func s3TLSEnabled(params definition.TLSParameters) bool {
+	return tlsMode(params) != definition.TLSModeDisabled
+}
+
+func s3CertificateSource(params definition.TLSParameters) certificateSource {
+	switch {
+	case params.CertificateSecretName != "":
+		return sourceSecret
+	case params.Issuer != nil:
+		return sourceIssuer
+	default:
+		return sourceManaged
+	}
+}
+
+// issuerSigns reports whether the issuer signs any certificate: the S3 one
+// or the component ones.
+func issuerSigns(params definition.TLSParameters) bool {
+	if params.Issuer == nil {
+		return false
+	}
+	return params.InternalTLS || (s3TLSEnabled(params) && s3CertificateSource(params) == sourceIssuer)
+}
+
+func issuerKind(ref definition.IssuerReference) string {
+	if ref.Kind == "" {
+		return string(definition.IssuerKindIssuer)
+	}
+	return string(ref.Kind)
+}
+
+func issuerGroup(ref definition.IssuerReference) string {
+	if ref.Group == "" {
+		return certManagerGroup
+	}
+	return ref.Group
+}
+
+// buildTLSSpec turns on seaweedfs-operator's inter-component mTLS.
+func buildTLSSpec(params definition.TLSParameters) *seaweedv1.TLSSpec {
+	if !params.InternalTLS {
 		return nil
 	}
 	spec := &seaweedv1.TLSSpec{Enabled: true}
-	if ref := topo.TLS.IssuerRef; ref != nil && ref.Name != "" {
+	if ref := params.Issuer; ref != nil {
 		spec.IssuerRef = &seaweedv1.TLSIssuerRef{
 			Name:  ref.Name,
-			Kind:  ref.Kind,
-			Group: ref.Group,
+			Kind:  issuerKind(*ref),
+			Group: issuerGroup(*ref),
 		}
 	}
 	return spec
@@ -92,26 +193,6 @@ func buildSecurityConfigSpec(topo standalone.StandaloneTopologyConfig) *seaweedv
 		}
 	}
 	return &seaweedv1.SecurityConfigSpec{JWTSigning: out}
-}
-
-func validateTLSParameters(topo standalone.StandaloneTopologyConfig) error {
-	if topo.TLS == nil || !topo.TLS.Enabled {
-		return nil
-	}
-	if ref := topo.TLS.IssuerRef; ref != nil {
-		// The schema requires the key but accepts an empty name, with which
-		// the operator would reference no issuer at all.
-		if ref.Name == "" {
-			return fmt.Errorf("tls.issuerRef.name is required when issuerRef is set")
-		}
-		switch ref.Kind {
-		case "", "Issuer", "ClusterIssuer":
-			// ok — empty kind defaults to Issuer in the operator
-		default:
-			return fmt.Errorf("tls.issuerRef.kind must be Issuer or ClusterIssuer")
-		}
-	}
-	return nil
 }
 
 // tlsEnabledOnSeaweed reports whether the Seaweed CR requested inter-component mTLS.

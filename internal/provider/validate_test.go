@@ -75,7 +75,17 @@ func TestValidateFixtures(t *testing.T) {
 		},
 		{
 			fixture: "testdata/validate/tls-issuer-empty-name.yaml",
-			want:    []string{"spec.topology.parameters"},
+			want:    []string{"spec.parameters.tls.issuer.name"},
+		},
+		{
+			fixture: "testdata/validate/tls-legacy-topology.yaml",
+			want:    []string{"spec.topology.parameters.tls"},
+		},
+		{fixture: "testdata/validate/tls-disabled.yaml"},
+		{
+			fixture: "testdata/validate/tls-disabled.yaml",
+			old:     "testdata/validate/minimal.yaml",
+			want:    []string{"spec.parameters.tls.mode"},
 		},
 		{
 			fixture: "testdata/validate/master-storage-added.yaml",

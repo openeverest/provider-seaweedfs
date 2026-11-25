@@ -111,17 +111,16 @@ func validateInstance(in controller.ValidationInput) field.ErrorList {
 	}
 
 	var s3CustomSpec components.S3CustomSpec
-	if decodeParameters(s3.Parameters, &s3CustomSpec) {
-		if err := validateS3Parameters(s3CustomSpec); err != nil {
-			errs = append(errs, invalid(componentsPath.Key(common.ComponentS3).Child("parameters"), err))
-		}
+	decodeParameters(s3.Parameters, &s3CustomSpec)
+	errs = append(errs, validateTLSParameters(instance, in.Old, s3IngressEnabled(s3CustomSpec.Ingress))...)
+	tlsParams, _ := decodeTLSParameters(instance)
+	if err := validateS3Parameters(s3CustomSpec, s3TLSEnabled(tlsParams)); err != nil {
+		errs = append(errs, invalid(componentsPath.Key(common.ComponentS3).Child("parameters"), err))
 	}
 
 	var topo standalone.StandaloneTopologyConfig
-	if instance.Spec.Topology != nil && decodeParameters(instance.Spec.Topology.Parameters, &topo) {
-		if err := validateTopologyParameters(topo); err != nil {
-			errs = append(errs, invalid(topologyParametersPath, err))
-		}
+	if instance.Spec.Topology != nil {
+		decodeParameters(instance.Spec.Topology.Parameters, &topo)
 	}
 	if err := validateReplication(effectiveReplication(topo.Replication, *volume.Replicas), *volume.Replicas); err != nil {
 		errs = append(errs, invalid(topologyParametersPath.Child("replication"), err))
@@ -161,13 +160,6 @@ func decodeParameters(raw *runtime.RawExtension, target any) bool {
 		return false
 	}
 	return json.Unmarshal(raw.Raw, target) == nil
-}
-
-func validateTopologyParameters(topo standalone.StandaloneTopologyConfig) error {
-	if err := validateTLSParameters(topo); err != nil {
-		return err
-	}
-	return nil
 }
 
 // validateInstanceName requires an RFC-1035 label short enough for the

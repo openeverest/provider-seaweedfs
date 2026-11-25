@@ -26,8 +26,9 @@ spec:
       replicas: 1
       parameters:
         # Public HTTPS via Ingress TLS termination. The gateway still serves
-        # HTTPS on port 8334 (the default). Ingress needs the HTTP listener,
-        # so httpsOnly stays off. externalEndpointURL=https://s3.example.com.
+        # HTTPS on port 8334 (spec.parameters.tls.mode preferTLS, the default).
+        # Ingress needs the HTTP listener, so requireTLS is rejected with it.
+        # externalEndpointURL=https://s3.example.com.
         ingress:
           enabled: true
           host: s3.example.com

@@ -23,6 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 
+	"github.com/openeverest/provider-seaweedfs/definition"
 	"github.com/openeverest/provider-seaweedfs/definition/components"
 	"github.com/openeverest/provider-seaweedfs/internal/common"
 )
@@ -34,26 +35,16 @@ func validateS3(comp corev1alpha1.ComponentSpec, present bool) error {
 	return validateService(common.ComponentS3, comp.Service)
 }
 
-func s3HTTPSEnabled(spec components.S3CustomSpec) bool {
-	if spec.HTTPS == nil || spec.HTTPS.Enabled == nil {
-		return true
-	}
-	return *spec.HTTPS.Enabled
-}
-
-func validateS3Parameters(spec components.S3CustomSpec) error {
-	if s3HTTPSEnabled(spec) {
+// validateS3Parameters checks the S3 parameters. tlsOn is whether the
+// gateway serves HTTPS on defaultS3HTTPSPort.
+func validateS3Parameters(spec components.S3CustomSpec, tlsOn bool) error {
+	if tlsOn {
 		port := int32(defaultS3Port)
 		if spec.Port != nil {
 			port = *spec.Port
 		}
 		if port == defaultS3HTTPSPort {
-			return fmt.Errorf("S3 port cannot be %d while HTTPS is on", defaultS3HTTPSPort)
-		}
-	}
-	if spec.HTTPS != nil && spec.HTTPS.SecretName != "" {
-		if errs := validation.IsDNS1123Subdomain(spec.HTTPS.SecretName); len(errs) > 0 {
-			return fmt.Errorf("https.secretName %q is invalid: %s", spec.HTTPS.SecretName, strings.Join(errs, "; "))
+			return fmt.Errorf("S3 port cannot be %d while TLS is on", defaultS3HTTPSPort)
 		}
 	}
 	if err := validateS3DomainName(spec.DomainName); err != nil {
@@ -112,7 +103,7 @@ func validateS3DomainName(domainName *string) error {
 	return nil
 }
 
-func buildS3Spec(comp corev1alpha1.ComponentSpec, s3CustomSpec components.S3CustomSpec, tlsSecretName string) *seaweedv1.S3GatewaySpec {
+func buildS3Spec(comp corev1alpha1.ComponentSpec, s3CustomSpec components.S3CustomSpec, tlsSecretName string, mode definition.TLSMode) *seaweedv1.S3GatewaySpec {
 	spec := &seaweedv1.S3GatewaySpec{
 		Replicas:   *comp.Replicas,
 		Port:       s3CustomSpec.Port,
@@ -127,14 +118,13 @@ func buildS3Spec(comp corev1alpha1.ComponentSpec, s3CustomSpec components.S3Cust
 
 	// seaweedfs-operator requires httpsPort and tlsSecret together. It does
 	// not create the Secret. httpsOnly drops the HTTP listener; the CRD
-	// rejects that together with Ingress, which routes to the HTTP port.
+	// rejects that together with Ingress, which routes to the HTTP port, so
+	// preferTLS keeps HTTP for an Ingress and requireTLS rejects one.
 	if tlsSecretName != "" {
 		httpsPort := defaultS3HTTPSPort
 		spec.HTTPSPort = &httpsPort
 		spec.TLSSecret = &corev1.LocalObjectReference{Name: tlsSecretName}
-		if spec.Ingress == nil {
-			spec.HTTPSOnly = true
-		}
+		spec.HTTPSOnly = mode == definition.TLSModeRequire || spec.Ingress == nil
 	}
 
 	return spec

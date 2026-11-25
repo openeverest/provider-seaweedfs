@@ -77,14 +77,16 @@ func New() *Provider {
 				// S3 Ingress is owned by Seaweed so watch it for HTTPS connection details.
 				controller.WatchExternal(&networkingv1.Ingress{},
 					handler.EnqueueRequestsFromMapFunc(s3IngressToInstance)),
-				// cert-manager owns the server TLS Secret so watch by name so Status
-				// can leave Provisioning once mTLS material exists.
+				// cert-manager owns the operator's server TLS Secret and the S3
+				// certificate Secret of an issuer, so watch them by name: Status
+				// leaves Provisioning once they exist, and Sync restarts the S3
+				// gateway when its certificate gets new names.
 				// Note: the informer still caches all Secrets cluster-wide; the
 				// predicate only drops unrelated events before enqueue.
 				controller.WatchExternal(&corev1.Secret{},
 					handler.EnqueueRequestsFromMapFunc(tlsSecretToInstance),
 					predicate.NewPredicateFuncs(func(o client.Object) bool {
-						return strings.HasSuffix(o.GetName(), tlsServerSecretSuffix)
+						return isTLSSecretName(o.GetName())
 					})),
 				// PVC resize conditions change without a Seaweed status update.
 				// The operator label drops unrelated claims; name substrings
@@ -203,7 +205,12 @@ func (p *Provider) Sync(c *controller.Context) error {
 		return err
 	}
 
-	s3TLSSecret, err := ensureS3ServerTLS(c, s3CustomSpec)
+	tlsParams := tlsParameters(c)
+	tlsNames, err := appliedAdditionalNames(c, tlsParams)
+	if err != nil {
+		return err
+	}
+	s3TLSSecret, err := ensureS3ServerTLS(c, tlsParams, s3ServerDNSNames(c.Name(), c.Namespace(), tlsNames))
 	if err != nil {
 		return err
 	}
@@ -226,9 +233,9 @@ func (p *Provider) Sync(c *controller.Context) error {
 			Master:                buildMasterSpec(master, masterCustomSpec, effectiveReplication(topo.Replication, *volume.Replicas)),
 			Volume:                buildVolumeSpec(volume, volumeCustomSpec),
 			Filer:                 buildFilerSpec(filer, filerCustomSpec),
-			S3:                    buildS3Spec(s3, s3CustomSpec, s3TLSSecret),
+			S3:                    buildS3Spec(s3, s3CustomSpec, s3TLSSecret, tlsMode(tlsParams)),
 			Admin:                 buildAdminSpec(adminSecretName),
-			TLS:                   buildTLSSpec(topo),
+			TLS:                   buildTLSSpec(tlsParams),
 			SecurityConfig:        buildSecurityConfigSpec(topo),
 			Backup:                backupSpec,
 		},
@@ -237,7 +244,11 @@ func (p *Provider) Sync(c *controller.Context) error {
 	if topo.VolumeServerDiskCount != nil {
 		sw.Spec.VolumeServerDiskCount = topo.VolumeServerDiskCount
 	}
+	recordTLSNames(sw, tlsNames)
 	applyS3Auth(sw.Spec.S3, c.Name(), s3ConfigChecksum)
+	if err := addS3TLSNamesRestart(c, sw.Spec.S3, tlsParams); err != nil {
+		return err
+	}
 	applyMetricsPorts(sw)
 	labelPods(c, sw)
 	applyScheduling(c, sw)
@@ -362,15 +373,19 @@ func seaweedStatus(c *controller.Context, sw *seaweedv1.Seaweed) (controller.Sta
 	if s3Comp, ok := c.Instance().Spec.Components[common.ComponentS3]; ok {
 		c.TryDecodeComponentParameters(s3Comp, &s3Params)
 	}
-	// Surface a missing user-supplied S3 HTTPS Secret before a generic pod
-	// not-ready message from a failed volume mount.
-	waitingS3TLS, err := waitingForS3HTTPSSecret(c, s3Params)
+	tlsParams := tlsParameters(c)
+	// Surface a missing S3 certificate Secret before a generic pod not-ready
+	// message from a failed volume mount.
+	msg, problem, err := waitingForS3Certificate(c, tlsParams)
 	if err != nil {
 		return controller.Status{}, err
 	}
-	if waitingS3TLS {
-		msg := fmt.Sprintf("Waiting for S3 HTTPS TLS Secret %q (tls.crt and tls.key)", s3Params.HTTPS.SecretName)
-		return controller.Progressing(msg).WithProblem("S3HTTPSSecretMissing", msg), nil
+	if msg != "" {
+		status := controller.Progressing(msg)
+		if problem {
+			status = status.WithProblem("S3HTTPSSecretMissing", msg)
+		}
+		return status, nil
 	}
 
 	cond := meta.FindStatusCondition(sw.Status.Conditions, "Ready")
@@ -436,7 +451,7 @@ func seaweedStatus(c *controller.Context, sw *seaweedv1.Seaweed) (controller.Sta
 		return controller.Progressing("Waiting for S3 credentials Secret " + s3ConfigSecretName(c.Name())), nil
 	}
 
-	details, err := buildConnectionDetailsFromService(c, svc, sw, s3Params)
+	details, err := buildConnectionDetailsFromService(c, svc, sw, s3Params, tlsParams)
 	if err != nil {
 		return controller.Status{}, err
 	}

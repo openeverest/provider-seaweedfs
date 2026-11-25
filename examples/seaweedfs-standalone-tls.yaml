@@ -5,14 +5,28 @@ metadata:
 spec:
   providerRef:
     name: provider-seaweedfs
+  parameters:
+    tls:
+      # preferTLS (the default) serves S3 over HTTPS; requireTLS also turns off
+      # the HTTP listener; disabled serves S3 over plain HTTP.
+      mode: requireTLS
+      # Inter-component gRPC mTLS via cert-manager (requires cert-manager).
+      internalTLS: true
+      # Optional: the cert-manager issuer that signs the internal certificates
+      # and, without certificateSecretName, the S3 certificate. Without it the
+      # operator creates a self-signed CA for internal TLS and the provider
+      # signs S3 with its own CA (ca.crt in the connection Secret).
+      # issuer:
+      #   name: my-ca
+      #   kind: ClusterIssuer
+      # Optional: extra DNS names on the provider-managed S3 certificate.
+      # additionalNames:
+      #   - s3.internal.example.com
+      # Or bring your own S3 certificate (kubernetes.io/tls with ca.crt):
+      # certificateSecretName: my-s3-tls
   topology:
     type: standalone
     parameters:
-      # Inter-component gRPC mTLS via cert-manager. Omit issuerRef to let the
-      # seaweedfs-operator provision a self-signed CA chain owned by the Seaweed CR.
-      # Requires cert-manager in the cluster.
-      tls:
-        enabled: true
       # Optional: JWT signing keys in security.toml (independent of TLS).
       # securityConfig:
       #   jwtSigning:
