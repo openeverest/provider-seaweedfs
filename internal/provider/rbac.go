@@ -27,6 +27,12 @@ package provider
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // The runtime records validation warnings as events.k8s.io Events.
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
+// A new build stays unready until the installed OpenEverest supports it: the
+// runtime reads the versions OpenEverest supports on the Provider CRD, then
+// records the version it was built for on its Provider's status. Keep
+// resourceNames in sync with common.ProviderName.
+// +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,resourceNames=providers.core.openeverest.io,verbs=get
+// +kubebuilder:rbac:groups=core.openeverest.io,resources=providers/status,resourceNames=provider-seaweedfs,verbs=patch
 
 // SeaweedFS operator resources:
 // +kubebuilder:rbac:groups=seaweed.seaweedfs.com,resources=seaweeds,verbs=get;list;watch;create;update;patch;delete
