@@ -20,14 +20,19 @@ spec:
           args:
             - |
               set -u
+              # The default gateway certificate is self-signed (verifyTLS=false).
+              tls_flag=
+              if [ "${VERIFY_TLS:-}" = "false" ]; then
+                tls_flag=-k
+              fi
               # Sign requests when the connection Secret carries credentials.
               s3() {
                 if [ -n "${AWS_ACCESS_KEY_ID:-}" ]; then
-                  curl -s -o /dev/null -m 5 -w '%{http_code}' \
+                  curl $tls_flag -s -o /dev/null -m 5 -w '%{http_code}' \
                     --aws-sigv4 "aws:amz:${AWS_DEFAULT_REGION}:s3" \
                     --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" "$@"
                 else
-                  curl -s -o /dev/null -m 5 -w '%{http_code}' "$@"
+                  curl $tls_flag -s -o /dev/null -m 5 -w '%{http_code}' "$@"
                 fi
               }
               until [ "$(s3 -X PUT "$ENDPOINT/filer-ha")" = 200 ] || [ "$(s3 "$ENDPOINT/filer-ha")" = 200 ]; do sleep 2; done
@@ -50,6 +55,11 @@ spec:
                 secretKeyRef:
                   name: e2e-filer-ha-conn
                   key: endpointURL
+            - name: VERIFY_TLS
+              valueFrom:
+                secretKeyRef:
+                  name: e2e-filer-ha-conn
+                  key: verifyTLS
             - name: AWS_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:
