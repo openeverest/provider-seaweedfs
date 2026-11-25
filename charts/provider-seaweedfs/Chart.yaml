@@ -18,3 +18,5 @@ dependencies:
     version: "0.1.48"
     repository: https://seaweedfs.github.io/seaweedfs-operator/
     condition: seaweedfs-operator.enabled
+annotations:
+  openeverest.io/contract-version: "2.0.0-alpha.1.next"

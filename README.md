@@ -56,6 +56,12 @@ It never manages pods directly — all lifecycle work is delegated to the operat
 | `0.2.x` (MVP) | `2.0.0-dev.x` | chart `0.1.48` (image `1.0.45`) | `1.30` – `1.34` |
 | `0.1.x` (MVP) | `2.0.0-dev.x` | chart `0.1.41` (image `1.0.38`) | `1.30` – `1.34` |
 
+Each chart also names the OpenEverest it is built for, in the
+`openeverest.io/contract-version` annotation of its `Chart.yaml`, which
+`make generate` writes. A Helm install on an OpenEverest that does not serve
+that version fails, and a build applied any other way waits, unready, until
+OpenEverest serves it; see [Installation](#installation).
+
 The chart dependency installs `chrislusf/seaweedfs-operator:1.0.45`.
 The provider binary compiles against the Go module pin in
 [go.mod](go.mod) (`v0.0.0-20261116062915-e7a1b0198aba`), commit
@@ -167,6 +173,30 @@ helm install provider-seaweedfs charts/provider-seaweedfs \
   --namespace everest-system \
   --create-namespace
 ```
+
+With Helm or Flux, the install fails, before anything is applied, when the
+OpenEverest in the cluster does not serve the OpenEverest the chart is built
+for, and the error names the OpenEverest it needs. Argo CD, and any tool that
+applies pre-rendered manifests, renders the chart without reading the cluster,
+so that check passes there. Whichever tool applies it, a new build of the
+provider that the installed OpenEverest does not support stays running but
+unready until OpenEverest does, with a Warning Event on the `Provider` that says
+why (see [Troubleshooting](#troubleshooting)). Under the default `RollingUpdate`
+strategy, the previous build, if any, keeps serving meanwhile.
+
+To install anyway, set `compatibility.acknowledge.coreVersion` to the
+OpenEverest version the cluster runs, which the error also names. The chart
+writes it on the `Provider`, its `BackupClass` and the presets as
+`openeverest.io/compatibility-acknowledged`, and the provider reads it on its
+`Provider` at startup, so it lets a held build start too. It holds on that
+release and on later ones that keep its contract, such as its patch releases,
+and expires with the first OpenEverest release that changes the contract, which
+is checked again.
+
+The chart sets no annotation for any tool itself: `openeverest.annotations` adds
+annotations to the `Provider`, its `BackupClass` and the presets, such as
+`argocd.argoproj.io/sync-wave: "-1"` to have Argo CD apply them before the
+provider's `Deployment` and the bundled operator.
 
 Upgrade and uninstall:
 
@@ -604,7 +634,7 @@ and [Tilt](https://tilt.dev/) — see [dev/README.md](dev/README.md).
 
 ```bash
 make k3d-cluster-up    # local k3d cluster
-make generate          # RBAC, provider spec, Helm chart sync
+make generate          # RBAC, provider spec, Helm chart sync, OpenEverest stamp
 make run               # run the provider locally against the cluster
 make test              # unit tests
 make helm-install      # install chart (+ seaweedfs-operator dependency)
@@ -613,7 +643,8 @@ make k3d-cluster-down
 ```
 
 `make help` lists every target. `make verify` fails when generated files are
-stale — run `make generate` and commit the result.
+stale or the chart is not stamped with the OpenEverest the provider is built
+against — run `make generate` and commit the result.
 
 The provider contract (`Validate` / `Sync` / `Status` / `Cleanup`), RBAC
 markers, watches, and code generation are documented once for all providers in
@@ -627,7 +658,7 @@ markers, watches, and code generation are documented once for all providers in
 | `internal/provider/` | `ProviderInterface` implementation, RBAC markers |
 | `internal/common/` | Provider and component name constants |
 | `definition/` | Provider identity, component types, versions, topologies |
-| `charts/provider-seaweedfs/` | Helm chart (`generated/` is produced by `make generate`) |
+| `charts/provider-seaweedfs/` | Helm chart (`generated/`, the `Chart.yaml` stamp, `templates/_openeverest_contract.tpl` and `templates/openeverest-compat-check.yaml` are produced by `make generate`) |
 | `config/rbac/role.yaml` | Generated `ClusterRole` — do not edit |
 | `examples/` | Example `Instance` resources |
 | `dev/` | k3d cluster config and Tilt setup |
@@ -663,6 +694,7 @@ kubectl logs -n everest-system deploy/provider-seaweedfs -f
 | Disk increase rejected | The StorageClass needs `allowVolumeExpansion: true`. Shrinking `storage.size` is rejected |
 | No `Provider` resource in the cluster | Is the chart installed? Check the provider deployment logs |
 | `Instance` ignored entirely | `spec.providerRef.name` must be `provider-seaweedfs` |
+| New provider pod running but never `Ready` | It waits until the installed OpenEverest supports this build: the Warning Event in `kubectl describe provider provider-seaweedfs` says why |
 | `Seaweed` resource created but no pods | Inspect the `Seaweed` custom resource status — the failure is upstream in the operator |
 | TLS (`internalTLS` or `issuer`) enabled but never Ready | Is [cert-manager](https://cert-manager.io) installed? Check Certificates / Secrets `<name>-server-tls` and `<name>-s3-https`. seaweedfs-operator checks for cert-manager CRDs once per process (`sync.Once`); if cert-manager was installed after the operator started, restart the operator |
 
@@ -680,4 +712,3 @@ Please do not open public issues for security reports.
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE) for details.
-| New provider pod running but never `Ready` | It waits until the installed OpenEverest supports this build: the Warning Event in `kubectl describe provider provider-seaweedfs` says why |
