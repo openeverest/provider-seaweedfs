@@ -3,13 +3,11 @@ kind: Instance
 metadata:
   name: test-seaweedfs
 spec:
-  topology:
-    parameters:
-      tls:
-        enabled: true
-        issuerRef:
-          name: test-ca-issuer
-          kind: ClusterIssuer
+  parameters:
+    tls:
+      # The operator creates its own self-signed issuer: an issuer here would
+      # also sign S3 and change its certificate source, which is create-only.
+      internalTLS: true
   components:
     s3:
       parameters:

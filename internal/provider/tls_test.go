@@ -22,62 +22,89 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	corev1alpha1 "github.com/openeverest/openeverest/v2/api/core/v1alpha1"
 	seaweedv1 "github.com/seaweedfs/seaweedfs-operator/api/v1"
 
+	"github.com/openeverest/provider-seaweedfs/definition"
 	"github.com/openeverest/provider-seaweedfs/definition/topologies/standalone"
 )
 
 func TestBuildTLSSpec(t *testing.T) {
-	t.Run("nil when TLS unset", func(t *testing.T) {
-		assert.Nil(t, buildTLSSpec(standalone.StandaloneTopologyConfig{}))
-	})
-
-	t.Run("nil when disabled", func(t *testing.T) {
-		assert.Nil(t, buildTLSSpec(standalone.StandaloneTopologyConfig{
-			TLS: &standalone.TLSSpec{Enabled: false},
+	t.Run("nil without internalTLS", func(t *testing.T) {
+		assert.Nil(t, buildTLSSpec(definition.TLSParameters{}))
+		assert.Nil(t, buildTLSSpec(definition.TLSParameters{
+			Issuer: &definition.IssuerReference{Name: "my-ca"},
 		}))
 	})
 
-	t.Run("enabled without issuerRef", func(t *testing.T) {
-		spec := buildTLSSpec(standalone.StandaloneTopologyConfig{
-			TLS: &standalone.TLSSpec{Enabled: true},
-		})
+	t.Run("internalTLS without issuer", func(t *testing.T) {
+		spec := buildTLSSpec(definition.TLSParameters{InternalTLS: true})
 		require.NotNil(t, spec)
 		assert.True(t, spec.Enabled)
 		assert.Nil(t, spec.IssuerRef)
 	})
 
-	t.Run("enabled with issuerRef", func(t *testing.T) {
-		spec := buildTLSSpec(standalone.StandaloneTopologyConfig{
-			TLS: &standalone.TLSSpec{
-				Enabled: true,
-				IssuerRef: &standalone.TLSIssuerRef{
-					Name:  "my-ca",
-					Kind:  "ClusterIssuer",
-					Group: "cert-manager.io",
-				},
-			},
+	t.Run("internalTLS with issuer and defaults", func(t *testing.T) {
+		spec := buildTLSSpec(definition.TLSParameters{
+			InternalTLS: true,
+			Issuer:      &definition.IssuerReference{Name: "my-ca"},
 		})
 		require.NotNil(t, spec)
 		require.NotNil(t, spec.IssuerRef)
-		assert.Equal(t, "my-ca", spec.IssuerRef.Name)
-		assert.Equal(t, "ClusterIssuer", spec.IssuerRef.Kind)
-		assert.Equal(t, "cert-manager.io", spec.IssuerRef.Group)
+		assert.Equal(t, seaweedv1.TLSIssuerRef{Name: "my-ca", Kind: "Issuer", Group: "cert-manager.io"}, *spec.IssuerRef)
 	})
 
-	t.Run("issuerRef without name is omitted", func(t *testing.T) {
-		spec := buildTLSSpec(standalone.StandaloneTopologyConfig{
-			TLS: &standalone.TLSSpec{
-				Enabled:   true,
-				IssuerRef: &standalone.TLSIssuerRef{Kind: "Issuer"},
-			},
-		})
+	t.Run("internalTLS works with mode disabled", func(t *testing.T) {
+		spec := buildTLSSpec(definition.TLSParameters{Mode: definition.TLSModeDisabled, InternalTLS: true})
 		require.NotNil(t, spec)
-		assert.Nil(t, spec.IssuerRef)
+		assert.True(t, spec.Enabled)
 	})
+}
+
+func TestDecodeTLSParameters(t *testing.T) {
+	params, err := decodeTLSParameters(instanceWithParams(""))
+	require.NoError(t, err)
+	assert.Equal(t, definition.TLSParameters{}, params)
+	assert.Equal(t, definition.TLSModePrefer, tlsMode(params))
+	assert.True(t, s3TLSEnabled(params))
+
+	params, err = decodeTLSParameters(instanceWithParams(`{"tls":{"mode":"requireTLS","issuer":{"name":""}}}`))
+	require.NoError(t, err)
+	assert.Nil(t, params.Issuer, "an empty issuer group is no issuer")
+	assert.Equal(t, definition.TLSModeRequire, tlsMode(params))
+
+	params, err = decodeTLSParameters(instanceWithParams(`{"tls":{"issuer":{"kind":"ClusterIssuer"}}}`))
+	require.NoError(t, err)
+	assert.NotNil(t, params.Issuer, "a kind without a name is reported, not dropped")
+
+	params, err = decodeTLSParameters(instanceWithParams(`{"tls":{"mode":"disabled"}}`))
+	require.NoError(t, err)
+	assert.False(t, s3TLSEnabled(params))
+}
+
+func TestS3CertificateSource(t *testing.T) {
+	issuer := &definition.IssuerReference{Name: "ca"}
+	assert.Equal(t, sourceManaged, s3CertificateSource(definition.TLSParameters{}))
+	assert.Equal(t, sourceIssuer, s3CertificateSource(definition.TLSParameters{Issuer: issuer}))
+	assert.Equal(t, sourceSecret, s3CertificateSource(definition.TLSParameters{CertificateSecretName: "s", Issuer: issuer}))
+
+	assert.False(t, issuerSigns(definition.TLSParameters{}))
+	assert.True(t, issuerSigns(definition.TLSParameters{Issuer: issuer}))
+	assert.False(t, issuerSigns(definition.TLSParameters{Issuer: issuer, CertificateSecretName: "s"}))
+	assert.True(t, issuerSigns(definition.TLSParameters{Issuer: issuer, CertificateSecretName: "s", InternalTLS: true}))
+	assert.False(t, issuerSigns(definition.TLSParameters{Issuer: issuer, Mode: definition.TLSModeDisabled}))
+}
+
+func instanceWithParams(params string) *corev1alpha1.Instance {
+	inst := &corev1alpha1.Instance{ObjectMeta: metav1.ObjectMeta{Name: "sw", Namespace: "ns"}}
+	if params != "" {
+		inst.Spec.Parameters = &runtime.RawExtension{Raw: []byte(params)}
+	}
+	return inst
 }
 
 func TestBuildSecurityConfigSpec(t *testing.T) {
@@ -111,50 +138,6 @@ func TestBuildSecurityConfigSpec(t *testing.T) {
 	})
 }
 
-func TestValidateTLSParameters(t *testing.T) {
-	require.NoError(t, validateTLSParameters(standalone.StandaloneTopologyConfig{}))
-	require.NoError(t, validateTLSParameters(standalone.StandaloneTopologyConfig{
-		TLS: &standalone.TLSSpec{Enabled: true},
-	}))
-	// Disabled TLS ignores a half-filled issuerRef left over from the UI.
-	require.NoError(t, validateTLSParameters(standalone.StandaloneTopologyConfig{
-		TLS: &standalone.TLSSpec{
-			Enabled:   false,
-			IssuerRef: &standalone.TLSIssuerRef{Kind: "Issuer"},
-		},
-	}))
-	require.NoError(t, validateTLSParameters(standalone.StandaloneTopologyConfig{
-		TLS: &standalone.TLSSpec{
-			Enabled: true,
-			IssuerRef: &standalone.TLSIssuerRef{
-				Name: "my-issuer",
-				Kind: "ClusterIssuer",
-			},
-		},
-	}))
-
-	err := validateTLSParameters(standalone.StandaloneTopologyConfig{
-		TLS: &standalone.TLSSpec{
-			Enabled:   true,
-			IssuerRef: &standalone.TLSIssuerRef{Name: "", Kind: "Issuer"},
-		},
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "tls.issuerRef.name is required")
-
-	err = validateTLSParameters(standalone.StandaloneTopologyConfig{
-		TLS: &standalone.TLSSpec{
-			Enabled: true,
-			IssuerRef: &standalone.TLSIssuerRef{
-				Name: "x",
-				Kind: "SomethingElse",
-			},
-		},
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Issuer or ClusterIssuer")
-}
-
 func TestTLSSecretToInstance(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -165,6 +148,13 @@ func TestTLSSecretToInstance(t *testing.T) {
 			name: "server TLS secret enqueues Instance",
 			secret: &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
 				Name: "sw-server-tls", Namespace: "ns",
+			}},
+			expect: []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "sw"}}},
+		},
+		{
+			name: "S3 certificate secret enqueues Instance",
+			secret: &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+				Name: "sw-s3-https", Namespace: "ns",
 			}},
 			expect: []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "sw"}}},
 		},

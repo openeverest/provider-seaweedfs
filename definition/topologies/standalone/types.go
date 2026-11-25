@@ -37,11 +37,6 @@ type StandaloneTopologyConfig struct {
 	// +optional
 	Replication *string `json:"replication,omitempty"`
 
-	// TLS enables inter-component gRPC mTLS via the seaweedfs-operator.
-	// This does not terminate HTTPS on the S3 gateway — see README.
-	// +optional
-	TLS *TLSSpec `json:"tls,omitempty"`
-
 	// SecurityConfig configures JWT signing keys in the operator-rendered
 	// security.toml. Independent of TLS; YAML/API only (no UI fields yet).
 	// +optional
@@ -84,28 +79,6 @@ type AdminConfig struct {
 	// Enabled runs one admin server. The username is admin. The password is
 	// generated and stored in Secret <instance>-admin-credentials.
 	Enabled bool `json:"enabled,omitempty"`
-}
-
-// TLSSpec mirrors seaweedfs-operator TLSSpec for inter-component gRPC mTLS.
-type TLSSpec struct {
-	// Enabled turns on mTLS. Defaults to false.
-	Enabled bool `json:"enabled,omitempty"`
-
-	// IssuerRef optionally references an existing cert-manager Issuer or
-	// ClusterIssuer. When empty the operator provisions a self-signed CA.
-	// +optional
-	IssuerRef *TLSIssuerRef `json:"issuerRef,omitempty"`
-}
-
-// TLSIssuerRef mirrors seaweedfs-operator TLSIssuerRef.
-type TLSIssuerRef struct {
-	Name string `json:"name"`
-	// Kind is Issuer (namespaced) or ClusterIssuer. Empty defaults to Issuer.
-	// +optional
-	Kind string `json:"kind,omitempty"`
-	// Group defaults to cert-manager.io in the operator when empty.
-	// +optional
-	Group string `json:"group,omitempty"`
 }
 
 // SecurityConfigSpec mirrors seaweedfs-operator SecurityConfigSpec.

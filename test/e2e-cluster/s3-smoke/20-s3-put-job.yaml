@@ -23,7 +23,7 @@ spec:
                   addressing_style = path
               EOF
               printf '%s' 'e2e-smoke' > /tmp/payload
-              # The default gateway certificate is self-signed (verifyTLS=false).
+              # The default gateway certificate is signed by the provider CA (verifyTLS=false).
               tls_flag=
               if [ "$VERIFY_TLS" = "false" ]; then
                 tls_flag=--no-verify-ssl

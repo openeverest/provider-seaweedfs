@@ -357,14 +357,14 @@ metadata:
 spec:
   providerRef:
     name: provider-seaweedfs
+  parameters:
+    tls:
+      internalTLS: true
+      issuer:
+        name: my-issuer
+        kind: SomethingElse
   topology:
     type: standalone
-    parameters:
-      tls:
-        enabled: true
-        issuerRef:
-          name: my-issuer
-          kind: SomethingElse
   components:
     master:
       type: seaweedfs
@@ -545,3 +545,99 @@ spec:
       replicas: 1
       parameters:
         port: 9327
+---
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: invalid-tls-require-ingress
+spec:
+  providerRef:
+    name: provider-seaweedfs
+  parameters:
+    tls:
+      mode: requireTLS
+  topology:
+    type: standalone
+  components:
+    master:
+      type: seaweedfs
+      replicas: 1
+    volume:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 1Gi
+    filer:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 1Gi
+    s3:
+      type: seaweedfs
+      replicas: 1
+      parameters:
+        ingress:
+          enabled: true
+          host: s3.example.com
+---
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: invalid-tls-issuer-unused
+spec:
+  providerRef:
+    name: provider-seaweedfs
+  parameters:
+    tls:
+      certificateSecretName: my-s3-tls
+      issuer:
+        name: my-issuer
+  topology:
+    type: standalone
+  components:
+    master:
+      type: seaweedfs
+      replicas: 1
+    volume:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 1Gi
+    filer:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 1Gi
+    s3:
+      type: seaweedfs
+      replicas: 1
+---
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: invalid-tls-legacy-https
+spec:
+  providerRef:
+    name: provider-seaweedfs
+  topology:
+    type: standalone
+  components:
+    master:
+      type: seaweedfs
+      replicas: 1
+    volume:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 1Gi
+    filer:
+      type: seaweedfs
+      replicas: 1
+      storage:
+        size: 1Gi
+    s3:
+      type: seaweedfs
+      replicas: 1
+      parameters:
+        https:
+          enabled: false

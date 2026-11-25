@@ -46,28 +46,6 @@ spec:
           properties:
             domainName:
               type: string
-            https:
-              description: |-
-                HTTPS serves the S3 gateway over TLS (seaweedfs-operator httpsPort and
-                tlsSecret). Nil, or enabled left unset, means HTTPS-only on port 8334.
-                Set enabled to false for plain HTTP. An Ingress keeps the HTTP listener:
-                the operator rejects HTTPS-only together with Ingress.
-              properties:
-                enabled:
-                  description: Enabled defaults to true. Set false to serve plain HTTP on port.
-                  type: boolean
-                secretName:
-                  description: |-
-                    SecretName is an existing kubernetes.io/tls Secret (tls.crt and tls.key).
-                    Empty means this provider creates Secret <instance>-s3-https.
-                  type: string
-                verifyTLS:
-                  description: |-
-                    VerifyTLS is the hint for clients of the in-cluster HTTPS endpoint.
-                    Defaults to false for the provider-created certificate, and true when
-                    secretName is set.
-                  type: boolean
-              type: object
             ingress:
               description: |-
                 Ingress exposes the S3 gateway via a Kubernetes Ingress. With TLS,
@@ -137,6 +115,70 @@ spec:
     componentTypes:
       seaweedfs:
         metrics: Native
+  parametersSchema:
+    openAPIV3Schema:
+      description: Parameters defines instance-wide parameters (Instance.spec.parameters).
+      properties:
+        tls:
+          description: |-
+            TLS configures encryption in transit: HTTPS on the S3 gateway, and
+            optionally mutual TLS between the SeaweedFS components.
+          properties:
+            additionalNames:
+              description: |-
+                AdditionalNames are DNS names the S3 server certificate is valid for
+                besides those of the S3 Service, such as an external name clients
+                connect to. Changing them on a running instance reissues the
+                certificate and restarts the S3 gateway, after maintenance approval.
+              items:
+                type: string
+              type: array
+            certificateSecretName:
+              description: |-
+                CertificateSecretName is an existing Secret with the S3 server
+                certificate (tls.crt, tls.key, and ca.crt for clients to verify it).
+              type: string
+            internalTLS:
+              description: |-
+                InternalTLS turns on mutual TLS for gRPC between master, volume, filer
+                and S3. It needs cert-manager. The certificates are signed by the issuer
+                when set, and by a CA seaweedfs-operator creates otherwise.
+              type: boolean
+            issuer:
+              description: |-
+                Issuer is the cert-manager issuer that signs the S3 server certificate,
+                unless certificateSecretName is set, and the component certificates
+                when internalTLS is on. It must put its CA into the certificate Secrets
+                (ca.crt), as CA and Vault issuers do.
+              properties:
+                group:
+                  default: cert-manager.io
+                  description: |-
+                    Group is the API group of an external issuer, such as
+                    awspca.cert-manager.io. External issuers sign only the S3 certificate:
+                    seaweedfs-operator accepts Issuer and ClusterIssuer for the component
+                    certificates.
+                  type: string
+                kind:
+                  default: Issuer
+                  description: |-
+                    Kind of the issuer: Issuer or ClusterIssuer, or the kind of an external
+                    issuer of group.
+                  type: string
+                name:
+                  description: Name of the issuer.
+                  type: string
+              required:
+                - name
+              type: object
+            mode:
+              default: preferTLS
+              description: |-
+                Mode is disabled, preferTLS or requireTLS. Defaults to preferTLS.
+                disabled can only be set when the Instance is created.
+              type: string
+          type: object
+      type: object
   release:
     version: 0.3.0
   topologies:
@@ -230,31 +272,6 @@ spec:
                       type: boolean
                     volumeWrite:
                       type: boolean
-                  type: object
-              type: object
-            tls:
-              description: |-
-                TLS enables inter-component gRPC mTLS via the seaweedfs-operator.
-                This does not terminate HTTPS on the S3 gateway — see README.
-              properties:
-                enabled:
-                  description: Enabled turns on mTLS. Defaults to false.
-                  type: boolean
-                issuerRef:
-                  description: |-
-                    IssuerRef optionally references an existing cert-manager Issuer or
-                    ClusterIssuer. When empty the operator provisions a self-signed CA.
-                  properties:
-                    group:
-                      description: Group defaults to cert-manager.io in the operator when empty.
-                      type: string
-                    kind:
-                      description: Kind is Issuer (namespaced) or ClusterIssuer. Empty defaults to Issuer.
-                      type: string
-                    name:
-                      type: string
-                  required:
-                    - name
                   type: object
               type: object
             volumeServerDiskCount:
@@ -513,15 +530,6 @@ spec:
               uiType: text
               validation:
                 required: false
-            https:
-              fieldParams:
-                defaultValue: true
-                helperText: Serve the S3 gateway over HTTPS on port 8334. A self-signed certificate is created in Secret <instance>-s3-https. Turn off for plain HTTP. An Ingress keeps HTTP as well, because the operator rejects HTTPS-only with an Ingress.
-                label: HTTPS
-              path: spec.components.s3.parameters.https.enabled
-              uiType: toggle
-              validation:
-                required: false
             ingress:
               components:
                 className:
@@ -559,7 +567,7 @@ spec:
             port:
               fieldParams:
                 defaultValue: 8333
-                helperText: S3 HTTP port. Cannot be changed after creation without breaking existing clients and BackupStorage endpoints. Must not be 8334 while HTTPS is on.
+                helperText: S3 HTTP port. Cannot be changed after creation without breaking existing clients and BackupStorage endpoints. Must not be 8334 (the HTTPS port) unless TLS is disabled.
                 label: HTTP port
                 modes:
                   edit:
@@ -570,8 +578,8 @@ spec:
               uiType: number
               validation:
                 celExpressions:
-                  - celExpr: '!has(spec.components.s3.parameters.port) || spec.components.s3.parameters.port != 8334 || (has(spec.components.s3.parameters.https) && has(spec.components.s3.parameters.https.enabled) && !spec.components.s3.parameters.https.enabled)'
-                    message: S3 port cannot be 8334 while HTTPS is on
+                  - celExpr: '!has(spec.components.s3.parameters.port) || spec.components.s3.parameters.port != 8334 || (has(spec.parameters) && has(spec.parameters.tls) && has(spec.parameters.tls.mode) && spec.parameters.tls.mode == ''disabled'')'
+                    message: S3 port cannot be 8334 while TLS is on
                 int: true
                 max: 55535
                 min: 1
@@ -636,61 +644,112 @@ spec:
             - resources
             - serviceType
             - domainName
-            - https
             - port
             - ingress
           description: Configure the S3-compatible gateway for object access.
           label: S3
         tls:
           components:
-            customIssuer:
-              components:
-                kind:
-                  fieldParams:
-                    defaultValue: Issuer
-                    helperText: Issuer is namespaced, ClusterIssuer is cluster-scoped.
-                    label: Issuer kind
-                    options:
-                      - label: Issuer
-                        value: Issuer
-                      - label: ClusterIssuer
-                        value: ClusterIssuer
-                  path: spec.topology.parameters.tls.issuerRef.kind
-                  uiType: select
-                  validation:
-                    required: true
-                name:
-                  fieldParams:
-                    label: Issuer name
-                  path: spec.topology.parameters.tls.issuerRef.name
-                  uiType: text
-                  validation:
-                    required: true
-              componentsOrder:
-                - name
-                - kind
-              description: Sign certificates with your own cert-manager Issuer or ClusterIssuer instead of the operator's self-signed CA.
-              groupType: toggleable
-              label: Custom issuer
-              uiType: group
-            enabled:
+            certificateSecretName:
+              fieldParams:
+                helperText: A kubernetes.io/tls Secret in this namespace (tls.crt, tls.key and, for clients, ca.crt) the S3 gateway serves instead of a certificate signed for this instance. Its names must include <instance>-s3.<namespace>.svc. You renew it. Can only be chosen when TLS is turned on.
+                label: S3 certificate secret (optional)
+                modes:
+                  edit:
+                    disabled: true
+              path: spec.parameters.tls.certificateSecretName
+              uiType: text
+              validation:
+                celExpressions:
+                  - celExpr: '!has(spec.parameters) || !has(spec.parameters.tls) || !has(spec.parameters.tls.certificateSecretName) || spec.parameters.tls.certificateSecretName == '''' || !has(spec.parameters.tls.mode) || spec.parameters.tls.mode != ''disabled'''
+                    message: Turn TLS on to use a certificate secret
+                regex:
+                  message: Must be a valid Kubernetes object name (lowercase letters, digits, '-' and '.')
+                  pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                required: false
+            internalTLS:
               fieldParams:
                 defaultValue: false
-                helperText: Enables gRPC mTLS between master, volume, filer, and S3. Requires cert-manager. Cannot be changed after creation.
+                helperText: Mutual TLS on gRPC between master, volume, filer and S3, with certificates seaweedfs-operator requests from cert-manager. Requires cert-manager. Works with any S3 TLS mode. Can only be chosen when the instance is created.
                 label: Inter-component TLS
                 modes:
                   edit:
                     disabled: true
                   restore:
                     disabled: true
-              path: spec.topology.parameters.tls.enabled
+              path: spec.parameters.tls.internalTLS
               uiType: toggle
               validation:
                 required: false
+            issuer:
+              components:
+                issuerKind:
+                  fieldParams:
+                    helperText: Issuer when not set
+                    label: Issuer kind
+                    modes:
+                      edit:
+                        disabled: true
+                    options:
+                      - label: Issuer
+                        value: Issuer
+                      - label: ClusterIssuer
+                        value: ClusterIssuer
+                  path: spec.parameters.tls.issuer.kind
+                  uiType: select
+                  validation:
+                    required: false
+                issuerName:
+                  fieldParams:
+                    helperText: An Issuer in this namespace or a ClusterIssuer. Leave empty for a CA created for this instance.
+                    label: cert-manager issuer
+                    modes:
+                      edit:
+                        disabled: true
+                  path: spec.parameters.tls.issuer.name
+                  uiType: text
+                  validation:
+                    celExpressions:
+                      - celExpr: '!has(spec.parameters) || !has(spec.parameters.tls) || !has(spec.parameters.tls.issuer) || !has(spec.parameters.tls.issuer.name) || spec.parameters.tls.issuer.name == '''' || (has(spec.parameters.tls.internalTLS) && spec.parameters.tls.internalTLS) || ((!has(spec.parameters.tls.mode) || spec.parameters.tls.mode != ''disabled'') && (!has(spec.parameters.tls.certificateSecretName) || spec.parameters.tls.certificateSecretName == ''''))'
+                        message: 'The issuer would sign nothing: turn on inter-component TLS, or S3 TLS without a certificate secret'
+                      - celExpr: '!has(spec.parameters) || !has(spec.parameters.tls) || !has(spec.parameters.tls.issuer) || !has(spec.parameters.tls.issuer.kind) || spec.parameters.tls.issuer.kind == '''' || (has(spec.parameters.tls.issuer.name) && spec.parameters.tls.issuer.name != '''')'
+                        message: Name the issuer
+                    regex:
+                      message: Must be a valid Kubernetes object name (lowercase letters, digits, '-' and '.')
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                    required: false
+              componentsOrder:
+                - issuerName
+                - issuerKind
+              description: A cert-manager issuer that signs the S3 certificate (unless a certificate secret is set) and the inter-component certificates, instead of a CA created for this instance. For clients to get ca.crt it must put its CA into the certificate secrets, as CA and Vault issuers do. Can only be chosen when the instance is created.
+              groupType: bordered
+              label: Bring your own CA (optional)
+              uiType: group
+            mode:
+              fieldParams:
+                defaultValue: preferTLS
+                helperText: S3 over HTTPS on port 8334, with a certificate clients verify with ca.crt from the connection secret. Preferred also serves HTTP on the S3 port when an Ingress is on, because the Ingress connects over HTTP; Required serves HTTPS only and can't be used with an Ingress. Switching between Preferred and Required works anytime; Disabled (HTTP only) can only be chosen when the instance is created.
+                label: S3 TLS mode
+                options:
+                  - label: Disabled
+                    value: disabled
+                  - label: 'Preferred: HTTPS, and HTTP for the Ingress'
+                    value: preferTLS
+                  - label: 'Required: HTTPS only'
+                    value: requireTLS
+              path: spec.parameters.tls.mode
+              uiType: select
+              validation:
+                celExpressions:
+                  - celExpr: '!has(spec.parameters) || !has(spec.parameters.tls) || !has(spec.parameters.tls.mode) || spec.parameters.tls.mode != ''requireTLS'' || !has(spec.components.s3.parameters) || !has(spec.components.s3.parameters.ingress) || !has(spec.components.s3.parameters.ingress.host) || spec.components.s3.parameters.ingress.host == '''' || (has(spec.components.s3.parameters.ingress.enabled) && !spec.components.s3.parameters.ingress.enabled)'
+                    message: 'Required can''t be used with an S3 Ingress: choose Preferred'
+                required: false
           componentsOrder:
-            - enabled
-            - customIssuer
-          description: Encrypt gRPC between SeaweedFS components. S3 client HTTPS is the gateway HTTPS setting, not this toggle.
+            - mode
+            - certificateSecretName
+            - internalTLS
+            - issuer
+          description: Encrypt S3 traffic with HTTPS and, optionally, gRPC between the SeaweedFS components. Extra DNS names for the S3 certificate (spec.parameters.tls.additionalNames) are set in YAML.
           label: TLS
         volume:
           components:

@@ -72,6 +72,21 @@ metadata:
 apiVersion: core.openeverest.io/v1alpha1
 kind: Instance
 metadata:
+  name: invalid-tls-require-ingress
+---
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: invalid-tls-issuer-unused
+---
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
+  name: invalid-tls-legacy-https
+---
+apiVersion: core.openeverest.io/v1alpha1
+kind: Instance
+metadata:
   name: 1invalid-name
 ---
 apiVersion: core.openeverest.io/v1alpha1

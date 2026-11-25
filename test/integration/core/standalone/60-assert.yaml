@@ -6,9 +6,7 @@ spec:
   volumeServerDiskCount: 2
   tls:
     enabled: true
-    issuerRef:
-      name: test-ca-issuer
-      kind: ClusterIssuer
+    (issuerRef == null): true
   s3:
     httpsPort: 8334
     tlsSecret:

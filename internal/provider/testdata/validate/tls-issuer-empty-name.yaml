@@ -1,4 +1,4 @@
-# The schema requires issuerRef.name but accepts it empty.
+# An issuer kind without a name.
 apiVersion: core.openeverest.io/v1alpha1
 kind: Instance
 metadata:
@@ -6,13 +6,13 @@ metadata:
 spec:
   providerRef:
     name: provider-seaweedfs
+  parameters:
+    tls:
+      issuer:
+        name: ""
+        kind: ClusterIssuer
   topology:
     type: standalone
-    parameters:
-      tls:
-        enabled: true
-        issuerRef:
-          name: ""
   components:
     master:
       replicas: 1

@@ -37,7 +37,10 @@ spec:
               '(contains($stderr, ''"invalid-s3-ingress-no-host" is invalid: spec.components[s3].parameters''))': true
               '(contains($stderr, ''"invalid-s3-ingress-host" is invalid: spec.components[s3].parameters''))': true
               '(contains($stderr, ''"invalid-s3-ingress-tls-no-secret" is invalid: spec.components[s3].parameters.ingress.tls.secretName''))': true
-              '(contains($stderr, ''"invalid-tls-issuer-kind" is invalid: spec.topology.parameters''))': true
+              '(contains($stderr, ''"invalid-tls-issuer-kind" is invalid: spec.parameters.tls.issuer.kind''))': true
+              '(contains($stderr, ''"invalid-tls-require-ingress" is invalid: spec.parameters.tls.mode''))': true
+              '(contains($stderr, ''"invalid-tls-issuer-unused" is invalid: spec.parameters.tls.issuer''))': true
+              '(contains($stderr, ''"invalid-tls-legacy-https" is invalid: spec.components[s3].parameters.https''))': true
               '(contains($stderr, ''"1invalid-name" is invalid: metadata.name''))': true
               '(contains($stderr, ''"invalid-name-length-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" is invalid: metadata.name''))': true
               '(contains($stderr, ''"invalid-replication-copies" is invalid: spec.topology.parameters.replication''))': true
